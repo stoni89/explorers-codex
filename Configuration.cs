@@ -41,6 +41,21 @@ public class BlacklistedEntry
     public string Name { get; set; } = string.Empty;
 }
 
+[Serializable]
+/// <summary>Ein Eintrag der ToDo-Liste (siehe Configuration.ToDoList).</summary>
+public class ToDoEntry
+{
+    public CollectibleType Type { get; set; }
+    public uint Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+
+    // Nur für Aetheryte/HuntingLog gebraucht (siehe Plugin.GetGlobalEntries-Kommentar - für die gibt
+    // es keine zonenunabhängige Liste) - damit Plugin.ResolveToDoEntries auch für diese beiden Typen
+    // die volle Fundort-/GoTo-Information nachträglich auflösen kann, statt nur den bloßen Namen
+    // anzuzeigen. Bei allen anderen Typen unbenutzt (0).
+    public uint TerritoryTypeId { get; set; }
+}
+
 public class Configuration : IPluginConfiguration
 {
     public int Version { get; set; } = 1;
@@ -165,6 +180,10 @@ public class Configuration : IPluginConfiguration
     // Einstellungen automatisch wieder ausgeschaltet, falls das Plugin nachträglich entfernt wird.
     public bool EnableAllaganToolsIntegration { get; set; } = false;
 
+    // Datenbank-Seite (siehe MainWindow.DrawDatabasePage): blendet bereits besessene/abgeschlossene
+    // Einträge aus, damit man nur noch sieht, was einem noch fehlt.
+    public bool DatabaseHideOwned { get; set; } = false;
+
     // Lässt die Quest- und Hunting-Log-Automation den Chocobo-Begleiter beschwören/am Leben
     // erhalten (siehe ChocoboCompanionSupport) - nur wirksam, solange die Quest "My Feisty Little
     // Chocobo" abgeschlossen (das System freigeschaltet) ist, siehe Plugin.IsChocoboCompanionUnlocked.
@@ -185,6 +204,13 @@ public class Configuration : IPluginConfiguration
     // Blacklist-Seite im Hauptmenü) - weder im Overlay angezeigt noch von einer Automation angelaufen
     // (siehe Plugin.IsBlacklisted). Name nur zur Anzeige auf der Blacklist-Seite, maßgeblich ist Typ + Id.
     public List<BlacklistedEntry> Blacklist { get; set; } = new();
+
+    // Vom Nutzer per Rechtsklick-Menü (Overlay/Datenbank) gemerkte Einträge, die noch erledigt werden
+    // sollen (siehe Plugin.IsOnToDoList) - zeigt sich als eigener Tab im kompakten Overlay
+    // (CompactOverlayWindow.DrawToDoTabContent) und wird automatisch bereinigt, sobald ein Eintrag
+    // besessen/abgeschlossen ist (siehe Plugin.CleanUpToDoList). Name nur zur Anzeige, maßgeblich ist
+    // Typ + Id, genau wie bei der Blacklist.
+    public List<ToDoEntry> ToDoList { get; set; } = new();
 
     // Sprache NUR fürs Menü (Windows.MainWindow) - siehe Loc-Klassenkommentar. Vorbelegt anhand der
     // aktuell im Spielclient eingestellten Sprache (bei Deutsch -> Deutsch, sonst Englisch), danach

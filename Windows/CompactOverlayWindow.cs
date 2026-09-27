@@ -336,7 +336,13 @@ public class CompactOverlayWindow : Window
         // Unabhängig davon, ob die Automation läuft - damit die rote "Nicht unterstützt"-Markierung
         // schon beim Betreten der Zone erscheint, statt erst nach einem gestarteten Automation-Lauf.
         plugin.QuestAutomation.RefreshSupportStatus(missingQuests);
-        plugin.QuestAutomation.Update(missingQuests, effectiveTerritoryId);
+
+        // Nur für den restringierten ToDo-Modus gebraucht (siehe QuestAutomation.Start/
+        // UpdateRestrictedIdle) - muss unabhängig vom gerade sichtbaren Tab berechnet werden, da die
+        // Automation (einmal im ToDo-Modus gestartet) auch weiterläuft, während der Overlay-Tab
+        // sichtbar ist. Im normalen Modus (Start ohne restrictToQuestIds) unbenutzt.
+        var toDoQuestEntries = plugin.ResolveToDoEntries().Where(e => e.Type == CollectibleType.Quest).ToList();
+        plugin.QuestAutomation.Update(missingQuests, effectiveTerritoryId, toDoQuestEntries);
 
         // Sonderfall "The Eight Sentinels" (Flugverbots-Bereich in Mor Dhona, siehe NoFlyAreaExit): erst
         // über das Crystal Gate hinaus, dann die angehaltene Automation neu starten. Solange das läuft,
@@ -444,6 +450,18 @@ public class CompactOverlayWindow : Window
         if (!exitingNoFlyArea)
             plugin.GoToAutomation.Update();
 
+        // Sobald ein per Auto-Knopf im ToDo-Tab angestoßener Zonenwechsel abgeschlossen ist
+        // (GoToAutomation wieder ohne aktiven Auftrag - siehe StartToDoAutomation), jetzt die
+        // eigentliche Automation starten. ActiveEntry wird sowohl bei erfolgreicher Ankunft als
+        // auch bei Abbruch/Fehler null - im Fehlerfall findet der Automations-Start dann einfach
+        // (noch) nichts zu tun und bleibt untätig, bis der Nutzer es erneut versucht.
+        if (pendingCrossZoneAutomationStart != null && plugin.GoToAutomation.ActiveEntry == null)
+        {
+            var start = pendingCrossZoneAutomationStart;
+            pendingCrossZoneAutomationStart = null;
+            start();
+        }
+
         // "Unterstützt" heißt hier: noch nicht als von Questionable abgelehnt bekannt (siehe
         // QuestAutomation.IsKnownUnsupported) - erst nach einem Versuch bekannt, siehe dort.
         var hasActionableQuests = missingQuests.Any(q => !plugin.QuestAutomation.IsKnownUnsupported(q.Id));
@@ -531,66 +549,199 @@ public class CompactOverlayWindow : Window
             return;
         }
 
-        OutlineText($"{Plugin.GetZoneName(currentTerritoryId)} ({currentTerritoryId})", MutedColor);
+        // Ab hier zwei Tabs (Nutzeranforderung): Tab 1 = das bisherige Overlay (Zone/Automations-
+        // Knöpfe/Status/Filter/Währungen/Liste dieser Zone), Tab 2 = die zonenunabhängige
+        // ToDo-Liste (siehe Plugin.ToDoList/DrawToDoTabContent) - beide teilen sich dieselbe
+        // Zeilen-Darstellung (siehe DrawEntryRow), damit die ToDo-Liste "genauso aufgebaut" aussieht.
+        // Die Tab-Knöpfe selbst stehen bewusst GANZ OBEN (noch vor Zone/Automations-Knöpfen) - Zone
+        // und Automations-Knöpfe beziehen sich nur auf Tab 1 und werden daher jetzt auch nur dort
+        // gezeichnet (siehe unten), nicht mehr immer. Die Automationen selbst laufen unabhängig
+        // davon immer weiter, welcher Tab gerade sichtbar ist (siehe .Update-Aufrufe oben).
+        //
+        // Bewusst KEINE ImGui.BeginTabBar/BeginTabItem (Standard-ImGui-Tabs) - deren Chrome (volle
+        // Trennlinie über die ganze Fensterbreite, unlackierter Text ohne Schatten) passt nicht zum
+        // Rest dieses Overlays, das komplett auf transparentem Hintergrund lebt und daher überall
+        // Schattentext (OutlineText) und farbige Pillen-Knöpfe verwendet (siehe die
+        // Automations-Knopfreihe unten). Stattdessen zwei selbstgezeichnete Pillen-Knöpfe im selben
+        // Look, siehe DrawCompactTabButton.
+        plugin.CleanUpToDoList();
 
+        var todoCount = config.ToDoList.Count;
+        DrawCompactTabButton(Loc.T("Overlay", "Overlay") + "##CompactTabOverlay", activeTab == CompactOverlayTab.Overlay, CompactOverlayTab.Overlay);
+        ImGui.SameLine(0f, 6f);
+        DrawCompactTabButton($"{Loc.T("ToDo-Liste", "ToDo list")} ({todoCount})##CompactTabToDo", activeTab == CompactOverlayTab.ToDo, CompactOverlayTab.ToDo);
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+
+        if (activeTab == CompactOverlayTab.Overlay)
+        {
+            OutlineText($"{Plugin.GetZoneName(currentTerritoryId)} ({currentTerritoryId})", MutedColor);
+
+            if (config.ShowAutomationButtons)
+            {
+                DrawAutomationButtonsRow(
+                    hasActionableQuests, () => plugin.QuestAutomation.Start(effectiveTerritoryId),
+                    hasActionableAetherytes, () => plugin.AetheryteAutomation.Start(),
+                    hasActionableHuntingLog, () => plugin.HuntingLogAutomation.Start(),
+                    hasActionableAetherCurrents, () => plugin.AetherCurrentAutomation.Start(),
+                    hasVisibleSightseeing, hasActionableSightseeing, () => plugin.SightseeingAutomation.Start(),
+                    hasActionableChocobokeeps, () => plugin.ChocobokeepAutomation.Start(),
+                    hasActionableTripleTriad, () => plugin.TripleTriadAutomation.Start());
+            }
+
+            DrawOverlayTabContent(config, entries, allForZone, afterTypeFilter);
+        }
+        else
+        {
+            DrawToDoTabContent(config);
+        }
+    }
+
+    /// <summary>
+    /// Die Automations-Knopfreihe (Auto Quest/Aetheryte/Hunting Log/...) - im Overlay-Tab für die
+    /// ganze aktuelle Zone (config.ShowAutomationButtons-gated, siehe DrawContent, onStart startet
+    /// dort sofort in der aktuellen Zone), im ToDo-Tab dieselben Knöpfe, aber sichtbar/aktiviert für
+    /// JEDE Zone, in der die ToDo-Liste etwas Erreichbares hat (siehe DrawToDoAutomationButtonsRow) -
+    /// deren onStart teleportiert dafür bei Bedarf erst in die passende Zone (siehe
+    /// StartToDoAutomation), bevor die eigentliche Automation gestartet wird.
+    /// </summary>
+    private void DrawAutomationButtonsRow(
+        bool hasActionableQuests, Action questOnStart,
+        bool hasActionableAetherytes, Action aetheryteOnStart,
+        bool hasActionableHuntingLog, Action huntingLogOnStart,
+        bool hasActionableAetherCurrents, Action aetherCurrentOnStart,
+        bool hasVisibleSightseeing, bool hasActionableSightseeing, Action sightseeingOnStart,
+        bool hasActionableChocobokeeps, Action chocobokeepOnStart,
+        bool hasActionableTripleTriad, Action tripleTriadOnStart)
+    {
         // Reihe der Automations-Knöpfe bricht bei Bedarf selbst in eine zweite Zeile um (statt über
         // den Fensterrand hinauszulaufen), wenn das kompakte Fenster nicht breit genug gezogen
         // wurde - jeder Knopf entscheidet VOR dem eigentlichen Zeichnen anhand seiner (aus dem
-        // Label vorab berechneten) Breite, ob er noch auf die aktuelle Zeile passt. Die Automationen
-        // selbst laufen unabhängig von config.ShowAutomationButtons weiter (siehe .Update-Aufrufe
-        // oben) - nur diese Knopfreihe wird ein-/ausgeblendet.
-        if (config.ShowAutomationButtons)
+        // Label vorab berechneten) Breite, ob er noch auf die aktuelle Zeile passt.
+        var automationRowContentMaxX = ImGui.GetWindowContentRegionMax().X;
+        var automationStopLabel = Loc.T("Automation stoppen", "Stop automation");
+        var isFirstAutomationButtonOnRow = true;
+
+        // Ein Knopf wird komplett ausgeblendet (statt nur ausgegraut), sobald es nichts (mehr) für
+        // ihn zu tun gibt - UND er nicht gerade selbst läuft (läuft er schon, muss "Automation
+        // stoppen" klickbar sichtbar bleiben, auch falls die Liste inzwischen leer aussieht). Ein
+        // fehlendes Fremdplugin blendet bewusst NICHT aus - das bleibt ausgegraut mit erklärendem
+        // Tooltip sichtbar, siehe MissingPluginTooltip in den einzelnen DrawXAutomationButton-Methoden.
+        void DrawAutomationButtonIfNeeded(bool isActive, bool hasActionable, string startLabel, Action draw)
         {
-            var automationRowContentMaxX = ImGui.GetWindowContentRegionMax().X;
-            var automationStopLabel = Loc.T("Automation stoppen", "Stop automation");
-            var isFirstAutomationButtonOnRow = true;
-
-            // Ein Knopf wird komplett ausgeblendet (statt nur ausgegraut), sobald es in dieser Zone
-            // nichts (mehr) für ihn zu tun gibt - UND er nicht gerade selbst läuft (läuft er schon,
-            // muss "Automation stoppen" klickbar sichtbar bleiben, auch falls die Liste inzwischen
-            // leer aussieht). Ein fehlendes Fremdplugin blendet bewusst NICHT aus - das bleibt
-            // ausgegraut mit erklärendem Tooltip sichtbar, siehe MissingPluginTooltip in den
-            // einzelnen DrawXAutomationButton-Methoden.
-            void DrawAutomationButtonIfNeeded(bool isActive, bool hasActionable, string startLabel, Action draw)
-            {
-                if (!isActive && !hasActionable)
-                    return;
-
-                if (!isFirstAutomationButtonOnRow)
-                {
-                    var label = isActive ? automationStopLabel : startLabel;
-                    var width = ImGui.CalcTextSize(label).X + ImGui.GetStyle().FramePadding.X * 2f;
-                    ImGui.SameLine();
-                    if (ImGui.GetCursorPosX() + width > automationRowContentMaxX)
-                        ImGui.NewLine();
-                }
-                isFirstAutomationButtonOnRow = false;
-                draw();
-            }
-
-            DrawAutomationButtonIfNeeded(plugin.QuestAutomation.IsActive, hasActionableQuests,
-                Loc.T("Auto Quest", "Auto Quest"), () => DrawQuestAutomationButton(hasActionableQuests, effectiveTerritoryId));
-            DrawAutomationButtonIfNeeded(plugin.AetheryteAutomation.IsActive, hasActionableAetherytes,
-                Loc.T("Auto Aetheryte", "Auto Aetheryte"), () => DrawAetheryteAutomationButton(hasActionableAetherytes));
-            DrawAutomationButtonIfNeeded(plugin.HuntingLogAutomation.IsActive, hasActionableHuntingLog,
-                Loc.T("Auto Hunting Log", "Auto Hunting Log"), () => DrawHuntingLogAutomationButton(hasActionableHuntingLog));
-            DrawAutomationButtonIfNeeded(plugin.AetherCurrentAutomation.IsActive, hasActionableAetherCurrents,
-                Loc.T("Auto Ätherströmung", "Auto Aether Current"), () => DrawAetherCurrentAutomationButton(hasActionableAetherCurrents));
-            DrawAutomationButtonIfNeeded(plugin.SightseeingAutomation.IsActive, hasVisibleSightseeing,
-                Loc.T("Auto Sightseeing", "Auto Sightseeing"), () => DrawSightseeingAutomationButton(hasActionableSightseeing));
-            DrawAutomationButtonIfNeeded(plugin.ChocobokeepAutomation.IsActive, hasActionableChocobokeeps,
-                Loc.T("Auto Chocobokeep", "Auto Chocobokeep"), () => DrawChocobokeepAutomationButton(hasActionableChocobokeeps));
-            DrawAutomationButtonIfNeeded(plugin.TripleTriadAutomation.IsActive, hasActionableTripleTriad,
-                Loc.T("Auto Triple Triad", "Auto Triple Triad"), () => DrawTripleTriadAutomationButton(hasActionableTripleTriad));
+            if (!isActive && !hasActionable)
+                return;
 
             if (!isFirstAutomationButtonOnRow)
             {
-                ImGui.Spacing();
-                ImGui.Separator();
-                ImGui.Spacing();
+                var label = isActive ? automationStopLabel : startLabel;
+                var width = ImGui.CalcTextSize(label).X + ImGui.GetStyle().FramePadding.X * 2f;
+                ImGui.SameLine();
+                if (ImGui.GetCursorPosX() + width > automationRowContentMaxX)
+                    ImGui.NewLine();
             }
+            isFirstAutomationButtonOnRow = false;
+            draw();
         }
 
+        DrawAutomationButtonIfNeeded(plugin.QuestAutomation.IsActive, hasActionableQuests,
+            Loc.T("Auto Quest", "Auto Quest"), () => DrawQuestAutomationButton(hasActionableQuests, questOnStart));
+        DrawAutomationButtonIfNeeded(plugin.AetheryteAutomation.IsActive, hasActionableAetherytes,
+            Loc.T("Auto Aetheryte", "Auto Aetheryte"), () => DrawAetheryteAutomationButton(hasActionableAetherytes, aetheryteOnStart));
+        DrawAutomationButtonIfNeeded(plugin.HuntingLogAutomation.IsActive, hasActionableHuntingLog,
+            Loc.T("Auto Hunting Log", "Auto Hunting Log"), () => DrawHuntingLogAutomationButton(hasActionableHuntingLog, huntingLogOnStart));
+        DrawAutomationButtonIfNeeded(plugin.AetherCurrentAutomation.IsActive, hasActionableAetherCurrents,
+            Loc.T("Auto Ätherströmung", "Auto Aether Current"), () => DrawAetherCurrentAutomationButton(hasActionableAetherCurrents, aetherCurrentOnStart));
+        DrawAutomationButtonIfNeeded(plugin.SightseeingAutomation.IsActive, hasVisibleSightseeing,
+            Loc.T("Auto Sightseeing", "Auto Sightseeing"), () => DrawSightseeingAutomationButton(hasActionableSightseeing, sightseeingOnStart));
+        DrawAutomationButtonIfNeeded(plugin.ChocobokeepAutomation.IsActive, hasActionableChocobokeeps,
+            Loc.T("Auto Chocobokeep", "Auto Chocobokeep"), () => DrawChocobokeepAutomationButton(hasActionableChocobokeeps, chocobokeepOnStart));
+        DrawAutomationButtonIfNeeded(plugin.TripleTriadAutomation.IsActive, hasActionableTripleTriad,
+            Loc.T("Auto Triple Triad", "Auto Triple Triad"), () => DrawTripleTriadAutomationButton(hasActionableTripleTriad, tripleTriadOnStart));
+
+        if (!isFirstAutomationButtonOnRow)
+        {
+            ImGui.Spacing();
+            ImGui.Separator();
+            ImGui.Spacing();
+        }
+    }
+
+    // Gesetzt, sobald ein Automations-Knopf im ToDo-Tab einen Zonenwechsel anstößt (siehe
+    // StartToDoAutomation) - die eigentliche Automation wird erst gestartet, sobald GoToAutomation
+    // dort wieder inaktiv ist (siehe Update-Aufruf in DrawContent), da z.B. QuestAutomation.Start
+    // die AKTUELLE Zone als "Heimatzone" festhält - ein Start VOR der Ankunft würde also die falsche
+    // (Ausgangs-)Zone festhalten statt der Zielzone.
+    private Action? pendingCrossZoneAutomationStart;
+
+    /// <summary>
+    /// Startet eine Automation für einen ToDo-Listen-Eintrag (siehe DrawToDoAutomationButtonsRow) -
+    /// steht der Eintrag schon in der aktuellen Zone, sofort; andernfalls erst per GoToAutomation
+    /// (dieselbe Logik wie das einzelne "Hinlaufen"-Icon, siehe DrawGoToColumn) in die Zielzone
+    /// reisen und den eigentlichen Start zurückstellen, bis die Reise fertig ist.
+    /// </summary>
+    private void StartToDoAutomation(CollectibleEntry target, Action startNow)
+    {
+        var currentZone = Plugin.ResolveEffectiveTerritoryId(Plugin.ClientState.TerritoryType);
+        var targetZone = target.FlagTerritoryTypeId ?? target.TerritoryTypeId;
+        if (targetZone == currentZone)
+        {
+            startNow();
+        }
+        else
+        {
+            plugin.GoToAutomation.GoTo(target);
+            pendingCrossZoneAutomationStart = startNow;
+        }
+    }
+
+    private enum CompactOverlayTab
+    {
+        Overlay,
+        ToDo,
+    }
+
+    // Welcher der beiden Tabs (siehe DrawCompactTabButton) gerade sichtbar ist - bewusst kein
+    // Configuration-Feld, nur eine Sitzungs-Ansicht (wie showCurrencyCostMode).
+    private CompactOverlayTab activeTab = CompactOverlayTab.Overlay;
+
+    /// <summary>
+    /// Selbstgezeichneter Tab-Knopf im selben Pillen-Look wie die Automations-Knöpfe (siehe
+    /// PushAutomationButtonColors) statt eines nativen ImGui-Tabs - fügt sich dadurch nahtlos ins
+    /// übrige, komplett auf Schattentext/Farbpillen aufgebaute Overlay-Design ein. Ausgewählt = kräftig
+    /// gefüllt in TitleColor (derselbe Blauton wie der Fenstertitel/Zähler), nicht ausgewählt =
+    /// dezente, fast unsichtbare Füllung, damit sie sich klar vom ausgewählten Tab abhebt, aber auf
+    /// transparentem Hintergrund nicht wie ein grauer Klotz wirkt.
+    /// </summary>
+    private void DrawCompactTabButton(string label, bool selected, CompactOverlayTab tab)
+    {
+        var size = new Vector2(ImGui.CalcTextSize(label.Split("##")[0]).X + ImGui.GetStyle().FramePadding.X * 2f, ImGui.GetFrameHeight());
+        if (IsOccluded(size))
+        {
+            ImGui.Dummy(size);
+            return;
+        }
+
+        ImGui.PushStyleColor(ImGuiCol.Button, selected ? new Vector4(TitleColor.X, TitleColor.Y, TitleColor.Z, 0.9f) : new Vector4(1f, 1f, 1f, 0.06f));
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, selected ? new Vector4(TitleColor.X, TitleColor.Y, TitleColor.Z, 1f) : new Vector4(1f, 1f, 1f, 0.14f));
+        ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(TitleColor.X, TitleColor.Y, TitleColor.Z, 1f));
+        ImGui.PushStyleColor(ImGuiCol.Text, selected ? new Vector4(0.03f, 0.05f, 0.08f, 1f) : MutedColor);
+
+        if (ImGui.Button(label, size) && !selected)
+            activeTab = tab;
+
+        ImGui.PopStyleColor(4);
+    }
+
+    /// <summary>
+    /// Status-Text jeder Automation (z.B. "Bearbeite: ...", "Teleportiere nach ...") - gemeinsam von
+    /// Overlay- und ToDo-Tab genutzt, da eine Automation (siehe QuestAutomation.restrictToQuestIds)
+    /// auch im ToDo-Tab gestartet werden kann und ihr Status dort genauso sichtbar sein soll.
+    /// </summary>
+    private void DrawAutomationStatusTexts()
+    {
         if (plugin.QuestAutomation.ShouldShowStatusText)
             OutlineText(plugin.QuestAutomation.StatusText, plugin.QuestAutomation.IsActive ? AffordableColor : VendorLinkColor);
 
@@ -614,6 +765,12 @@ public class CompactOverlayWindow : Window
 
         if (plugin.TripleTriadAutomation.ShouldShowStatusText)
             OutlineText(plugin.TripleTriadAutomation.StatusText, plugin.TripleTriadAutomation.IsActive ? AffordableColor : VendorLinkColor);
+    }
+
+    /// <summary>Der bisherige Overlay-Inhalt (Status/Filter/Währungen/Liste) - jetzt Tab 1, siehe DrawContent.</summary>
+    private void DrawOverlayTabContent(Configuration config, List<CollectibleEntry> entries, List<CollectibleEntry> allForZone, List<CollectibleEntry> afterTypeFilter)
+    {
+        DrawAutomationStatusTexts();
 
         if (config.ShowDebugInfo)
             OutlineText($"debug: zone={allForZone.Count} typefilter={afterTypeFilter.Count} missing={entries.Count}", MutedColor);
@@ -689,6 +846,109 @@ public class CompactOverlayWindow : Window
         if (config.ShowCurrencyWallet)
             DrawCurrencyWallet(entries);
 
+        DrawEntryList("##CompactEntryList", entries);
+    }
+
+    /// <summary>
+    /// Tab 2: die zonenunabhängige ToDo-Liste (siehe Plugin.ToDoList) - per Rechtsklick-Menü im
+    /// Overlay ODER in der Datenbank-Seite befüllt (siehe CompactOverlayWindow.DrawEntryContextMenu),
+    /// wird automatisch bereinigt, sobald ein Eintrag besessen/abgeschlossen ist (siehe
+    /// Plugin.CleanUpToDoList, oben in DrawContent aufgerufen). Nutzt dieselbe Zeilen-Darstellung wie
+    /// das normale Overlay (siehe DrawEntryList/DrawEntryRow), damit es "genauso aufgebaut" aussieht.
+    /// Zeigt außerdem dieselbe Automations-Knopfreihe wie der Overlay-Tab (siehe
+    /// DrawAutomationButtonsRow) - anders als dort aber bewusst ZONENUNABHÄNGIG (Nutzeranforderung:
+    /// die ToDo-Liste ist zonenübergreifend), siehe DrawToDoAutomationButtonsRow.
+    /// </summary>
+    private void DrawToDoTabContent(Configuration config)
+    {
+        DrawAutomationStatusTexts();
+
+        var entries = plugin.ResolveToDoEntries();
+
+        if (config.ShowAutomationButtons)
+            DrawToDoAutomationButtonsRow(entries);
+
+        if (entries.Count == 0)
+        {
+            OutlineText(Loc.T("ToDo-Liste ist leer - per Rechtsklick auf einen Eintrag hinzufügen.", "ToDo list is empty - right-click an entry to add it."), MutedColor);
+            return;
+        }
+
+        // Dieselbe Währungsanzeige wie im Overlay-Tab (siehe DrawOverlayTabContent) - inklusive
+        // Umschalt-Knopf zwischen "Deine Währungen"/"Benötigte Währung" und Retainer-Anzeige
+        // (showCurrencyCostMode ist ein gemeinsames Feld für beide Tabs, siehe dessen Kommentar).
+        if (plugin.Configuration.ShowCurrencyWallet)
+            DrawCurrencyWallet(entries);
+
+        DrawEntryList("##CompactToDoList", entries);
+    }
+
+    /// <summary>
+    /// Automations-Knopfreihe für den ToDo-Tab (siehe DrawAutomationButtonsRow) - anders als im
+    /// Overlay-Tab NICHT auf die aktuelle Zone beschränkt: ein Knopf erscheint, sobald die
+    /// ToDo-Liste IRGENDWO einen erreichbaren Eintrag dieser Kategorie hat (Nutzeranforderung: die
+    /// ToDo-Liste ist zonenübergreifend). Steht der gewählte Eintrag nicht in der aktuellen Zone,
+    /// teleportiert der Klick zuerst dorthin (siehe StartToDoAutomation), statt den Knopf einfach
+    /// auszublenden.
+    /// </summary>
+    private void DrawToDoAutomationButtonsRow(List<CollectibleEntry> todoEntries)
+    {
+        var currentZone = Plugin.ResolveEffectiveTerritoryId(Plugin.ClientState.TerritoryType);
+
+        // Bevorzugt einen Eintrag in der AKTUELLEN Zone (dann keine Reise nötig) - sonst irgendeinen
+        // anderen erreichbaren ToDo-Eintrag dieser Kategorie, egal in welcher Zone.
+        CollectibleEntry? FindTarget(CollectibleType type, Func<CollectibleEntry, bool> extraFilter) =>
+            todoEntries
+                .Where(e => e.Type == type && !plugin.IsOwned(e) && e.HasGoToTarget && extraFilter(e))
+                .OrderBy(e => (e.FlagTerritoryTypeId ?? e.TerritoryTypeId) == currentZone ? 0 : 1)
+                .FirstOrDefault();
+
+        var questTarget = FindTarget(CollectibleType.Quest, e => !plugin.QuestAutomation.IsKnownUnsupported(e.Id));
+        var aetheryteTarget = FindTarget(CollectibleType.Aetheryte, _ => true);
+        var huntingLogTarget = FindTarget(CollectibleType.HuntingLog, e => e.WorldPosition.HasValue);
+        var aetherCurrentTarget = FindTarget(CollectibleType.AetherCurrent, _ => true);
+
+        // Anders als die übrigen Kategorien: der Knopf soll sichtbar bleiben (nur ausgegraut, mit
+        // Hinweis-Tooltip - siehe DrawSightseeingAutomationButton, identisch zum Overlay-Tab), sobald
+        // überhaupt ein Sightseeing-Eintrag auf der ToDo-Liste steht, auch wenn er gerade wegen
+        // Bedingung/Log-Freischaltung nicht anlaufbar ist - hasVisibleSightseeing (Sichtbarkeit) ist
+        // daher bewusst NICHT an sightseeingTarget (Anlaufbarkeit) gekoppelt.
+        var hasVisibleSightseeing = todoEntries.Any(e => e.Type == CollectibleType.Sightseeing && !plugin.IsOwned(e));
+        var sightseeingTarget = Plugin.IsSightseeingLogUnlocked()
+            ? FindTarget(CollectibleType.Sightseeing, e => !Plugin.IsAchievementOrRankGated(e))
+            : null;
+        var chocobokeepTarget = FindTarget(CollectibleType.Chocobokeep, _ => true);
+        var tripleTriadTarget = FindTarget(CollectibleType.TripleTriadCard,
+            e => e.Category == Plugin.TripleTriadNpcCategory && e.EventNpcId != 0 && !Plugin.IsAchievementOrRankGated(e));
+
+        // Alle Quest-Ids der ToDo-Liste (nicht nur questTarget, das ist nur der erste Reiseanlauf-
+        // punkt) - übergeben an QuestAutomation.Start als restrictToQuestIds, damit die Automation
+        // WIRKLICH nur diese Quests abarbeitet (zonenübergreifend) und keine anderen, sonst in der
+        // jeweiligen Zone zufällig auch noch fehlenden Quests mit erledigt (Nutzeranforderung).
+        var todoQuestIds = todoEntries.Where(e => e.Type == CollectibleType.Quest).Select(e => e.Id).ToList();
+
+        DrawAutomationButtonsRow(
+            // effectiveTerritoryId hier bewusst ERST im Start-Callback (nicht oben als currentZone)
+            // ausgewertet - der wird ggf. erst NACH einer Reise ausgeführt (siehe StartToDoAutomation/
+            // pendingCrossZoneAutomationStart), currentZone wäre dann noch die inzwischen verlassene
+            // Ausgangszone statt der tatsächlichen Zielzone.
+            questTarget != null, () => StartToDoAutomation(questTarget!, () => plugin.QuestAutomation.Start(Plugin.ResolveEffectiveTerritoryId(Plugin.ClientState.TerritoryType), todoQuestIds)),
+            aetheryteTarget != null, () => StartToDoAutomation(aetheryteTarget!, () => plugin.AetheryteAutomation.Start()),
+            huntingLogTarget != null, () => StartToDoAutomation(huntingLogTarget!, () => plugin.HuntingLogAutomation.Start()),
+            aetherCurrentTarget != null, () => StartToDoAutomation(aetherCurrentTarget!, () => plugin.AetherCurrentAutomation.Start()),
+            hasVisibleSightseeing, sightseeingTarget != null, () => StartToDoAutomation(sightseeingTarget!, () => plugin.SightseeingAutomation.Start()),
+            chocobokeepTarget != null, () => StartToDoAutomation(chocobokeepTarget!, () => plugin.ChocobokeepAutomation.Start()),
+            tripleTriadTarget != null, () => StartToDoAutomation(tripleTriadTarget!, () => plugin.TripleTriadAutomation.Start()));
+    }
+
+    /// <summary>
+    /// Die scrollbare Liste selbst (Scrollbar-Verdeckungs-Umgang + eine Zeile pro Eintrag, siehe
+    /// DrawEntryRow) - gemeinsam von Tab 1 (Overlay) und Tab 2 (ToDo-Liste) genutzt, identisches
+    /// Verhalten in beiden: die "Hinlaufen"-Spalte wird nur reserviert, wenn mindestens ein
+    /// sichtbarer Eintrag tatsächlich ein Laufziel hat (siehe showGoToColumn).
+    /// </summary>
+    private void DrawEntryList(string childId, List<CollectibleEntry> entries)
+    {
         // Die Scrollbar dieser Liste ist ein von ImGui selbst gezeichnetes Chrome-Element, nicht
         // Teil der einzelnen Zeilen oben (IsOccluded) - läge ein natives Fenster genau unter ihr,
         // würde sie trotzdem weiter sichtbar darüber gezeichnet (Dalamud/ImGui zeichnet immer über
@@ -710,7 +970,7 @@ public class CompactOverlayWindow : Window
         // Nur dieser Teil (die eigentliche Liste) soll scrollen - alles darüber (Titel, Knöpfe,
         // Status, Währungen) bleibt beim Scrollen fest stehen, size.Y=0 füllt dafür einfach den
         // Rest des (frei durch den Spieler skalierbaren) Fensters.
-        ImGui.BeginChild("##CompactEntryList", new Vector2(0, 0), false);
+        ImGui.BeginChild(childId, new Vector2(0, 0), false);
 
         // Hat KEIN sichtbarer Eintrag ein Laufziel, bräuchte die "Hinlaufen"-Spalte nur Platzhalter -
         // dann gar nicht erst reservieren, statt die ganze Liste grundlos einzurücken (siehe DrawGoToColumn).
@@ -729,116 +989,122 @@ public class CompactOverlayWindow : Window
                 continue;
             }
 
-            DrawGoToColumn(entry);
-
-            var isUnsupportedQuest = entry.Type == CollectibleType.Quest && plugin.QuestAutomation.IsKnownUnsupported(entry.Id);
-            // Noch nicht möglich (z.B. Sightseeing/Hunting Log ohne freigeschaltetes Fliegen in
-            // dieser Zone) - Eintrag bleibt bewusst sichtbar (nicht rausgefiltert), nur ausgegraut,
-            // siehe Plugin.IsTypeCurrentlyPossible.
-            var isNotYetPossible = !isUnsupportedQuest && !Plugin.IsTypeCurrentlyPossible(entry.Type);
-            var typeColor = isUnsupportedQuest ? UnsupportedColor : isNotYetPossible ? NotYetPossibleColor : TypeColors.GetValueOrDefault(entry.Type, NormalColor);
-            OutlineText($"[{Loc.TypeName(entry.Type)}]", typeColor);
-            if (isUnsupportedQuest && ImGui.IsItemHovered())
-                ImGui.SetTooltip("Not supported with Questionable");
-            else if (isNotYetPossible && ImGui.IsItemHovered())
-                ImGui.SetTooltip(Plugin.GetTypeNotPossibleReason(entry.Type));
-
-            ImGui.SameLine();
-            DrawClickableName(entry, isNotYetPossible);
-
-            if (!string.IsNullOrEmpty(entry.Currency))
-            {
-                ImGui.SameLine();
-                OutlineText("-", MutedColor);
-
-                var currencyAllaganToolsEligible = AllaganToolsEligibleTypes.Contains(entry.Type);
-                if (IsTripleTriadNpcFight(entry))
-                {
-                    // Kein Preis mit Icon/Menge (DrawCurrencyRequirement zeigt nur diese, den Namen
-                    // bloß im Tooltip) - stattdessen direkt der Name des NPC-Gegners.
-                    ImGui.SameLine();
-                    OutlineText($"NPC: {entry.Currency}", NormalColor);
-                }
-                else
-                {
-                    DrawCurrencyRequirement(entry.Currency, entry.CurrencyIconId, entry.CurrencyItemId, entry.CurrencyAmount, currencyAllaganToolsEligible);
-                }
-
-                // Für die wenigen Einträge, die MEHRERE Währungen gleichzeitig verlangen (z.B.
-                // Triple-Triad-Karte "G-Warrior": 1x Ruby Totem + 1x Emerald Totem + 1x Diamond
-                // Totem) - jede weitere genauso wie die erste anzeigen, siehe
-                // CollectibleEntry.AdditionalCurrencies.
-                if (entry.AdditionalCurrencies != null)
-                {
-                    foreach (var additional in entry.AdditionalCurrencies)
-                        DrawCurrencyRequirement(additional.Currency, additional.CurrencyIconId, additional.CurrencyItemId, additional.CurrencyAmount, currencyAllaganToolsEligible);
-                }
-            }
-
-            // Nur sichtbar, wenn "Alle Gegenstände anzeigen" aktiviert ist (siehe Filter weiter oben
-            // in DrawContent) - bei deaktiviertem Schalter tauchen diese Einträge gar nicht erst in
-            // der Liste auf, dieser Hinweis wäre dann redundant. Ausnahme: Hunting-Log-Ziele höherer
-            // Rang-Stufen, die immer angezeigt werden (siehe Filter in DrawContent).
-            if (Plugin.IsAchievementOrRankGated(entry))
-            {
-                ImGui.SameLine();
-
-                if (Plugin.IsSightseeingBlockedByFlying(entry))
-                {
-                    // Explizite Nutzeranforderung: das Sightseeing-Feature soll nur mit
-                    // freigeschaltetem Fliegen funktionieren - generisches Label, der Grund steht im
-                    // Tooltip. Hat Vorrang vor der Jumping-Puzzle-Sonderbehandlung unten (siehe
-                    // Plugin.ComputeGrandCompanyOrTribeGateReason-Reihenfolge).
-                    OutlineText(Loc.T("(Bedingung nicht erfüllt)", "(condition not met)"), UnsupportedColor);
-                    if (ImGui.IsItemHovered())
-                        ImGui.SetTooltip(Plugin.GetAchievementOrRankGateReason(entry));
-                }
-                else if (entry.Type == CollectibleType.Sightseeing && Plugin.IsSightseeingUnsupportedByAutomation(entry.Id) && Plugin.IsSightseeingBookAccessible(entry))
-                {
-                    // Trotz "von der Automation nicht unterstützt" (echtes Jumping Puzzle) weiterhin
-                    // den tatsächlichen Wetter-/Zeit-Status zeigen - grün mit Restdauer, solange
-                    // gerade aktiv (man kann so einen Punkt ja manuell erreichen), sonst wie gewohnt
-                    // mit Countdown bis zur Verfügbarkeit. Der Text selbst bleibt IMMER
-                    // "(Bedingung nicht erfüllt)", unabhängig vom Wetter/Zeit-Status (der Hinweis auf
-                    // das Jumping Puzzle steht bereits im Hover-Tooltip, siehe unten).
-                    var activeLabel = Plugin.GetSightseeingActiveUntilLabel(entry);
-                    var isActive = !string.IsNullOrEmpty(activeLabel);
-                    var timerSuffix = isActive ? activeLabel : Plugin.GetSightseeingAvailabilityLabel(entry);
-                    var color = isActive ? AffordableColor : UnsupportedColor;
-
-                    OutlineText(
-                        Loc.T($"(Aktuell nicht unterstützt{timerSuffix})", $"(currently unsupported{timerSuffix})"),
-                        color);
-                    if (ImGui.IsItemHovered())
-                        ImGui.SetTooltip(Plugin.GetAchievementOrRankGateReason(entry));
-                }
-                else
-                {
-                    // Für Sightseeing-Punkte, die gerade durch Wetter/Uhrzeit gesperrt sind, direkt im
-                    // Label sichtbar (nicht erst im Hover-Tooltip) - siehe GetSightseeingAvailabilityLabel.
-                    var availabilityLabel = Plugin.GetSightseeingAvailabilityLabel(entry);
-                    OutlineText(Loc.T($"(Bedingung nicht erfüllt{availabilityLabel})", $"(condition not met{availabilityLabel})"), UnsupportedColor);
-                    if (ImGui.IsItemHovered())
-                        ImGui.SetTooltip(Plugin.GetAchievementOrRankGateReason(entry));
-                }
-            }
-            else
-            {
-                // Sightseeing-Punkte mit Wetter-/Zeitfenster-Bedingung, die GERADE aktiv sind - grün
-                // mit Restdauer, bis diese Bedingung wieder kippt (siehe GetSightseeingActiveUntilLabel).
-                var activeUntilLabel = Plugin.GetSightseeingActiveUntilLabel(entry);
-                if (!string.IsNullOrEmpty(activeUntilLabel))
-                {
-                    ImGui.SameLine();
-                    OutlineText($"({Loc.T("aktiv", "active")}{activeUntilLabel})", AffordableColor);
-                }
-            }
+            DrawEntryRow(entry);
         }
 
         ImGui.EndChild();
 
         if (scrollbarOccluded)
             ImGui.PopStyleVar();
+    }
+
+    /// <summary>Eine einzelne Zeile (Hinlaufen-Icon, Typ, Name, Preis, Bedingungs-/Wetterhinweis) - siehe DrawEntryList.</summary>
+    private void DrawEntryRow(CollectibleEntry entry)
+    {
+        DrawGoToColumn(entry);
+
+        var isUnsupportedQuest = entry.Type == CollectibleType.Quest && plugin.QuestAutomation.IsKnownUnsupported(entry.Id);
+        // Noch nicht möglich (z.B. Sightseeing/Hunting Log ohne freigeschaltetes Fliegen in
+        // dieser Zone) - Eintrag bleibt bewusst sichtbar (nicht rausgefiltert), nur ausgegraut,
+        // siehe Plugin.IsTypeCurrentlyPossible.
+        var isNotYetPossible = !isUnsupportedQuest && !Plugin.IsTypeCurrentlyPossible(entry.Type);
+        var typeColor = isUnsupportedQuest ? UnsupportedColor : isNotYetPossible ? NotYetPossibleColor : TypeColors.GetValueOrDefault(entry.Type, NormalColor);
+        OutlineText($"[{Loc.TypeName(entry.Type)}]", typeColor);
+        if (isUnsupportedQuest && ImGui.IsItemHovered())
+            ImGui.SetTooltip("Not supported with Questionable");
+        else if (isNotYetPossible && ImGui.IsItemHovered())
+            ImGui.SetTooltip(Plugin.GetTypeNotPossibleReason(entry.Type));
+
+        ImGui.SameLine();
+        DrawClickableName(entry, isNotYetPossible);
+
+        if (!string.IsNullOrEmpty(entry.Currency))
+        {
+            ImGui.SameLine();
+            OutlineText("-", MutedColor);
+
+            var currencyAllaganToolsEligible = AllaganToolsEligibleTypes.Contains(entry.Type);
+            if (IsTripleTriadNpcFight(entry))
+            {
+                // Kein Preis mit Icon/Menge (DrawCurrencyRequirement zeigt nur diese, den Namen
+                // bloß im Tooltip) - stattdessen direkt der Name des NPC-Gegners.
+                ImGui.SameLine();
+                OutlineText($"NPC: {entry.Currency}", NormalColor);
+            }
+            else
+            {
+                DrawCurrencyRequirement(entry.Currency, entry.CurrencyIconId, entry.CurrencyItemId, entry.CurrencyAmount, currencyAllaganToolsEligible);
+            }
+
+            // Für die wenigen Einträge, die MEHRERE Währungen gleichzeitig verlangen (z.B.
+            // Triple-Triad-Karte "G-Warrior": 1x Ruby Totem + 1x Emerald Totem + 1x Diamond
+            // Totem) - jede weitere genauso wie die erste anzeigen, siehe
+            // CollectibleEntry.AdditionalCurrencies.
+            if (entry.AdditionalCurrencies != null)
+            {
+                foreach (var additional in entry.AdditionalCurrencies)
+                    DrawCurrencyRequirement(additional.Currency, additional.CurrencyIconId, additional.CurrencyItemId, additional.CurrencyAmount, currencyAllaganToolsEligible);
+            }
+        }
+
+        // Nur sichtbar, wenn "Alle Gegenstände anzeigen" aktiviert ist (siehe Filter weiter oben
+        // in DrawContent) - bei deaktiviertem Schalter tauchen diese Einträge gar nicht erst in
+        // der Liste auf, dieser Hinweis wäre dann redundant. Ausnahme: Hunting-Log-Ziele höherer
+        // Rang-Stufen, die immer angezeigt werden (siehe Filter in DrawContent).
+        if (Plugin.IsAchievementOrRankGated(entry))
+        {
+            ImGui.SameLine();
+
+            if (Plugin.IsSightseeingBlockedByFlying(entry))
+            {
+                // Explizite Nutzeranforderung: das Sightseeing-Feature soll nur mit
+                // freigeschaltetem Fliegen funktionieren - generisches Label, der Grund steht im
+                // Tooltip. Hat Vorrang vor der Jumping-Puzzle-Sonderbehandlung unten (siehe
+                // Plugin.ComputeGrandCompanyOrTribeGateReason-Reihenfolge).
+                OutlineText(Loc.T("(Bedingung nicht erfüllt)", "(condition not met)"), UnsupportedColor);
+                if (ImGui.IsItemHovered())
+                    ImGui.SetTooltip(Plugin.GetAchievementOrRankGateReason(entry));
+            }
+            else if (entry.Type == CollectibleType.Sightseeing && Plugin.IsSightseeingUnsupportedByAutomation(entry.Id) && Plugin.IsSightseeingBookAccessible(entry))
+            {
+                // Trotz "von der Automation nicht unterstützt" (echtes Jumping Puzzle) weiterhin
+                // den tatsächlichen Wetter-/Zeit-Status zeigen - grün mit Restdauer, solange
+                // gerade aktiv (man kann so einen Punkt ja manuell erreichen), sonst wie gewohnt
+                // mit Countdown bis zur Verfügbarkeit. Der Text selbst bleibt IMMER
+                // "(Bedingung nicht erfüllt)", unabhängig vom Wetter/Zeit-Status (der Hinweis auf
+                // das Jumping Puzzle steht bereits im Hover-Tooltip, siehe unten).
+                var activeLabel = Plugin.GetSightseeingActiveUntilLabel(entry);
+                var isActive = !string.IsNullOrEmpty(activeLabel);
+                var timerSuffix = isActive ? activeLabel : Plugin.GetSightseeingAvailabilityLabel(entry);
+                var color = isActive ? AffordableColor : UnsupportedColor;
+
+                OutlineText(
+                    Loc.T($"(Aktuell nicht unterstützt{timerSuffix})", $"(currently unsupported{timerSuffix})"),
+                    color);
+                if (ImGui.IsItemHovered())
+                    ImGui.SetTooltip(Plugin.GetAchievementOrRankGateReason(entry));
+            }
+            else
+            {
+                // Für Sightseeing-Punkte, die gerade durch Wetter/Uhrzeit gesperrt sind, direkt im
+                // Label sichtbar (nicht erst im Hover-Tooltip) - siehe GetSightseeingAvailabilityLabel.
+                var availabilityLabel = Plugin.GetSightseeingAvailabilityLabel(entry);
+                OutlineText(Loc.T($"(Bedingung nicht erfüllt{availabilityLabel})", $"(condition not met{availabilityLabel})"), UnsupportedColor);
+                if (ImGui.IsItemHovered())
+                    ImGui.SetTooltip(Plugin.GetAchievementOrRankGateReason(entry));
+            }
+        }
+        else
+        {
+            // Sightseeing-Punkte mit Wetter-/Zeitfenster-Bedingung, die GERADE aktiv sind - grün
+            // mit Restdauer, bis diese Bedingung wieder kippt (siehe GetSightseeingActiveUntilLabel).
+            var activeUntilLabel = Plugin.GetSightseeingActiveUntilLabel(entry);
+            if (!string.IsNullOrEmpty(activeUntilLabel))
+            {
+                ImGui.SameLine();
+                OutlineText($"({Loc.T("aktiv", "active")}{activeUntilLabel})", AffordableColor);
+            }
+        }
     }
 
     /// <summary>
@@ -1239,7 +1505,7 @@ public class CompactOverlayWindow : Window
     /// fehlenden Quests dieser Zone an-/ausschaltet. Ausgegraut, sobald irgendein als "Required"
     /// markiertes Plugin fehlt (nicht nur Questionable selbst) - siehe MissingPluginTooltip.
     /// </summary>
-    private void DrawQuestAutomationButton(bool hasActionableQuests, uint effectiveTerritoryId)
+    private void DrawQuestAutomationButton(bool hasActionableQuests, Action onStart)
     {
         var automation = plugin.QuestAutomation;
         var label = automation.IsActive
@@ -1296,7 +1562,7 @@ public class CompactOverlayWindow : Window
         }
         else if (!hasMissingPlugin)
         {
-            automation.Start(effectiveTerritoryId);
+            onStart();
         }
         else
         {
@@ -1310,7 +1576,7 @@ public class CompactOverlayWindow : Window
     /// "vnavmesh" zum Laufen - fehlt es, wird das per Tooltip erklärt statt der Knopf einfach
     /// nichts zu tun.
     /// </summary>
-    private void DrawAetheryteAutomationButton(bool hasActionableAetherytes)
+    private void DrawAetheryteAutomationButton(bool hasActionableAetherytes, Action onStart)
     {
         var automation = plugin.AetheryteAutomation;
         var label = automation.IsActive
@@ -1367,7 +1633,7 @@ public class CompactOverlayWindow : Window
         }
         else if (!hasMissingPlugin)
         {
-            automation.Start();
+            onStart();
         }
         else
         {
@@ -1385,7 +1651,7 @@ public class CompactOverlayWindow : Window
     private static string CombatPluginNameForTooltip =>
         CombatPluginBridge.GetEffective() is { } kind ? CombatPluginBridge.DisplayName(kind) : "RotationSolver Reborn / Wrath Combo";
 
-    private void DrawHuntingLogAutomationButton(bool hasActionableHuntingLog)
+    private void DrawHuntingLogAutomationButton(bool hasActionableHuntingLog, Action onStart)
     {
         var automation = plugin.HuntingLogAutomation;
         var label = automation.IsActive
@@ -1446,7 +1712,7 @@ public class CompactOverlayWindow : Window
         }
         else if (!hasMissingPlugin)
         {
-            automation.Start();
+            onStart();
         }
         else
         {
@@ -1459,7 +1725,7 @@ public class CompactOverlayWindow : Window
     /// fehlenden Strömungen dieser Zone an-/ausschaltet. Braucht zum Laufen zwingend vnavmesh -
     /// fehlt es, wird das per Tooltip erklärt statt der Knopf einfach nichts zu tun.
     /// </summary>
-    private void DrawAetherCurrentAutomationButton(bool hasActionableAetherCurrents)
+    private void DrawAetherCurrentAutomationButton(bool hasActionableAetherCurrents, Action onStart)
     {
         var automation = plugin.AetherCurrentAutomation;
         var label = automation.IsActive
@@ -1518,7 +1784,7 @@ public class CompactOverlayWindow : Window
         }
         else if (!hasMissingPlugin)
         {
-            automation.Start();
+            onStart();
         }
         else
         {
@@ -1533,7 +1799,7 @@ public class CompactOverlayWindow : Window
     /// frische Charaktere), erst DANACH die Plugin-Verfügbarkeit (wie bei den anderen Knöpfen) -
     /// siehe Tooltip-Reihenfolge unten.
     /// </summary>
-    private void DrawSightseeingAutomationButton(bool hasActionableSightseeing)
+    private void DrawSightseeingAutomationButton(bool hasActionableSightseeing, Action onStart)
     {
         var automation = plugin.SightseeingAutomation;
         var label = automation.IsActive
@@ -1596,7 +1862,7 @@ public class CompactOverlayWindow : Window
         }
         else if (!hasMissingPlugin)
         {
-            automation.Start();
+            onStart();
         }
         else
         {
@@ -1609,7 +1875,7 @@ public class CompactOverlayWindow : Window
     /// nicht besuchten Chocobokeep-Standorte dieser Zone an-/ausschaltet. Braucht zum Laufen
     /// zwingend vnavmesh - fehlt es, wird das per Tooltip erklärt statt der Knopf einfach nichts zu tun.
     /// </summary>
-    private void DrawChocobokeepAutomationButton(bool hasActionableChocobokeeps)
+    private void DrawChocobokeepAutomationButton(bool hasActionableChocobokeeps, Action onStart)
     {
         var automation = plugin.ChocobokeepAutomation;
         var label = automation.IsActive
@@ -1668,7 +1934,7 @@ public class CompactOverlayWindow : Window
         }
         else if (!hasMissingPlugin)
         {
-            automation.Start();
+            onStart();
         }
         else
         {
@@ -1681,7 +1947,7 @@ public class CompactOverlayWindow : Window
     /// alle NPC-Gegner der Zone mit noch fehlenden, erreichbaren Karten an und lässt Saucy spielen.
     /// Ausgegraut (mit eigenem Hinweis), solange Saucy nicht installiert ist.
     /// </summary>
-    private void DrawTripleTriadAutomationButton(bool hasActionableTripleTriad)
+    private void DrawTripleTriadAutomationButton(bool hasActionableTripleTriad, Action onStart)
     {
         var automation = plugin.TripleTriadAutomation;
         var label = automation.IsActive
@@ -1734,7 +2000,7 @@ public class CompactOverlayWindow : Window
         if (automation.IsActive)
             automation.Stop();
         else if (!saucyMissing && !hasMissingPlugin)
-            automation.Start();
+            onStart();
     }
 
     private void DrawClickableName(CollectibleEntry entry, bool isNotYetPossible = false)
@@ -1787,7 +2053,7 @@ public class CompactOverlayWindow : Window
     /// "Auf die Blacklist setzen". Muss direkt NACH dem Namen-Widget (OutlineText/ImGui-Item)
     /// aufgerufen werden, da ImGui.OpenPopupOnItemClick sich auf das zuletzt gezeichnete Item bezieht.
     /// </summary>
-    private static void DrawEntryContextMenu(CollectibleEntry entry, bool allaganToolsEnabled)
+    internal static void DrawEntryContextMenu(CollectibleEntry entry, bool allaganToolsEnabled)
     {
         var popupId = $"##EntryMenu{entry.Type}{entry.Id}";
         ImGui.OpenPopupOnItemClick(popupId, ImGuiPopupFlags.MouseButtonRight);
@@ -1797,6 +2063,16 @@ public class CompactOverlayWindow : Window
 
         if (allaganToolsEnabled && ImGui.Selectable(Loc.T("Mehr Informationen (Allagan Tools)", "More information (Allagan Tools)")))
             Plugin.OpenAllaganToolsItemInfo(entry);
+
+        if (Plugin.IsOnToDoList(entry))
+        {
+            if (ImGui.Selectable(Loc.T("Von der ToDo-Liste entfernen", "Remove from ToDo list")))
+                Plugin.RemoveFromToDoList(entry.Type, entry.Id);
+        }
+        else if (ImGui.Selectable(Loc.T("Auf die ToDo-Liste setzen", "Add to ToDo list")))
+        {
+            Plugin.AddToToDoList(entry);
+        }
 
         if (ImGui.Selectable(Loc.T("Auf die Blacklist setzen", "Add to blacklist")))
             Plugin.AddToBlacklist(entry);
@@ -2031,7 +2307,7 @@ public class CompactOverlayWindow : Window
     // Aetheryte/HuntingLog/AetherCurrent/Chocobokeep sind keine Items. FrameKit/Hairstyle tragen zwar
     // nur den Namen des Rahmens/der Frisur, werden aber über Plugin.ResolveUnlockItemId auf das
     // freischaltende Item (Framer's Kit bzw. "Modern Aesthetics"-Buch) aufgelöst (siehe DrawClickableName).
-    private static readonly HashSet<CollectibleType> AllaganToolsEligibleTypes = new()
+    internal static readonly HashSet<CollectibleType> AllaganToolsEligibleTypes = new()
     {
         CollectibleType.Mount,
         CollectibleType.Minion,

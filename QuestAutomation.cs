@@ -101,6 +101,20 @@ public sealed class QuestAutomation
     private DateTime? travelHomeFinishedAt;
     private DateTime? runningWentFalseAt;
 
+    // Gesetzt, sobald die Automation über den ToDo-Tab gestartet wurde (siehe Start) - dann werden
+    // NUR Quests aus dieser Menge angenommen, alle übrigen (auch sonst in der aktuellen Zone
+    // fehlenden) Quests bleiben unangetastet. null = normaler Modus (unverändertes Verhalten:
+    // arbeitet einfach die ganze Zone ab, siehe TryStartNext).
+    private HashSet<uint>? restrictToQuestIds;
+
+    // Ziel der aktuell laufenden Reise (State.TravelingHome) - im normalen Modus immer
+    // homeTerritoryId, im restringierten Modus die Zone der nächsten noch offenen ToDo-Quest (siehe
+    // UpdateRestrictedIdle). Getrennt von homeTerritoryId gehalten, damit eine Zwischenreise zu
+    // einer ToDo-Quest in einer anderen Zone die eigentliche "Heimatzone" nicht überschreibt.
+    private uint? travelTargetTerritoryId;
+    private bool travelIsReturnHome;
+    private uint? travelFailureSkipQuestId;
+
     private readonly HashSet<uint> skippedQuestIds = new();
     private readonly Dictionary<uint, int> attemptCounts = new();
 
@@ -243,12 +257,18 @@ public sealed class QuestAutomation
     /// die Automation gestartet wurde - führt eine Quest den Charakter anderswohin und endet dort
     /// auch (siehe TryTravelHome), reist die Automation danach automatisch per Lifestream wieder
     /// hierher zurück, statt einfach dort weiterzumachen, wo die Quest zufällig endete.
+    ///
+    /// restrictToQuestIds (optional): vom ToDo-Tab genutzt (siehe CompactOverlayWindow.
+    /// DrawToDoAutomationButtonsRow) - arbeitet dann NUR diese Quest-Ids ab, zonenübergreifend (reist
+    /// bei Bedarf selbst zur jeweiligen Zone, siehe UpdateRestrictedIdle/TryTravelTo), statt wie im
+    /// normalen Modus einfach alle in der aktuellen Zone fehlenden Quests anzunehmen.
     /// </summary>
-    public void Start(uint homeTerritoryId)
+    public void Start(uint homeTerritoryId, IReadOnlyCollection<uint>? restrictToQuestIds = null)
     {
         IsActive = true;
         currentQuestId = null;
         this.homeTerritoryId = homeTerritoryId;
+        this.restrictToQuestIds = restrictToQuestIds is { Count: > 0 } ? new HashSet<uint>(restrictToQuestIds) : null;
         travelHomeFinishedAt = null;
         travelHomeFailureCount = 0;
         runningWentFalseAt = null;
@@ -283,6 +303,7 @@ public sealed class QuestAutomation
         state = State.Idle;
         currentQuestId = null;
         homeTerritoryId = null;
+        restrictToQuestIds = null;
         StopLifestream();
         StopQuestionable();
     }
@@ -372,8 +393,13 @@ public sealed class QuestAutomation
     /// sie abgeschlossen hat (oder nicht unterstützt), bevor die nächste angestoßen wird. Landet
     /// der Charakter zwischendurch (durch eine Quest) in einer anderen Zone, wird zwischen zwei
     /// Quests automatisch zur Startzone zurückgereist (siehe TryTravelHome), bevor es weitergeht.
+    ///
+    /// allToDoQuestEntries: alle (zonenunabhängigen) ToDo-Listen-Quests, egal in welcher Zone -
+    /// wird NUR im restringierten Modus (siehe Start/restrictToQuestIds) gebraucht, um zu wissen, in
+    /// welche Zone als Nächstes gereist werden muss, sobald hier in der aktuellen Zone keine ToDo-
+    /// Quest mehr offen ist (siehe UpdateRestrictedIdle). Im normalen Modus unbenutzt, darf null sein.
     /// </summary>
-    public void Update(IReadOnlyList<CollectibleEntry> missingQuestsInZone, uint currentEffectiveTerritoryId)
+    public void Update(IReadOnlyList<CollectibleEntry> missingQuestsInZone, uint currentEffectiveTerritoryId, IReadOnlyList<CollectibleEntry>? allToDoQuestEntries = null)
     {
         if (!IsActive)
             return;
@@ -389,6 +415,12 @@ public sealed class QuestAutomation
                     break;
 
                 case State.Idle:
+                    if (restrictToQuestIds != null)
+                    {
+                        UpdateRestrictedIdle(missingQuestsInZone, currentEffectiveTerritoryId, allToDoQuestEntries ?? Array.Empty<CollectibleEntry>());
+                        break;
+                    }
+
                     // Split-Hauptstädte (Ul'dah etc.) zählen als EIN Zuhause, egal in welchem
                     // Bezirk man gerade steht (siehe Plugin.GetSplitCityTerritories) - konsistent
                     // damit, wie missingQuestsInZone selbst zonenübergreifend zusammengestellt wird.
@@ -404,7 +436,7 @@ public sealed class QuestAutomation
                         // Quest weiterlaufen will) mit unserer eigenen Teleport-Aktion kollidieren,
                         // was den Teleport-Erfolg/die Ankunftsprüfung verfälscht.
                         StopQuestionable();
-                        TryTravelHome(currentEffectiveTerritoryId);
+                        TryTravelTo(homeTerritoryId!.Value, currentEffectiveTerritoryId, isReturnHome: true);
                     }
                     break;
 
@@ -468,72 +500,126 @@ public sealed class QuestAutomation
     }
 
     /// <summary>
-    /// Reist zurück zur Zone, in der die Automation gestartet wurde - per kostenpflichtiger
-    /// Lifestream-Teleport-Aktion. Bewusst KEIN vorheriger Versuch über den kostenlosen Aethernetz-
-    /// Sprung (siehe lifestreamTeleport-Feldkommentar) - der wäre an dieser Stelle immer aussichtslos,
-    /// da TryTravelHome laut Update/State.Idle nur läuft, wenn die aktuelle Zone NICHT zur Startstadt
-    /// gehört, ein Aethernetz-Sprung aber voraussetzt, bereits in deren Netzwerk-Reichweite zu sein.
-    /// Schlägt auch der bezahlte Teleport ab (z.B. "Insufficient gil"), wird NICHT gewartet und die
-    /// Rückreise nicht wiederholt: die aktuelle Zone wird stattdessen einfach zur neuen "Startzone",
-    /// und es geht direkt mit den dortigen fehlenden Quests weiter (falls keine mehr da sind, endet
-    /// die Automation dann ganz regulär über "Keine Quests mehr übrig"). Nur ohne Lifestream selbst
-    /// wird sofort gestoppt, da dann gar kein Teleport möglich wäre.
+    /// Restringierter Modus (siehe Start/restrictToQuestIds): läuft die ganze ToDo-Liste zonenüber-
+    /// greifend ab, statt einfach alle in der aktuellen Zone fehlenden Quests anzunehmen. Ist noch
+    /// eine ToDo-Quest in DIESER Zone offen, wie gewohnt über TryStartNext; ist keine mehr hier,
+    /// aber anderswo, wird zuerst per Lifestream dorthin gereist (siehe TryTravelTo). Erst wenn
+    /// GAR KEINE ToDo-Quest mehr offen ist, endet die Automation regulär.
     /// </summary>
-    private void TryTravelHome(uint currentEffectiveTerritoryId)
+    private void UpdateRestrictedIdle(IReadOnlyList<CollectibleEntry> missingQuestsInZone, uint currentEffectiveTerritoryId, IReadOnlyList<CollectibleEntry> allToDoQuestEntries)
     {
-        if (!homeTerritoryId.HasValue)
-        {
-            state = State.Idle;
-            return;
-        }
+        var remaining = allToDoQuestEntries
+            .Where(q => restrictToQuestIds!.Contains(q.Id) && !skippedQuestIds.Contains(q.Id))
+            .ToList();
 
-        if (!IsLifestreamAvailable())
+        if (remaining.Count == 0)
         {
-            Plugin.Log.Info("[QuestAutomation] TryTravelHome: Lifestream nicht verfügbar - Automation wird gestoppt.");
-            StatusText = Loc.T(
-                "Kann nicht zur Startzone zurückreisen (Lifestream nicht gefunden) - Automation gestoppt.",
-                "Can't travel back to the starting zone (Lifestream not found) - automation stopped.");
+            StatusText = Loc.T("Keine ToDo-Quests mehr übrig.", "No ToDo quests left.");
             Stop();
             return;
         }
 
-        var homeDistrictIds = Plugin.GetSplitCityTerritories(homeTerritoryId.Value);
-        Plugin.Log.Info($"[QuestAutomation] TryTravelHome: homeTerritoryId={homeTerritoryId}, homeDistrictIds=[{string.Join(",", homeDistrictIds)}], currentEffectiveTerritoryId={currentEffectiveTerritoryId}.");
+        var inZoneIds = new HashSet<uint>(missingQuestsInZone.Select(q => q.Id));
+        if (remaining.Any(q => inZoneIds.Contains(q.Id)))
+        {
+            TryStartNext(missingQuestsInZone);
+            return;
+        }
+
+        // Keine der übrigen ToDo-Quests liegt in dieser Zone - zur Zone der ersten (in
+        // Speicherreihenfolge) noch offenen reisen.
+        var next = remaining[0];
+        var targetTerritory = next.FlagTerritoryTypeId ?? next.TerritoryTypeId;
+        if (targetTerritory == 0)
+        {
+            // Keine bekannte Zone (z.B. eine sehr alte ToDo-Liste ohne gespeicherte Zone) - kann so
+            // nicht angelaufen werden, überspringen statt in eine Endlosschleife zu laufen.
+            skippedQuestIds.Add(next.Id);
+            return;
+        }
+
+        Plugin.Log.Info($"[QuestAutomation] UpdateRestrictedIdle: keine ToDo-Quest in aktueller Zone - reise zu {targetTerritory} für Quest {next.Id}.");
+        StopQuestionable();
+        TryTravelTo(targetTerritory, currentEffectiveTerritoryId, isReturnHome: false, failureSkipQuestId: next.Id);
+    }
+
+    /// <summary>
+    /// Reist per kostenpflichtiger Lifestream-Teleport-Aktion in die angegebene Zone - im normalen
+    /// Modus zurück zur Startzone (isReturnHome=true, siehe Start/homeTerritoryId), im
+    /// restringierten ToDo-Modus zur Zone der nächsten noch offenen ToDo-Quest (siehe
+    /// UpdateRestrictedIdle). Bewusst KEIN vorheriger Versuch über den kostenlosen Aethernetz-Sprung
+    /// (siehe lifestreamTeleport-Feldkommentar) - der wäre an dieser Stelle immer aussichtslos, da
+    /// diese Methode laut Update/State.Idle nur läuft, wenn die aktuelle Zone NICHT schon die
+    /// Zielzone ist, ein Aethernetz-Sprung aber voraussetzt, bereits in deren Netzwerk-Reichweite zu
+    /// sein. Schlägt auch der bezahlte Teleport ab (z.B. "Insufficient gil"), wird NICHT gewartet:
+    /// im normalen Modus wird die aktuelle Zone einfach zur neuen "Startzone" (bestehendes
+    /// Verhalten), im restringierten Modus wird nur die eine nicht erreichbare Quest übersprungen,
+    /// der Rest der ToDo-Liste bleibt unangetastet. Nur ohne Lifestream selbst wird sofort gestoppt,
+    /// da dann gar kein Teleport möglich wäre.
+    /// </summary>
+    private void TryTravelTo(uint targetTerritoryId, uint currentEffectiveTerritoryId, bool isReturnHome, uint? failureSkipQuestId = null)
+    {
+        if (!IsLifestreamAvailable())
+        {
+            Plugin.Log.Info("[QuestAutomation] TryTravelTo: Lifestream nicht verfügbar - Automation wird gestoppt.");
+            StatusText = Loc.T(
+                "Kann nicht zur Zielzone reisen (Lifestream nicht gefunden) - Automation gestoppt.",
+                "Can't travel to the target zone (Lifestream not found) - automation stopped.");
+            Stop();
+            return;
+        }
+
+        var targetDistrictIds = Plugin.GetSplitCityTerritories(targetTerritoryId);
+        Plugin.Log.Info($"[QuestAutomation] TryTravelTo: targetTerritoryId={targetTerritoryId}, targetDistrictIds=[{string.Join(",", targetDistrictIds)}], currentEffectiveTerritoryId={currentEffectiveTerritoryId}.");
 
         // Manche geteilte Hauptstädte (z.B. Ul'dah) haben nur EINEN großen Aetheryten für die ganze
-        // Stadt, physisch in nur einem Bezirk - daher über alle Bezirke der Startzone suchen, nicht
-        // nur exakt den, in dem gestartet wurde.
+        // Stadt, physisch in nur einem Bezirk - daher über alle Bezirke der Zielzone suchen, nicht
+        // nur exakt die eine.
         uint? mainAetheryteId = null;
-        foreach (var territory in homeDistrictIds)
+        foreach (var territory in targetDistrictIds)
         {
             mainAetheryteId = Plugin.FindUnlockedMainAetheryteId(territory);
             if (mainAetheryteId != null)
                 break;
         }
-        Plugin.Log.Info($"[QuestAutomation] TryTravelHome: mainAetheryteId={mainAetheryteId}.");
+        Plugin.Log.Info($"[QuestAutomation] TryTravelTo: mainAetheryteId={mainAetheryteId}.");
 
-        // Kein Teleport möglich (kein Aetheryte dort freigeschaltet, oder der Teleport wurde
-        // abgelehnt, z.B. "Insufficient gil") - statt endlos zu warten oder ganz zu stoppen, wird die
-        // aktuelle Zone einfach zur neuen "Startzone": die Automation macht direkt hier mit den
-        // dortigen fehlenden Quests weiter (gibt es dort keine mehr, beendet sie sich gleich danach
-        // ganz regulär über "Keine Quests mehr übrig").
         var accepted = mainAetheryteId.HasValue && lifestreamTeleport.InvokeFunc(mainAetheryteId.Value, (byte)0);
-        Plugin.Log.Info($"[QuestAutomation] TryTravelHome: bezahlter Teleport zu {mainAetheryteId} -> accepted={accepted}.");
+        Plugin.Log.Info($"[QuestAutomation] TryTravelTo: bezahlter Teleport zu {mainAetheryteId} -> accepted={accepted}.");
         if (!accepted)
         {
-            homeTerritoryId = currentEffectiveTerritoryId;
+            if (isReturnHome)
+            {
+                // Kein Teleport möglich (kein Aetheryte dort freigeschaltet, oder der Teleport wurde
+                // abgelehnt, z.B. "Insufficient gil") - statt endlos zu warten oder ganz zu stoppen,
+                // wird die aktuelle Zone einfach zur neuen "Startzone": die Automation macht direkt
+                // hier mit den dortigen fehlenden Quests weiter.
+                homeTerritoryId = currentEffectiveTerritoryId;
+                StatusText = Loc.T(
+                    "Rückreise nicht möglich (z.B. zu wenig Gil) - mache stattdessen hier weiter.",
+                    "Trip back not possible (e.g. not enough gil) - continuing from here instead.");
+            }
+            else
+            {
+                if (failureSkipQuestId.HasValue)
+                    skippedQuestIds.Add(failureSkipQuestId.Value);
+                StatusText = Loc.T(
+                    "Reise zur nächsten ToDo-Quest nicht möglich (z.B. zu wenig Gil) - übersprungen.",
+                    "Trip to the next ToDo quest not possible (e.g. not enough gil) - skipped.");
+            }
+
             state = State.Idle;
-            StatusText = Loc.T(
-                "Rückreise nicht möglich (z.B. zu wenig Gil) - mache stattdessen hier weiter.",
-                "Trip back not possible (e.g. not enough gil) - continuing from here instead.");
             return;
         }
 
+        travelTargetTerritoryId = targetTerritoryId;
+        travelIsReturnHome = isReturnHome;
+        travelFailureSkipQuestId = failureSkipQuestId;
         state = State.TravelingHome;
         stateEnteredAt = DateTime.UtcNow;
         travelHomeFinishedAt = null;
-        var teleportHomeZoneName = Plugin.GetZoneName(homeTerritoryId.Value);
-        StatusText = Loc.T($"Teleportiere nach {teleportHomeZoneName}...", $"Teleporting to {teleportHomeZoneName}...");
+        var teleportZoneName = Plugin.GetZoneName(targetTerritoryId);
+        StatusText = Loc.T($"Teleportiere nach {teleportZoneName}...", $"Teleporting to {teleportZoneName}...");
     }
 
     private void UpdateTravelingHome(uint currentEffectiveTerritoryId)
@@ -558,25 +644,36 @@ public sealed class QuestAutomation
             // Lifestream kann eine Reise auch NACH dem angenommenen Auftrag noch asynchron
             // ablehnen (z.B. ein Ziel, das laut IsAetheryteUnlocked zwar freigeschaltet ist, aber von
             // Lifestream selbst nicht gefunden wird) - dabei wird IsBusy() genauso false wie bei
-            // einer echten, erfolgreichen Ankunft. Ohne diese Prüfung würde TryStartNext im nächsten
-            // Idle-Durchlauf die (unveränderte) Zone weiter als "nicht daheim" erkennen und denselben,
+            // einer echten, erfolgreichen Ankunft. Ohne diese Prüfung würde der nächste Idle-
+            // Durchlauf die (unveränderte) Zone weiter als "nicht angekommen" erkennen und denselben,
             // deterministisch wieder scheiternden Reiseversuch endlos wiederholen, statt jemals
             // weiterzumachen.
-            var arrivedHome = Plugin.GetSplitCityTerritories(homeTerritoryId!.Value).Contains(currentEffectiveTerritoryId);
-            Plugin.Log.Info($"[QuestAutomation] UpdateTravelingHome: Lifestream fertig, homeTerritoryId={homeTerritoryId}, currentEffectiveTerritoryId={currentEffectiveTerritoryId}, arrivedHome={arrivedHome}, travelHomeFailureCount={travelHomeFailureCount}.");
-            if (!arrivedHome && ++travelHomeFailureCount <= MaxTravelHomeAttempts)
+            var arrived = travelTargetTerritoryId.HasValue && Plugin.GetSplitCityTerritories(travelTargetTerritoryId.Value).Contains(currentEffectiveTerritoryId);
+            Plugin.Log.Info($"[QuestAutomation] UpdateTravelingHome: Lifestream fertig, travelTargetTerritoryId={travelTargetTerritoryId}, currentEffectiveTerritoryId={currentEffectiveTerritoryId}, arrived={arrived}, travelHomeFailureCount={travelHomeFailureCount}.");
+            if (!arrived && ++travelHomeFailureCount <= MaxTravelHomeAttempts)
             {
                 // Noch Versuche übrig - im nächsten Idle-Durchlauf erneut versuchen.
                 state = State.Idle;
                 return;
             }
 
-            if (!arrivedHome)
+            if (!arrived)
             {
-                homeTerritoryId = currentEffectiveTerritoryId;
-                StatusText = Loc.T(
-                    "Rückreise wiederholt gescheitert - mache stattdessen hier weiter.",
-                    "Trip back repeatedly failed - continuing from here instead.");
+                if (travelIsReturnHome)
+                {
+                    homeTerritoryId = currentEffectiveTerritoryId;
+                    StatusText = Loc.T(
+                        "Rückreise wiederholt gescheitert - mache stattdessen hier weiter.",
+                        "Trip back repeatedly failed - continuing from here instead.");
+                }
+                else
+                {
+                    if (travelFailureSkipQuestId.HasValue)
+                        skippedQuestIds.Add(travelFailureSkipQuestId.Value);
+                    StatusText = Loc.T(
+                        "Reise zur nächsten ToDo-Quest wiederholt gescheitert - übersprungen.",
+                        "Trip to the next ToDo quest repeatedly failed - skipped.");
+                }
             }
 
             travelHomeFailureCount = 0;
@@ -589,16 +686,21 @@ public sealed class QuestAutomation
         {
             StopLifestream();
             state = State.Idle;
-            StatusText = Loc.T("Rückreise dauert zu lange - abgebrochen", "Trip back took too long - aborted");
+            StatusText = Loc.T("Reise dauert zu lange - abgebrochen", "Trip took too long - aborted");
         }
     }
 
     private void TryStartNext(IReadOnlyList<CollectibleEntry> missingQuestsInZone)
     {
-        var candidates = missingQuestsInZone.Where(q => !skippedQuestIds.Contains(q.Id)).ToList();
+        var pool = restrictToQuestIds != null
+            ? missingQuestsInZone.Where(q => restrictToQuestIds.Contains(q.Id))
+            : missingQuestsInZone;
+        var candidates = pool.Where(q => !skippedQuestIds.Contains(q.Id)).ToList();
         if (candidates.Count == 0)
         {
-            StatusText = Loc.T("Keine Quests mehr übrig.", "No quests left.");
+            StatusText = restrictToQuestIds != null
+                ? Loc.T("Keine ToDo-Quests mehr übrig.", "No ToDo quests left.")
+                : Loc.T("Keine Quests mehr übrig.", "No quests left.");
             Stop();
             return;
         }
