@@ -116,8 +116,9 @@ public class MainWindow : Window
             (FontAwesomeIcon.Bug, Loc.T("Debug", "Debug"), DrawDebugTab),
         };
 
-        // Standardgröße reicht, um alle Optionen ohne Scrollbalken zu zeigen -
-        // gilt nur beim allerersten Öffnen, danach darf frei skaliert werden.
+        // Zuletzt gespeicherte (oder die Standard-) Größe - gilt nur beim allerersten Öffnen, danach
+        // darf frei skaliert werden (siehe DrawInner, das jede Größenänderung wieder zurückspeichert).
+        expandedSize = plugin.Configuration.MainWindowSize;
         Size = expandedSize;
         SizeCondition = ImGuiCond.FirstUseEver;
         SizeConstraints = ExpandedSizeConstraints;
@@ -386,7 +387,20 @@ public class MainWindow : Window
         // geschrumpfte) Größe während des Einklappens versehentlich als "neue Normalgröße"
         // gespeichert und beim Ausklappen fälschlich wiederhergestellt.
         if (!collapsed)
+        {
             expandedSize = ImGui.GetWindowSize();
+
+            // Zusätzlich zur (laut Nutzer-Report nicht immer zuverlässigen) automatischen imgui.ini-
+            // Größen-Erinnerung explizit in der eigenen Konfiguration sichern - erst NACH dem
+            // Loslassen der Maus (nicht bei jedem einzelnen Frame während des Ziehens), um nicht bei
+            // jedem Zwischenschritt einer Größenänderung auf die Festplatte zu schreiben.
+            var config = plugin.Configuration;
+            if (!ImGui.IsMouseDown(ImGuiMouseButton.Left) && config.MainWindowSize != expandedSize)
+            {
+                config.MainWindowSize = expandedSize;
+                config.Save();
+            }
+        }
 
         DrawCustomHeader();
 
@@ -1505,12 +1519,12 @@ public class MainWindow : Window
     private static readonly (string InternalName, string DisplayName, string DescriptionDe, string DescriptionEn, bool Required, string? Group)[] Dependencies =
     {
         (CombatPluginBridge.RotationSolverInternalName, "RotationSolver Reborn",
-            "Kampf-Plugin: übernimmt den Kampf bei der Hunting-Log-Kill-Automation und bei kampfpflichtigen Schritten während der Quest-Automation. Alternativ zu Wrath Combo - eines der beiden wird benötigt.",
-            "Combat plugin: drives combat for the hunting log kill automation and for combat-required steps during the quest automation. Alternative to Wrath Combo - one of the two is required.",
+            "Kampf-Plugin: übernimmt den Kampf bei der Hunting-Log-Kill-Automation, bei kampfpflichtigen Schritten während der Quest-Automation, und wehrt unterwegs angreifende Gegner während der Sightseeing-Automation ab. Alternativ zu Wrath Combo - eines der beiden wird benötigt.",
+            "Combat plugin: drives combat for the hunting log kill automation, for combat-required steps during the quest automation, and fends off attackers encountered while the sightseeing automation is traveling. Alternative to Wrath Combo - one of the two is required.",
             true, CombatDependencyGroup),
         (CombatPluginBridge.WrathComboInternalName, "Wrath Combo",
-            "Kampf-Plugin: übernimmt den Kampf bei der Hunting-Log-Kill-Automation und bei kampfpflichtigen Schritten während der Quest-Automation. Alternativ zu RotationSolver Reborn - eines der beiden wird benötigt.",
-            "Combat plugin: drives combat for the hunting log kill automation and for combat-required steps during the quest automation. Alternative to RotationSolver Reborn - one of the two is required.",
+            "Kampf-Plugin: übernimmt den Kampf bei der Hunting-Log-Kill-Automation, bei kampfpflichtigen Schritten während der Quest-Automation, und wehrt unterwegs angreifende Gegner während der Sightseeing-Automation ab. Alternativ zu RotationSolver Reborn - eines der beiden wird benötigt.",
+            "Combat plugin: drives combat for the hunting log kill automation, for combat-required steps during the quest automation, and fends off attackers encountered while the sightseeing automation is traveling. Alternative to RotationSolver Reborn - one of the two is required.",
             true, CombatDependencyGroup),
         ("vnavmesh", "vnavmesh",
             "Für das Laufen bei allen Automationen (Aetheryte, Quest, Hunting Log, \"Hinlaufen\").",
@@ -1596,9 +1610,12 @@ public class MainWindow : Window
     private string databaseSearch = string.Empty;
 
     /// <summary>
-    /// Übersicht ALLER vom Plugin verwalteten Sammelobjekte (siehe GetDatabaseEntries), unabhängig von
-    /// Zone/Fortschritt - ein Tab pro Kategorie. Anders als das Overlay zeigt das hier auch bereits
-    /// besessene Einträge (mit grünem Haken), damit man nachschlagen kann, was es überhaupt gibt.
+    /// Übersicht aller vom Plugin im Overlay verwendeten/anzeigbaren Sammelobjekte (siehe
+    /// GetGlobalEntries, gefiltert auf TerritoryTypeId != 0), unabhängig vom aktuellen
+    /// Fortschritt/der aktuellen Zone - ein Tab pro Kategorie. Anders als das Overlay zeigt das hier
+    /// auch bereits besessene Einträge (mit grünem Haken), damit man nachschlagen kann, was es
+    /// überhaupt gibt. Einträge ohne jede Zonen-Zuordnung (nie im Overlay sichtbar, z.B. viele
+    /// Errungenschaften) werden bewusst nicht gelistet (Nutzeranforderung).
     /// </summary>
     private void DrawDatabasePage()
     {
@@ -1607,8 +1624,8 @@ public class MainWindow : Window
         ImGui.SetWindowFontScale(1f);
         ImGui.PushStyleColor(ImGuiCol.Text, ModernUi.TextMuted);
         ImGui.TextWrapped(Loc.T(
-            "Alle Sammelobjekte, die dieses Plugin kennt - unabhängig von Zone oder Fortschritt, mit Status (schon besessen oder nicht).",
-            "All collectibles this plugin knows about - independent of zone or progress, with status (already owned or not)."));
+            "Sammelobjekte, die dieses Plugin in irgendeiner Zone/einem Dungeon anzeigen würde - unabhängig von der aktuellen Zone oder Fortschritt, mit Status (schon besessen oder nicht).",
+            "Collectibles this plugin would show in some zone/dungeon - independent of the current zone or progress, with status (already owned or not)."));
         ImGui.PopStyleColor();
         ImGui.Spacing();
         ImGui.Separator();
@@ -1627,7 +1644,17 @@ public class MainWindow : Window
         }
         ImGui.Dummy(new Vector2(0f, 6f));
 
-        var allEntries = plugin.GetGlobalEntries().Where(e => !config.DatabaseHideOwned || !plugin.IsOwned(e)).ToList();
+        // Nur Einträge mit einer echten Zonen-Zuordnung (TerritoryTypeId != 0) - das ist exakt die
+        // Voraussetzung, unter der das Overlay einen Eintrag JEMALS in irgendeiner Zone/Dungeon zeigen
+        // würde (siehe CompactOverlayWindow.DrawContent: "allForZone" filtert per
+        // siblingTerritories.Contains(e.TerritoryTypeId)). Rein per Errungenschaft/Cash-Shop/Crafting
+        // freischaltbare Einträge ohne jede Zonen-Zuordnung (z.B. viele Achievement-Einträge) tauchen
+        // im Overlay NIE auf und sollen deshalb auch in der Datenbank nicht mehr auftauchen
+        // (Nutzeranforderung, gilt für alle Kategorien).
+        var allEntries = plugin.GetGlobalEntries()
+            .Where(e => e.TerritoryTypeId != 0)
+            .Where(e => !config.DatabaseHideOwned || !plugin.IsOwned(e))
+            .ToList();
         var availableTypes = DatabaseTypes.Where(t => allEntries.Any(e => e.Type == t)).ToList();
         if (availableTypes.Count == 0)
         {

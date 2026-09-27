@@ -470,8 +470,15 @@ public class CompactOverlayWindow : Window
         var hasActionableAetherCurrents = missingAetherCurrentsInZone.Any(e => e.HasGoToTarget);
         // hasVisibleSightseeing entscheidet nur, ob der Knopf überhaupt gezeichnet wird (siehe
         // DrawAutomationButtonIfNeeded) - hasActionableSightseeing (gerade durch Wetter/Uhrzeit/
-        // Buch-Freischaltung eingeschränkt) entscheidet zusätzlich, ob er dabei ausgegraut ist.
-        var hasVisibleSightseeing = visibleSightseeingInZone.Any(e => e.HasGoToTarget) && Plugin.IsSightseeingLogUnlocked();
+        // Buch-Freischaltung eingeschränkt) entscheidet zusätzlich, ob er dabei ausgegraut ist. Im
+        // Simulation-Modus (Configuration.SimulateSightseeingAutomation) zählen bewusst auch schon
+        // BESESSENE Punkte (nicht nur visibleSightseeingInZone, das die nur zum Testen ausblendet) -
+        // sonst verschwindet der Knopf dort, sobald alle Punkte der Zone bereits abgeschlossen sind,
+        // obwohl der Simulation-Modus ja gerade dafür da ist, genau solche Punkte erneut anzulaufen.
+        var hasVisibleSightseeing = (config.SimulateSightseeingAutomation
+                ? allForZone.Any(e => e.Type == CollectibleType.Sightseeing && e.HasGoToTarget)
+                : visibleSightseeingInZone.Any(e => e.HasGoToTarget))
+            && Plugin.IsSightseeingLogUnlocked();
         var hasActionableSightseeing = missingSightseeingInZone.Any(e => e.HasGoToTarget) && Plugin.IsSightseeingLogUnlocked();
         var hasActionableChocobokeeps = missingChocobokeepsInZone.Any(e => e.HasGoToTarget);
         var hasActionableTripleTriad = missingNpcCardsInZone.Count > 0;
@@ -2061,7 +2068,7 @@ public class CompactOverlayWindow : Window
         if (!ImGui.BeginPopup(popupId))
             return;
 
-        if (allaganToolsEnabled && ImGui.Selectable(Loc.T("Mehr Informationen (Allagan Tools)", "More information (Allagan Tools)")))
+        if (allaganToolsEnabled && ImGui.Selectable(Loc.T("Mehr Informationen", "More information")))
             Plugin.OpenAllaganToolsItemInfo(entry);
 
         if (Plugin.IsOnToDoList(entry))
@@ -2074,7 +2081,14 @@ public class CompactOverlayWindow : Window
             Plugin.AddToToDoList(entry);
         }
 
-        if (ImGui.Selectable(Loc.T("Auf die Blacklist setzen", "Add to blacklist")))
+        // Abgetrennt und rot eingefärbt (Nutzeranforderung) - blendet den Eintrag komplett aus, statt
+        // ihn wie die ToDo-Liste nur zu markieren, daher optisch klar von den Einträgen darüber
+        // abgesetzt, damit man ihn nicht aus Versehen anklickt.
+        ImGui.Separator();
+        ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(0.9f, 0.35f, 0.35f, 1f));
+        var blacklistClicked = ImGui.Selectable(Loc.T("Auf die Blacklist setzen", "Add to blacklist"));
+        ImGui.PopStyleColor();
+        if (blacklistClicked)
             Plugin.AddToBlacklist(entry);
 
         ImGui.EndPopup();
