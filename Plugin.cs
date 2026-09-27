@@ -136,8 +136,15 @@ public sealed class Plugin : IDalamudPlugin
             Id = entry.Id,
             Name = ProgressSuffixPattern.Replace(entry.Name, string.Empty),
         });
+
+        // Blacklist und ToDo-Liste widersprechen sich (etwas soll gleichzeitig komplett versteckt UND
+        // gezielt bearbeitet werden) - ein geblacklisteter Eintrag fliegt daher automatisch von der
+        // ToDo-Liste, statt dort weiter (unsichtbar für den Rest des Overlays) hängen zu bleiben.
+        instance.Configuration.ToDoList.RemoveAll(t => t.Type == entry.Type && t.Id == entry.Id);
+
         instance.Configuration.Save();
         blacklistIndex = null;
+        toDoIndex = null;
     }
 
     public static void RemoveFromBlacklist(CollectibleType type, uint id)
@@ -147,6 +154,66 @@ public sealed class Plugin : IDalamudPlugin
 
         instance.Configuration.Save();
         blacklistIndex = null;
+    }
+
+    // Wie BlacklistIndex, aber für Configuration.ToDoList (siehe IsOnToDoList/AddToToDoList/RemoveFromToDoList).
+    private static HashSet<(CollectibleType Type, uint Id)>? toDoIndex;
+
+    private static HashSet<(CollectibleType Type, uint Id)> ToDoIndex =>
+        toDoIndex ??= instance.Configuration.ToDoList.Select(t => (t.Type, t.Id)).ToHashSet();
+
+    /// <summary>Ob der Eintrag auf der ToDo-Liste steht (siehe Configuration.ToDoList).</summary>
+    public static bool IsOnToDoList(CollectibleEntry entry) => ToDoIndex.Contains((entry.Type, entry.Id));
+
+    public static void AddToToDoList(CollectibleEntry entry)
+    {
+        if (IsOnToDoList(entry))
+            return;
+
+        instance.Configuration.ToDoList.Add(new ToDoEntry
+        {
+            Type = entry.Type,
+            Id = entry.Id,
+            Name = ProgressSuffixPattern.Replace(entry.Name, string.Empty),
+            // Nur für Aetheryte/HuntingLog tatsächlich gebraucht (siehe ToDoEntry.TerritoryTypeId-
+            // Kommentar) - bei allen anderen Typen harmlos ungenutzt.
+            TerritoryTypeId = entry.FlagTerritoryTypeId ?? entry.TerritoryTypeId,
+        });
+        instance.Configuration.Save();
+        toDoIndex = null;
+    }
+
+    public static void RemoveFromToDoList(CollectibleType type, uint id)
+    {
+        if (instance.Configuration.ToDoList.RemoveAll(t => t.Type == type && t.Id == id) == 0)
+            return;
+
+        instance.Configuration.Save();
+        toDoIndex = null;
+    }
+
+    /// <summary>
+    /// Entfernt automatisch alle ToDo-Einträge, die inzwischen besessen/abgeschlossen sind (siehe
+    /// IsOwned) - von CompactOverlayWindow.DrawContent jeden Frame aufgerufen, während das Overlay
+    /// offen ist (dieselbe Stelle, an der auch die übrigen Automationen laufen). Prüft dafür bewusst
+    /// über die per ResolveToDoEntries VOLL aufgelösten Einträge, nicht einen bloßen Typ+Id-Platzhalter -
+    /// manche IsOwned-Zweige (z.B. FrameKit, siehe IsFrameKitUnlocked) brauchen zusätzliche Felder
+    /// (FrameKitUnlockKind/-Id), die ein bloßer Platzhalter nicht hätte.
+    /// </summary>
+    public void CleanUpToDoList()
+    {
+        var resolved = ResolveToDoEntries();
+        var completed = Configuration.ToDoList
+            .Where((t, i) => IsOwned(resolved[i]))
+            .ToList();
+        if (completed.Count == 0)
+            return;
+
+        foreach (var t in completed)
+            Configuration.ToDoList.Remove(t);
+
+        Configuration.Save();
+        toDoIndex = null;
     }
 
     /// <summary>
@@ -1373,9 +1440,22 @@ public sealed class Plugin : IDalamudPlugin
 
         EnrichHairstyleVendors(result);
         EnrichHairstyleSpecialCurrencyVendors(result);
+        EnrichHairstyleSpecialShopVendors(result);
 
-        hairstyleEntriesCache = result;
-        return result;
+        // Dasselbe Buch steht im Sheet einmal PRO Rasse/Geschlecht (mehrere CharaMakeCustomize-RowIds,
+        // ein Name) - beide Enrich-Methoden oben tragen Händler/Preis deshalb bewusst nur beim ERSTEN
+        // Eintrag je Name/Item nach (siehe deren Kommentare), die übrigen Duplikate blieben bisher aber
+        // trotzdem in der Liste stehen (Nutzer-Report: "Modern Aesthetics" tauchte in der Datenbank
+        // vielfach auf, und die meisten Duplikate zeigten mangels Anreicherung keinen Händler/Preis).
+        // Jetzt auf genau einen Eintrag je Name reduziert - dank der Reihenfolge oben ist das
+        // zuverlässig der bereits angereicherte erste Eintrag.
+        var deduplicated = result
+            .GroupBy(e => e.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First())
+            .ToList();
+
+        hairstyleEntriesCache = deduplicated;
+        return deduplicated;
     }
 
     // Von Hand nachgetragene Händler für "Modern Aesthetics"-Bücher, die NICHT für Gil, sondern über
@@ -1425,6 +1505,250 @@ public sealed class Plugin : IDalamudPlugin
             entry.CurrencyAmount = vendor.CurrencyAmount;
             entry.RequiredQuest ??= vendor.RequiredQuest;
             entry.Source = $"{vendor.Vendor} - {vendor.CurrencyText}";
+        }
+    }
+
+    /// <summary>
+    /// Trägt Händler/Preis für "Modern Aesthetics"-Bücher nach, die weder über einen einfachen
+    /// Gil-Händler (siehe EnrichHairstyleVendors) noch über die von Hand gepflegten Überschreibungen
+    /// (siehe HairstyleSpecialVendorOverrides) erfasst sind, sondern über einen Sonderwährungs-
+    /// Tauschhändler (SpecialShop) verkauft werden - inklusive derselben Menü-Verschachtelung
+    /// (TopicSelect/FateShop/InclusionShop/CustomTalk), die schon EnrichFrameKitVendors auflöst, da
+    /// viele dieser Bücher genau über solche Kataloge (Bicolor Gemstones, Sammelwährungen,
+    /// Beast-Tribe-Händler, ...) verkauft werden. Deckt so den Großteil automatisch ab, ohne jedes
+    /// Buch einzeln von Hand eintragen zu müssen (Nutzer-Report: bei sehr vielen fehlten Händler/Preis).
+    /// </summary>
+    private static void EnrichHairstyleSpecialShopVendors(List<CollectibleEntry> entries)
+    {
+        var candidates = entries.Where(e => e.Type == CollectibleType.Hairstyle && e.TerritoryTypeId == 0).ToList();
+        if (candidates.Count == 0)
+            return;
+
+        try
+        {
+            var customizeSheet = DataManager.GetExcelSheet<CharaMakeCustomize>();
+            var specialShopSheet = DataManager.GetExcelSheet<SpecialShop>();
+            var npcResidentSheet = DataManager.GetExcelSheet<ENpcResident>();
+            var npcBaseSheet = DataManager.GetExcelSheet<ENpcBase>();
+            if (customizeSheet == null || specialShopSheet == null || npcResidentSheet == null || npcBaseSheet == null)
+                return;
+
+            // entry.Id ist die CharaMakeCustomize-RowId - HintItem daraus die Ziel-Item-RowId auflösen
+            // (dieselbe Auflösung wie in EnrichHairstyleVendors).
+            var itemRowIdToEntry = new Dictionary<uint, CollectibleEntry>();
+            foreach (var entry in candidates)
+            {
+                if (!customizeSheet.TryGetRow(entry.Id, out var row))
+                    continue;
+
+                var itemRowId = row.HintItem.RowId;
+                if (itemRowId != 0)
+                    itemRowIdToEntry.TryAdd(itemRowId, entry);
+            }
+
+            if (itemRowIdToEntry.Count == 0)
+                return;
+
+            var targetItemRowIds = itemRowIdToEntry.Keys.ToHashSet();
+            var itemRowIdToShopMatch = new Dictionary<uint, FrameKitShopMatch>();
+            foreach (var shop in specialShopSheet)
+            {
+                try
+                {
+                    foreach (var slot in shop.Item)
+                    {
+                        foreach (var receive in slot.ReceiveItems)
+                        {
+                            var itemRowId = receive.Item.RowId;
+                            if (itemRowId == 0 || !targetItemRowIds.Contains(itemRowId) || itemRowIdToShopMatch.ContainsKey(itemRowId))
+                                continue;
+
+                            uint costAmount = 0;
+                            uint costItemId = 0;
+                            uint costIconId = 0;
+                            string costName = "?";
+                            foreach (var cost in slot.ItemCosts)
+                            {
+                                if (cost.CurrencyCost == 0)
+                                    continue;
+
+                                costAmount = cost.CurrencyCost;
+                                costItemId = cost.ItemCost.RowId;
+                                var costItem = cost.ItemCost.ValueNullable;
+                                costIconId = costItem?.Icon ?? 0;
+                                costName = costItem?.Name.ToString() ?? "?";
+                                break;
+                            }
+
+                            if (costAmount == 0)
+                            {
+                                var achievementName = slot.AchievementUnlock.RowId != 0 ? slot.AchievementUnlock.ValueNullable?.Name.ToString() : null;
+                                if (string.IsNullOrEmpty(achievementName))
+                                    continue;
+
+                                itemRowIdToShopMatch[itemRowId] = new FrameKitShopMatch(shop.RowId, 0, 0, 0, string.Empty, achievementName);
+                                continue;
+                            }
+
+                            itemRowIdToShopMatch[itemRowId] = new FrameKitShopMatch(shop.RowId, costAmount, costItemId, costIconId, $"{costAmount:N0} {costName}");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Error(ex, $"Fehler beim Lesen von SpecialShop-Zeile {shop.RowId} (Frisuren) - übersprungen.");
+                }
+            }
+
+            if (itemRowIdToShopMatch.Count == 0)
+                return;
+
+            var targetShopIds = itemRowIdToShopMatch.Values.Select(m => m.ShopId).ToHashSet();
+            var menuIdToShopIds = new Dictionary<uint, List<uint>>();
+
+            void AddMenuShop(uint menuRowId, uint shopId)
+            {
+                if (!menuIdToShopIds.TryGetValue(menuRowId, out var list))
+                    menuIdToShopIds[menuRowId] = list = new List<uint>();
+                list.Add(shopId);
+            }
+
+            var topicSelectSheet = DataManager.GetExcelSheet<TopicSelect>();
+            if (topicSelectSheet != null)
+            {
+                foreach (var topic in topicSelectSheet)
+                    foreach (var shopRef in topic.Shop)
+                        if (shopRef.RowId != 0 && targetShopIds.Contains(shopRef.RowId))
+                            AddMenuShop(topic.RowId, shopRef.RowId);
+            }
+
+            var fateShopSheet = DataManager.GetExcelSheet<FateShop>();
+            if (fateShopSheet != null)
+            {
+                foreach (var fateShop in fateShopSheet)
+                    foreach (var shopRef in fateShop.SpecialShop)
+                        if (shopRef.RowId != 0 && targetShopIds.Contains(shopRef.RowId))
+                            AddMenuShop(fateShop.RowId, shopRef.RowId);
+            }
+
+            var inclusionShopSheet = DataManager.GetExcelSheet<InclusionShop>();
+            var inclusionShopSeriesSheet = DataManager.GetSubrowExcelSheet<InclusionShopSeries>();
+            if (inclusionShopSheet != null && inclusionShopSeriesSheet != null)
+            {
+                foreach (var inclusionShop in inclusionShopSheet)
+                {
+                    foreach (var categoryRef in inclusionShop.Category)
+                    {
+                        var category = categoryRef.ValueNullable;
+                        if (category == null)
+                            continue;
+
+                        var seriesRowId = category.Value.InclusionShopSeries.RowId;
+                        if (!inclusionShopSeriesSheet.TryGetRow(seriesRowId, out var seriesRows))
+                            continue;
+
+                        foreach (var series in seriesRows)
+                            if (series.SpecialShop.RowId != 0 && targetShopIds.Contains(series.SpecialShop.RowId))
+                                AddMenuShop(inclusionShop.RowId, series.SpecialShop.RowId);
+                    }
+                }
+            }
+
+            var customTalkIdToShopId = new Dictionary<uint, uint>();
+            foreach (var shop in specialShopSheet)
+                if (targetShopIds.Contains(shop.RowId) && shop.CustomTalk.RowId != 0)
+                    customTalkIdToShopId.TryAdd(shop.CustomTalk.RowId, shop.RowId);
+
+            var shopIdToNpcId = new Dictionary<uint, uint>();
+            foreach (var npc in npcBaseSheet)
+            {
+                foreach (var data in npc.ENpcData)
+                {
+                    if (data.RowId == 0)
+                        continue;
+
+                    if (targetShopIds.Contains(data.RowId))
+                        shopIdToNpcId.TryAdd(data.RowId, npc.RowId);
+                    else if (menuIdToShopIds.TryGetValue(data.RowId, out var shopIdsViaMenu))
+                    {
+                        foreach (var shopIdViaMenu in shopIdsViaMenu)
+                            shopIdToNpcId.TryAdd(shopIdViaMenu, npc.RowId);
+                    }
+                    else if (customTalkIdToShopId.TryGetValue(data.RowId, out var shopIdViaCustomTalk))
+                        shopIdToNpcId.TryAdd(shopIdViaCustomTalk, npc.RowId);
+                }
+            }
+
+            var levelSheet = DataManager.GetExcelSheet<Level>();
+            var mapSheet = DataManager.GetExcelSheet<Lumina.Excel.Sheets.Map>();
+            var targetNpcIds = shopIdToNpcId.Values.ToHashSet();
+            var npcIdToPlace = new Dictionary<uint, (uint TerritoryTypeId, uint MapId, float X, float Y)>();
+            if (levelSheet != null && mapSheet != null)
+            {
+                foreach (var level in levelSheet)
+                {
+                    if (level.Type != 8)
+                        continue;
+                    var npcRowId = level.Object.RowId;
+                    if (npcRowId == 0 || !targetNpcIds.Contains(npcRowId) || npcIdToPlace.ContainsKey(npcRowId))
+                        continue;
+                    var mapId = level.Map.RowId;
+                    if (mapId == 0 || !mapSheet.TryGetRow(mapId, out var map))
+                        continue;
+
+                    var mapCoords = Dalamud.Utility.MapUtil.WorldToMap(
+                        new Vector2(level.X, level.Z), (int)map.OffsetX, (int)map.OffsetY, (uint)map.SizeFactor);
+                    npcIdToPlace[npcRowId] = (level.Territory.RowId, mapId, mapCoords.X, mapCoords.Y);
+                }
+            }
+
+            var npcPlaces = CsvLoader.LoadResource<ENpcPlace>(CsvLoader.ENpcPlaceResourceName, true, out _, out _);
+            foreach (var place in npcPlaces)
+            {
+                if (!targetNpcIds.Contains(place.ENpcResidentId))
+                    continue;
+                npcIdToPlace.TryAdd(place.ENpcResidentId, (place.TerritoryTypeId, place.MapId, place.Position.X, place.Position.Y));
+            }
+
+            var enrichedCount = 0;
+            foreach (var (itemRowId, entry) in itemRowIdToEntry)
+            {
+                try
+                {
+                    if (!itemRowIdToShopMatch.TryGetValue(itemRowId, out var match))
+                        continue;
+                    if (!shopIdToNpcId.TryGetValue(match.ShopId, out var npcId))
+                        continue;
+                    if (!npcIdToPlace.TryGetValue(npcId, out var place))
+                        continue;
+                    if (!npcResidentSheet.TryGetRow(npcId, out var npc))
+                        continue;
+
+                    var vendorName = npc.Singular.ToString();
+                    entry.Vendor = vendorName;
+                    entry.VendorMapX = place.X;
+                    entry.VendorMapY = place.Y;
+                    entry.TerritoryTypeId = place.TerritoryTypeId;
+                    entry.MapId = place.MapId;
+                    entry.Currency = match.CurrencyText;
+                    entry.CurrencyIconId = match.CurrencyIconId;
+                    entry.CurrencyItemId = match.CurrencyItemId;
+                    entry.CurrencyAmount = match.CurrencyAmount;
+                    entry.RequiredAchievement ??= match.RequiredAchievement;
+                    entry.Source = string.IsNullOrEmpty(match.CurrencyText) ? vendorName : $"{vendorName} - {match.CurrencyText}";
+                    enrichedCount++;
+                }
+                catch (Exception ex)
+                {
+                    Log.Error(ex, $"Fehler beim Anreichern von Frisur-Eintrag {entry.Name} (SpecialShop) - übersprungen.");
+                }
+            }
+
+            Log.Info($"[HairstyleDebug] EnrichHairstyleSpecialShopVendors fertig: {enrichedCount}/{candidates.Count} Einträge angereichert.");
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Fehler beim Auflösen von Frisur-Sonderwährungs-Händlern - Anreicherung übersprungen.");
         }
     }
 
@@ -4637,7 +4961,17 @@ public sealed class Plugin : IDalamudPlugin
         var result = new List<CollectibleEntry>();
         var questSheet = DataManager.GetExcelSheet<Quest>();
         var playerLevel = ObjectTable.LocalPlayer?.Level ?? 0;
-        if (questSheet != null && playerLevel > 0)
+
+        // Direkt nach Login/Plugin-Start ist der lokale Spieler (insbesondere Level) manchmal noch
+        // nicht vollständig initialisiert (siehe GetLiveZoneEntries-Kommentar, dieselbe Ursache) -
+        // ohne dieses frühe Return würde eine in genau diesem einen Frame fälschlich leer berechnete
+        // Liste dauerhaft (für die ganze Sitzung) gecacht bleiben, da globalQuestEntriesCache nie
+        // wieder invalidiert wird. Einfach nochmal versuchen, bis Spielerdaten da sind, statt ein
+        // schlechtes Ergebnis für immer zu cachen.
+        if (playerLevel <= 0)
+            return result;
+
+        if (questSheet != null)
         {
             foreach (var row in questSheet)
             {
@@ -4659,6 +4993,91 @@ public sealed class Plugin : IDalamudPlugin
 
     /// <summary>Nur die Ids - siehe GetAllTrackedQuestEntries.</summary>
     public List<uint> GetAllTrackedQuestIds() => GetAllTrackedQuestEntries().Select(e => e.Id).ToList();
+
+    private static List<CollectibleEntry>? globalEntriesCache;
+
+    /// <summary>
+    /// Alle Sammelobjekte, die das Plugin zonenunabhängig kennt (siehe MainWindow.DatabaseTypes für
+    /// die abgedeckten Typen - Aetheryte/HuntingLog fehlen bewusst, dafür gibt es keine fertige
+    /// globale Liste, nur pro-Zone berechnete Ausschnitte), einmal zusammengeführt und pro (Type, Id)
+    /// dedupliziert - CollectionData.GetAllEntries() allein deckt Quest/Sightseeing nicht ab (siehe
+    /// deren eigene, ebenfalls zonenunabhängige Methoden). Nur einmal pro Sitzung berechnet, wie die
+    /// anderen globalen Caches (GetAllTrackedQuestEntries, frameKitEntriesCache, ...). Von der
+    /// Datenbank-Seite UND der ToDo-Liste genutzt (siehe CompactOverlayWindow.ResolveToDoEntries) -
+    /// Letztere muss Einträge auch außerhalb der aktuellen Zone auflösen können.
+    /// </summary>
+    public List<CollectibleEntry> GetGlobalEntries()
+    {
+        if (globalEntriesCache != null)
+            return globalEntriesCache;
+
+        // Manche Sammelobjekte (z.B. Triple-Triad-Karten) stehen MEHRFACH mit derselben (Type, Id) in
+        // der zusammengeführten Liste - z.B. einmal als generischer Dungeon-Drop-Eintrag (aus
+        // triadcards.json, ohne Fundort) UND einmal als NPC-Gegner-Eintrag (aus
+        // GetTripleTriadNpcEntries, MIT Fundort/Position). g.First() hätte hier immer den ZUERST
+        // geladenen (den JSON-Eintrag ohne Fundort) gewinnen lassen, wodurch GoTo/Karten-Link für
+        // solche Karten in der Datenbank-Seite UND der ToDo-Liste verschwanden, obwohl im
+        // Overlay (das beide Varianten separat, nicht dedupliziert zeigt) ein Fundort sichtbar war.
+        // Bevorzugt daher bewusst die Variante MIT Laufziel, falls vorhanden.
+        var entries = CollectionData.GetAllEntries()
+            .Concat(GetAllTrackedQuestEntries())
+            .Concat(GetSightseeingEntries())
+            .GroupBy(e => (e.Type, e.Id))
+            .Select(g => g.OrderByDescending(e => e.HasGoToTarget).First())
+            .ToList();
+
+        globalEntriesCache = entries;
+        return entries;
+    }
+
+    /// <summary>
+    /// Löst Configuration.ToDoList (nur Typ+Id+Name+TerritoryTypeId gespeichert) in vollständige
+    /// CollectibleEntry-Objekte auf (Fundort, Preis, GoTo/Karten-Ziel, ...), damit
+    /// CompactOverlayWindow.DrawToDoTabContent sie genauso wie im normalen Overlay darstellen kann -
+    /// über GetGlobalEntries, da ein ToDo-Eintrag aus einer GANZ ANDEREN Zone stammen kann als der,
+    /// in der man sich gerade befindet.
+    ///
+    /// Aetheryte/HuntingLog fehlen in GetGlobalEntries komplett (siehe dessen Kommentar - dafür gibt
+    /// es keine zonenunabhängige Liste). Quest steht dort zwar drin (siehe GetAllTrackedQuestEntries),
+    /// aber NUR mit Name/Id für die globale Statistik, bewusst OHNE Fundort (dafür müsste jede Quest-
+    /// Zeile einzeln nach ihrem Vergabe-NPC aufgelöst werden - siehe stattdessen ComputeLiveZoneEntries,
+    /// das genau das schon pro Zone tut). Für alle drei Typen wird deshalb zusätzlich über die
+    /// gespeicherte TerritoryTypeId in der (mit Fundort angereicherten) zonen-spezifischen Liste
+    /// nachgeschlagen, und zwar auch dann, wenn der globale Eintrag zwar existiert, aber selbst kein
+    /// Laufziel hat - nur wenn selbst DAS scheitert (z.B. eine sehr alte ToDo-Liste ohne gespeicherte
+    /// Zone von vor diesem Feature), bleibt der globale bzw. ein minimaler Platzhalter (nur Name, ohne
+    /// GoTo-Ziel) übrig, statt den Eintrag ganz verschwinden zu lassen.
+    /// </summary>
+    public List<CollectibleEntry> ResolveToDoEntries()
+    {
+        var global = GetGlobalEntries().ToDictionary(e => (e.Type, e.Id), e => e);
+        var result = new List<CollectibleEntry>();
+        foreach (var t in Configuration.ToDoList)
+        {
+            // Sollte durch AddToBlacklist eigentlich nie vorkommen (das entfernt den Eintrag dort
+            // bereits aus der ToDo-Liste) - zur Sicherheit trotzdem gefiltert, falls z.B. ein Eintrag
+            // aus einer älteren Version dieses Plugins beides gleichzeitig war.
+            if (BlacklistIndex.Contains((t.Type, t.Id)))
+                continue;
+
+            global.TryGetValue((t.Type, t.Id), out var full);
+            if (full != null && full.HasGoToTarget)
+            {
+                result.Add(full);
+                continue;
+            }
+
+            var zoneSpecific = t.TerritoryTypeId != 0 && t.Type is CollectibleType.Aetheryte or CollectibleType.Quest
+                ? GetLiveZoneEntries(t.TerritoryTypeId).FirstOrDefault(e => e.Type == t.Type && e.Id == t.Id)
+                : t.TerritoryTypeId != 0 && t.Type == CollectibleType.HuntingLog
+                    ? GetHuntingLogEntries(t.TerritoryTypeId).FirstOrDefault(e => e.Type == t.Type && e.Id == t.Id)
+                    : null;
+
+            result.Add(zoneSpecific ?? full ?? new CollectibleEntry { Type = t.Type, Id = t.Id, Name = t.Name });
+        }
+
+        return result;
+    }
 
     private unsafe List<CollectibleEntry> ComputeLiveZoneEntries(uint territoryId)
     {

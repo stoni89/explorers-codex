@@ -1592,30 +1592,6 @@ public class MainWindow : Window
         CollectibleType.Achievement, CollectibleType.Quest, CollectibleType.Sightseeing,
     };
 
-    private static List<CollectibleEntry>? databaseEntriesCache;
-
-    /// <summary>
-    /// Alle Sammelobjekte, die das Plugin kennt (siehe DatabaseTypes), einmal zusammengeführt und pro
-    /// (Type, Id) dedupliziert - CollectionData.GetAllEntries() allein deckt Quest/Sightseeing nicht ab
-    /// (siehe deren eigene, ebenfalls zonenunabhängige Methoden). Nur einmal pro Sitzung berechnet, wie
-    /// die anderen globalen Caches (GetAllTrackedQuestEntries, frameKitEntriesCache, ...).
-    /// </summary>
-    private List<CollectibleEntry> GetDatabaseEntries()
-    {
-        if (databaseEntriesCache != null)
-            return databaseEntriesCache;
-
-        var entries = CollectionData.GetAllEntries()
-            .Concat(plugin.GetAllTrackedQuestEntries())
-            .Concat(Plugin.GetSightseeingEntries())
-            .GroupBy(e => (e.Type, e.Id))
-            .Select(g => g.First())
-            .ToList();
-
-        databaseEntriesCache = entries;
-        return entries;
-    }
-
     // Nur für die Datenbank-Seite (siehe DrawDatabasePage) - Sitzungszustand, nicht gespeichert.
     private string databaseSearch = string.Empty;
 
@@ -1651,7 +1627,7 @@ public class MainWindow : Window
         }
         ImGui.Dummy(new Vector2(0f, 6f));
 
-        var allEntries = GetDatabaseEntries().Where(e => !config.DatabaseHideOwned || !plugin.IsOwned(e)).ToList();
+        var allEntries = plugin.GetGlobalEntries().Where(e => !config.DatabaseHideOwned || !plugin.IsOwned(e)).ToList();
         var availableTypes = DatabaseTypes.Where(t => allEntries.Any(e => e.Type == t)).ToList();
         if (availableTypes.Count == 0)
         {
@@ -1952,18 +1928,18 @@ public class MainWindow : Window
             if (iconId != 0)
             {
                 var icon = Plugin.TextureProvider.GetFromGameIcon(new Dalamud.Interface.Textures.GameIconLookup(iconId)).GetWrapOrEmpty();
-                // Icon über die VOLLE Zeilenhöhe (FrameHeight) statt nur TextLineHeight - dadurch
-                // füllt es die Zeile automatisch von oben bis unten und sitzt zwangsläufig vertikal
-                // zentriert, ganz ohne empirisch geschätzten Pixel-Versatz (der bei unterschiedlichen
-                // Icon-Grafiken/Schriftgrößen nie zuverlässig für alle Fälle passt, siehe Nutzer-
-                // Screenshots). Der Cursor steht hier bereits um (FrameHeight-TextLineHeight)/2 nach
-                // unten verschoben (siehe AlignTextToFramePadding im Aufrufer) - das erst rückgängig
-                // machen, um wieder beim TATSÄCHLICHEN Zeilenanfang zu starten.
+                // Kleines Icon (TextLineHeight) statt in voller Zeilenhöhe (FrameHeight) - Letzteres
+                // vergrößerte auch den eingebackenen Rahmen/Hintergrund mancher Spiel-Icons sichtbar
+                // mit (Nutzer-Report "ohne Hintergrund"). Der Cursor steht hier bereits um
+                // (FrameHeight-TextLineHeight)/2 nach unten verschoben (siehe AlignTextToFramePadding
+                // im Aufrufer) - erst zum TATSÄCHLICHEN Zeilenanfang zurück, dann um ein paar Pixel
+                // vom oberen Rand nach unten (Nutzer-Report).
+                var iconSize = ImGui.GetTextLineHeight();
                 var alignedY = ImGui.GetCursorPosY();
-                var frameHeight = ImGui.GetFrameHeight();
-                var trueRowTopY = alignedY - (frameHeight - ImGui.GetTextLineHeight()) * 0.5f;
-                ImGui.SetCursorPosY(trueRowTopY);
-                ImGui.Image(icon.Handle, new Vector2(frameHeight));
+                var trueRowTopY = alignedY - (ImGui.GetFrameHeight() - iconSize) * 0.5f;
+                const float offsetFromTop = 11f;
+                ImGui.SetCursorPosY(trueRowTopY + offsetFromTop);
+                ImGui.Image(icon.Handle, new Vector2(iconSize));
                 ImGui.SameLine();
                 ImGui.SetCursorPosY(alignedY);
             }
