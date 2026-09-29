@@ -252,12 +252,27 @@ public sealed class AetherCurrentAutomation
             return;
         }
 
-        // Genau derselbe Trick wie bei GoToAutomation/HuntingLogAutomation: die Karten-Flagge auf
-        // die (rohe) Zielposition setzen und vnavmesh nach einem begehbaren Punkt in deren Nähe
+        // Ist eine exakte WorldPosition hinterlegt (z.B. per Hand nachgetragen wie "Overlooking The
+        // Convictory", siehe aethercurrents.json), DIREKT dorthin laufen statt über den Karten-
+        // Flaggen-Umweg - dessen Rückumrechnung (Weltposition -> Kartenkoordinate -> Flagge ->
+        // FlagToPoint) landete beim ersten Versuch teils an einer anderen, falschen Stelle und traf
+        // die echte Position erst beim zweiten (BeginFinalApproach), was wie ein falscher erster
+        // Anlauf aussah (Nutzer-Report). Ohne bekannte WorldPosition weiterhin derselbe Trick wie bei
+        // GoToAutomation/HuntingLogAutomation: die Karten-Flagge auf die (rohe, aus VendorMapX/Y
+        // umgerechnete) Zielposition setzen und vnavmesh nach einem begehbaren Punkt in deren Nähe
         // fragen - Ätherströmungen liegen oft in der Luft/an Klippenkanten, eine reine
         // Koordinatensuche (PointOnFloor) fände dort häufig gar keinen begehbaren Punkt.
-        Plugin.OpenEntryMap(entry, showMapWindow: false);
-        var floorPoint = queryFlagToPoint.InvokeFunc();
+        Vector3? floorPoint;
+        if (entry.WorldPosition is { } exactPosition)
+        {
+            floorPoint = exactPosition;
+        }
+        else
+        {
+            Plugin.OpenEntryMap(entry, showMapWindow: false);
+            floorPoint = queryFlagToPoint.InvokeFunc();
+        }
+
         if (floorPoint == null)
         {
             skippedIds.Add(entry.Id);
