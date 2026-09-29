@@ -402,6 +402,17 @@ public sealed class SightseeingAutomation
     /// </summary>
     private bool UpdateDefendingSelf()
     {
+        // NUR zwischen zwei Punkten (State.Idle) - Nutzeranforderung: "erst den Sightseeing Punkt
+        // erledigen, dann die Infight Gegner töten, dann zum nächsten Punkt". Ein Kampf während des
+        // Hinlaufens/Wartens auf Freischaltung/Jumping Puzzle unterbricht den aktuellen Punkt also
+        // bewusst NICHT mehr (anders als bei HuntingLogAutomation, wo jede Unterbrechung sofort
+        // pariert wird) - erst wenn der Punkt fertig ist und wieder Idle erreicht wird, wird verteidigt.
+        if (state != State.Idle)
+        {
+            isDefendingSelf = false;
+            return false;
+        }
+
         if (Plugin.Condition[ConditionFlag.InCombat])
         {
             var playerPos = Plugin.ObjectTable.LocalPlayer?.Position ?? currentTargetPosition;
