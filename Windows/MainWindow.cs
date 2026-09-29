@@ -1473,6 +1473,7 @@ public class MainWindow : Window
                 (Loc.T("Saisonevent", "Seasonal event"), Plugin.DumpSeasonalEventDebugInfo),
                 (Loc.T("Ätherströmungen (aktuelle Zone)", "Aether currents (current zone)"), Plugin.DumpAetherCurrentDebugInfo),
                 (Loc.T("Ätherströmungen (alle Zonen)", "Aether currents (all zones)"), Plugin.DumpAetherCurrentDebugInfoAllZones),
+                ("\"Protecting What's Important\"", () => plugin.DumpQuestAcceptabilityDebugInfo("Protecting What's Important")),
             });
             ModernUi.EndCard();
         }

@@ -5107,6 +5107,57 @@ public sealed class Plugin : IDalamudPlugin
         return !string.IsNullOrEmpty(row.Name.ToString());
     }
 
+    /// <summary>
+    /// Einmaliger Debug-Dump für eine einzelne Quest (per Namens-Teilstring gesucht) - loggt jede
+    /// Bedingung aus IsQuestCurrentlyAcceptable einzeln, um zu klären, warum eine erwartete Quest
+    /// nicht in der Automation/Datenbank auftaucht (Nutzer-Report: "Protecting What's Important" in
+    /// Coerthas Western Highlands taucht trotz Freischaltung durch die MSQ nicht auf).
+    /// </summary>
+    public unsafe void DumpQuestAcceptabilityDebugInfo(string questNameContains)
+    {
+        var questSheet = DataManager.GetExcelSheet<Quest>();
+        if (questSheet == null)
+        {
+            Log.Info("[QuestDebug] Quest-Sheet nicht geladen.");
+            return;
+        }
+
+        var playerLevel = ObjectTable.LocalPlayer?.Level ?? 0;
+        var matches = questSheet.Where(q => q.Name.ToString().Contains(questNameContains, StringComparison.OrdinalIgnoreCase)).ToList();
+        if (matches.Count == 0)
+        {
+            Log.Info($"[QuestDebug] Keine Quest mit \"{questNameContains}\" im Namen gefunden.");
+            return;
+        }
+
+        foreach (var row in matches)
+        {
+            var placeName = row.PlaceName.ValueNullable?.Name.ToString();
+            var issuerTerritory = row.IssuerLocation.ValueNullable?.Territory.RowId ?? 0;
+            var journalSection = row.JournalGenre.ValueNullable?.JournalCategory.ValueNullable?.JournalSection.RowId;
+            var categoryName = GetEnglishClassJobCategoryName(row.ClassJobCategory0.RowId);
+
+            var prevList = row.PreviousQuest.Where(p => p.RowId != 0).ToList();
+            var prevStatus = prevList.Count == 0 ? "keine" : string.Join(", ", prevList.Select(p => $"#{p.RowId}={(QuestManager.IsQuestComplete((ushort)p.RowId) ? "erledigt" : "OFFEN")}"));
+
+            var lockList = row.QuestLock.Where(l => l.RowId != 0).ToList();
+            var lockStatus = lockList.Count == 0 ? "keine" : string.Join(", ", lockList.Select(l => $"#{l.RowId}={(QuestManager.IsQuestComplete((ushort)l.RowId) ? "erledigt" : "OFFEN")}"));
+
+            var instanceList = row.InstanceContent.Where(i => i.RowId != 0).ToList();
+            var instanceStatus = instanceList.Count == 0 ? "keine" : string.Join(", ", instanceList.Select(i => $"#{i.RowId}={(i.ValueNullable is { } ir && UnlockState.IsInstanceContentUnlocked(ir) ? "freigeschaltet" : "OFFEN")}"));
+
+            Log.Info($"[QuestDebug] \"{row.Name}\" (#{row.RowId}): " +
+                     $"IsRepeatable={row.IsRepeatable}, BeastTribe={row.BeastTribe.RowId}, JournalGenre={row.JournalGenre.RowId}, " +
+                     $"PlaceName=\"{placeName}\" (#{row.PlaceName.RowId}), IssuerTerritory={issuerTerritory}, " +
+                     $"JournalSection={journalSection}, Festival={row.Festival.RowId} (aktiv={(row.Festival.RowId != 0 && IsFestivalActive((ushort)row.Festival.RowId))}), " +
+                     $"GrandCompany={row.GrandCompany.RowId} (eigene={PlayerState.Instance()->GrandCompany}), " +
+                     $"ClassJobCategory=\"{categoryName}\" (#{row.ClassJobCategory0.RowId}), ClassJobLevel={row.ClassJobLevel[0]} (Spieler={playerLevel}), " +
+                     $"PreviousQuest=[{prevStatus}], QuestLock=[{lockStatus}], InstanceContent=[{instanceStatus}], " +
+                     $"IsQuestComplete={QuestManager.IsQuestComplete((ushort)row.RowId)}, " +
+                     $"IsQuestCurrentlyAcceptable={IsQuestCurrentlyAcceptable(row, playerLevel)}");
+        }
+    }
+
     private static List<CollectibleEntry>? globalQuestEntriesCache;
 
     /// <summary>
