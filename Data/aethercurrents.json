@@ -48,8 +48,7 @@
         "Category": "Aether Current",
         "TerritoryTypeId": 398,
         "MapId": 212,
-        "VendorMapX": 37.8,
-        "VendorMapY": 28.3,
+        "WorldPosition": {"X": 766.1084, "Y": -16.031307, "Z": 288.7053},
         "Source": "Field exploration"
     },
     {
