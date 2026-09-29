@@ -1265,6 +1265,16 @@ public sealed class AetheryteAutomation
 
         if (!hasInteractedThisCycle)
         {
+            // vnavmesh explizit anhalten, BEVOR überhaupt Ziel gesetzt/interagiert wird - "Path.
+            // IsRunning" wird false, sobald die Toleranz erreicht ist, der Charakter kann aber noch
+            // kurz nachrutschen/nachlaufen (Restbewegung), während vnavmesh selbst schon als "fertig"
+            // gilt. Genau das erklärte den Nutzer-Report "interagiert... 1 Sekunde später läuft er
+            // einfach gegen den Kristall und bricht ab": das Entdecken eines Aetheryten spielt einen
+            // kurzen Cast ab, der bei Bewegung abbricht - eine solche Restbewegung reichte offenbar,
+            // um genau das auszulösen. Ein expliziter Stopp hier verhindert das unabhängig davon, ob
+            // die Restbewegung von vnavmesh selbst oder vom Spiel-Client kommt.
+            StopPath();
+
             // Interact braucht das Objekt als aktuelles Ziel - das muss erst einen Frame lang
             // angewendet worden sein, bevor der eigentliche Interact-Aufruf greift.
             if (!Plugin.IsCurrentTarget(gameObject))
