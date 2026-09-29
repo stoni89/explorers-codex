@@ -67,6 +67,17 @@ public sealed class AetherCurrentAutomation
     private readonly Dictionary<uint, int> attemptCounts = new();
     private readonly HashSet<uint> skippedIds = new();
 
+    // Gegenwehr, falls man auf dem Weg zur/an der Ätherströmung angegriffen wird (Nutzeranforderung:
+    // "alle Gegner töten, falls man im Kampf ist, sonst nicht") - identisches Vorgehen wie
+    // HuntingLogAutomation.UpdateDefendingSelf, nur ohne dessen eigentlichen Kampf-Zustand (Aether
+    // Currents kämpfen nie absichtlich, das hier ist ausschließlich ungeplante Gegenwehr).
+    private const float AttackRange = 3.5f;
+    private bool isDefendingSelf;
+    private DateTime lastDefendApproachAt = DateTime.MinValue;
+    private static readonly TimeSpan DefendApproachRetryInterval = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan CombatEnsureInterval = TimeSpan.FromSeconds(2);
+    private DateTime lastCombatEnsureAt = DateTime.MinValue;
+
     private readonly ICallGateSubscriber<Vector3, bool, float, bool> pathfindAndMoveCloseTo;
     private readonly ICallGateSubscriber<bool> pathIsRunning;
     private readonly ICallGateSubscriber<object> pathStop;
@@ -144,6 +155,8 @@ public sealed class AetherCurrentAutomation
         currentTargetEntry = null;
         skippedIds.Clear();
         attemptCounts.Clear();
+        isDefendingSelf = false;
+        lastCombatEnsureAt = DateTime.MinValue;
         StatusText = Loc.T("Automation gestartet...", "Automation started...");
     }
 
@@ -162,12 +175,96 @@ public sealed class AetherCurrentAutomation
     }
 
     /// <summary>
+    /// Wird man unterwegs oder an der Ätherströmung angegriffen, wird der normale Zustandsautomat
+    /// angehalten, der Laufweg gestoppt, der Angreifer anvisiert (bei Bedarf hingelaufen) und das
+    /// Kampf-Plugin (RotationSolver/WrathCombo/BossMod, siehe Plugin.CombatPlugin) eingeschaltet, bis
+    /// kein Gegner mehr lebt - danach geht es im vorherigen Zustand weiter, ERST DANN wird die
+    /// Ätherströmung aktiviert (Nutzeranforderung: "alle Gegner töten, falls man im Kampf ist, sonst
+    /// nicht"). Identisches Vorgehen wie HuntingLogAutomation.UpdateDefendingSelf. Gibt true zurück,
+    /// solange verteidigt wird (Aufrufer überspringt dann den Zustandsautomaten für diesen Frame).
+    /// </summary>
+    private bool UpdateDefendingSelf(IReadOnlyList<CollectibleEntry> entries)
+    {
+        if (Plugin.Condition[ConditionFlag.InCombat])
+        {
+            var playerPos = Plugin.ObjectTable.LocalPlayer?.Position ?? currentTargetPosition;
+            var attacker = Plugin.FindNearestAttacker(playerPos);
+            if (attacker != null || (isDefendingSelf && Plugin.HasLiveTarget()))
+            {
+                if (!isDefendingSelf)
+                {
+                    Plugin.Log.Info($"[AetherCurrentAutomation] Angegriffen im Zustand {state} (von {attacker?.Name}) - wehre mich, bevor es weitergeht.");
+                    isDefendingSelf = true;
+                    StopPath();
+                }
+
+                if (!Plugin.HasLiveTarget() && attacker != null)
+                    Plugin.SetTarget(attacker);
+
+                Plugin.TryDismount();
+                EnsureCombatMode();
+
+                // Kampf-Plugins bewegen den Charakter nicht selbst - steht das Ziel außer Reichweite,
+                // gedrosselt hinlaufen.
+                if (Plugin.TargetManager.Target is { } target
+                    && Vector3.Distance(playerPos, target.Position) > AttackRange
+                    && !pathIsRunning.InvokeFunc()
+                    && DateTime.UtcNow - lastDefendApproachAt > DefendApproachRetryInterval)
+                {
+                    lastDefendApproachAt = DateTime.UtcNow;
+                    pathfindAndMoveCloseTo.InvokeFunc(target.Position, false, AttackRange);
+                }
+
+                StatusText = Loc.T($"Wehre mich gegen: {Plugin.TargetManager.Target?.Name}...", $"Defending against: {Plugin.TargetManager.Target?.Name}...");
+                return true;
+            }
+        }
+
+        if (!isDefendingSelf)
+            return false;
+
+        isDefendingSelf = false;
+        StopPath();
+        Plugin.Log.Info($"[AetherCurrentAutomation] Kampf vorbei - setze Zustand {state} fort ({currentTargetEntry?.Name}).");
+
+        // Unterbrochene Reise zum Ziel neu starten (Laufweg wurde für die Gegenwehr gestoppt) - ohne
+        // dass die Unterbrechung als Fehlversuch zählt (siehe MaxAttemptsPerTarget).
+        if (state is State.MovingTo or State.Mounting && currentTargetEntry is { } entry && StillNeeded(entries, entry.Id))
+        {
+            attemptCounts[entry.Id] = Math.Max(0, attemptCounts.GetValueOrDefault(entry.Id, 0) - 1);
+            StartMovingTo(entry);
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Solange gekämpft wird, jeden Frame aufrufen - schaltet das Kampf-Plugin (gedrosselt) wieder in
+    /// den Manual-Modus, falls es laut IPC gerade NICHT aktiv ist (siehe HuntingLogAutomation.
+    /// EnsureCombatMode - identisches Vorgehen).
+    /// </summary>
+    private void EnsureCombatMode()
+    {
+        if (DateTime.UtcNow - lastCombatEnsureAt < CombatEnsureInterval)
+            return;
+
+        lastCombatEnsureAt = DateTime.UtcNow;
+        if (Plugin.CombatPlugin.IsCombatModeActive())
+            return;
+
+        Plugin.CombatPlugin.SetCombatMode(true);
+    }
+
+    /// <summary>
     /// Muss jeden Frame (während das Overlay offen ist) mit den aktuell fehlenden Ätherströmungen
     /// DER AKTUELLEN ZONE aufgerufen werden.
     /// </summary>
     public void Update(IReadOnlyList<CollectibleEntry> aetherCurrentsInZone)
     {
         if (!IsActive)
+            return;
+
+        if (UpdateDefendingSelf(aetherCurrentsInZone))
             return;
 
         try
