@@ -1267,7 +1267,11 @@ public class CompactOverlayWindow : Window
                 ? EmptyRetainerCounts
                 : Plugin.GetRetainerItemCounts(sample.CurrencyItemId);
             var retainerTotal = retainerCounts.Count == 0 ? 0u : (uint)retainerCounts.Values.Sum(v => (long)v);
-            var retainerSuffix = retainerTotal > 0 ? $" ({retainerTotal.ToString("N0", CultureInfo.InvariantCulture)})" : string.Empty;
+            // Chocobo-Satteltasche mit in denselben "(<Anzahl>)"-Zusatz (Nutzeranforderung) - eigene
+            // Abfrage, siehe Plugin.GetSaddlebagItemCount-Kommentar.
+            var saddlebagCount = showCurrencyCostMode ? 0u : Plugin.GetSaddlebagItemCount(sample.CurrencyItemId);
+            var combinedRetainerTotal = retainerTotal + saddlebagCount;
+            var retainerSuffix = combinedRetainerTotal > 0 ? $" ({combinedRetainerTotal.ToString("N0", CultureInfo.InvariantCulture)})" : string.Empty;
 
             var itemWidth = ImGui.CalcTextSize(text + retainerSuffix).X + (hasIcon ? iconSize + itemSpacing : 0f);
 
@@ -1303,9 +1307,20 @@ public class CompactOverlayWindow : Window
                 OutlineText(retainerSuffix, MutedColor);
                 if (ImGui.IsItemHovered())
                 {
-                    ImGui.SetTooltip(string.Join("\n", retainerCounts
-                        .OrderByDescending(kv => kv.Value)
-                        .Select(kv => $"{kv.Key}: {kv.Value.ToString("N0", CultureInfo.InvariantCulture)}")));
+                    ImGui.BeginTooltip();
+                    foreach (var kv in retainerCounts.OrderByDescending(kv => kv.Value))
+                        ImGui.TextUnformatted($"{kv.Key}: {kv.Value.ToString("N0", CultureInfo.InvariantCulture)}");
+
+                    // Satteltasche unten, per echter Trennlinie abgesetzt (Nutzeranforderung) - nicht
+                    // einfach mit in die Retainer-Liste gemischt, da konzeptionell kein Retainer.
+                    if (saddlebagCount > 0)
+                    {
+                        if (retainerCounts.Count > 0)
+                            ImGui.Separator();
+                        ImGui.TextUnformatted($"{Loc.T("Chocobo-Satteltasche", "Chocobo Saddlebag")}: {saddlebagCount.ToString("N0", CultureInfo.InvariantCulture)}");
+                    }
+
+                    ImGui.EndTooltip();
                 }
             }
         }

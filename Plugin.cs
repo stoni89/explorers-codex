@@ -7126,6 +7126,45 @@ public sealed class Plugin : IDalamudPlugin
         return result;
     }
 
+    // CriticalCommonLib.Models.InventoryCategory (per Reflektieren von CriticalCommonLib.dll
+    // ermittelt, siehe GetRetainerItemCounts-Kommentar zur selben Vorgehensweise) - die Satteltasche
+    // zählt bei Allagan Tools als eigene Kategorie, aber unter der EIGENEN Charakter-ID statt einer
+    // separaten Retainer-ID, deshalb von GetRetainerItemCounts (das die eigene ID bewusst ausschließt)
+    // nicht erfasst.
+    private const uint SaddlebagInventoryCategory = 2;
+    private const uint PremiumSaddlebagInventoryCategory = 3;
+
+    /// <summary>
+    /// Wie viel eines Items in der (ggf. erweiterten) Chocobo-Satteltasche liegt - Ergänzung zu
+    /// GetRetainerItemCounts für denselben "(<Anzahl>)"-Zusatz (Nutzeranforderung: Satteltasche mit
+    /// dazu). Gezielt nur diese beiden Kategorien abgefragt statt wie dort aller, da sie unter der
+    /// eigenen Charakter-ID laufen und sonst mit dem "was man selbst am Körper/im Inventar trägt"-
+    /// Ausschluss dort kollidieren würden.
+    /// </summary>
+    public static uint GetSaddlebagItemCount(uint itemId)
+    {
+        if (itemId == 0 || !instance.Configuration.ShowRetainerItemCounts || !IsAllaganToolsAvailable())
+            return 0;
+
+        allaganToolsGetItemCountsByCharacter ??=
+            PluginInterface.GetIpcSubscriber<uint, bool, uint[], bool, Dictionary<ulong, uint>>("AllaganTools.GetItemCountsByCharacter");
+
+        try
+        {
+            if (!allaganToolsGetItemCountsByCharacter.HasFunction)
+                return 0;
+
+            var byCharacter = allaganToolsGetItemCountsByCharacter.InvokeFunc(
+                itemId, true, new[] { SaddlebagInventoryCategory, PremiumSaddlebagInventoryCategory }, false);
+            return (uint)byCharacter.Values.Sum(v => (long)v);
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Fehler beim Abfragen der Chocobo-Satteltasche über Allagan Tools.");
+            return 0;
+        }
+    }
+
     // Von Hand als "nicht von der Automation unterstützt" markierte Sightseeing-Punkte (Key =
     // Adventure-RowId, Wert = Anzeigetext) - erscheinen dadurch weiterhin in der Liste, aber mit
     // "Bedingung nicht erfüllt" statt von der Automation (erfolglos) angelaufen zu werden. Alles

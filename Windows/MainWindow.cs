@@ -850,8 +850,8 @@ public class MainWindow : Window
 
         var showRetainerItemCounts = config.ShowRetainerItemCounts;
         if (ModernUi.ToggleRow(Loc.T("Retainer-Bestände bei Währungen anzeigen", "Show retainer stock next to currencies"), ref showRetainerItemCounts, Loc.T(
-                "Zeigt hinter jeder Währung unter \"Deine Währungen\" zusätzlich \"(<Anzahl>)\" mit der auf den eigenen Retainern liegenden Menge - Hover zeigt, welcher Retainer wie viel besitzt. Erfordert Allagan Tools.",
-                "Shows \"(<count>)\" after each currency under \"Your currencies\" with how much of it sits on your retainers - hover to see which retainer holds how much. Requires Allagan Tools.")))
+                "Zeigt hinter jeder Währung unter \"Deine Währungen\" zusätzlich \"(<Anzahl>)\" mit der auf den eigenen Retainern und in der Chocobo-Satteltasche liegenden Menge - Hover zeigt, welcher Retainer wie viel besitzt. Erfordert Allagan Tools.",
+                "Shows \"(<count>)\" after each currency under \"Your currencies\" with how much of it sits on your retainers and in your Chocobo Saddlebag - hover to see which retainer holds how much. Requires Allagan Tools.")))
         {
             config.ShowRetainerItemCounts = showRetainerItemCounts;
             config.Save();
