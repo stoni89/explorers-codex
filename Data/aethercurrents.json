@@ -28,8 +28,7 @@
         "Category": "Aether Current",
         "TerritoryTypeId": 397,
         "MapId": 211,
-        "VendorMapX": 15.8,
-        "VendorMapY": 22.3,
+        "WorldPosition": {"X": -332.68433, "Y": 126.8045, "Z": -29.834515},
         "Source": "Field exploration"
     },
     {
@@ -39,8 +38,7 @@
         "Category": "Aether Current",
         "TerritoryTypeId": 397,
         "MapId": 211,
-        "VendorMapX": 9.3,
-        "VendorMapY": 15,
+        "WorldPosition": {"X": -659.95264, "Y": 135.51443, "Z": -376.37003},
         "Source": "Field exploration"
     },
     {
@@ -50,8 +48,7 @@
         "Category": "Aether Current",
         "TerritoryTypeId": 398,
         "MapId": 212,
-        "VendorMapX": 37.8,
-        "VendorMapY": 28.3,
+        "WorldPosition": {"X": 766.1084, "Y": -16.031307, "Z": 288.7053},
         "Source": "Field exploration"
     },
     {
@@ -83,8 +80,7 @@
         "Category": "Aether Current",
         "TerritoryTypeId": 398,
         "MapId": 212,
-        "VendorMapX": 30.6,
-        "VendorMapY": 36.2,
+        "WorldPosition": {"X": 406.0345, "Y": -89.84223, "Z": 686.3267},
         "Source": "Field exploration"
     },
     {

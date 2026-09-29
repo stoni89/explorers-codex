@@ -702,7 +702,13 @@ public sealed class HuntingLogAutomation
         BeginPathfind();
     }
 
-    private void BeginPathfind()
+    /// <param name="forceGround">
+    /// Fliegen für diesen Versuch gar nicht erst probieren - für den Steckengeblieben-Retry (siehe
+    /// UpdateMoving): steckte der Charakter beim Fliegen fest, ist das oft ein Gebäude, gegen das
+    /// vnavmeshs Flug-Beeline läuft (Nutzer-Report). Ein Fußweg findet dort eher den Ausgang; sobald
+    /// die verbleibende Strecke wieder groß genug ist, plant FlightPathUpgrade von selbst auf Fliegen um.
+    /// </param>
+    private void BeginPathfind(bool forceGround = false)
     {
         var mounted = Plugin.Condition[ConditionFlag.Mounted];
         var canFly = Plugin.CanFly;
@@ -712,7 +718,7 @@ public sealed class HuntingLogAutomation
         // Fliegend nur versuchen, wenn Plugin.CanFly gerade true ist - sonst nimmt vnavmesh einen
         // Flugauftrag teils trotzdem an, obwohl der Charakter gar nicht abheben kann, und hüpft nur
         // sinnlos am Boden herum statt zu laufen.
-        if (mounted && canFly)
+        if (!forceGround && mounted && canFly)
         {
             triedFlying = true;
             accepted = pathfindAndMoveCloseTo.InvokeFunc(currentTargetPosition, true, PathTolerance);
@@ -834,11 +840,15 @@ public sealed class HuntingLogAutomation
             }
 
             // Steckengeblieben (z.B. gegen eine Wand) - Pfad neu anfordern statt untätig zu warten.
+            // War der festgesteckte Weg fliegend, steckt meist ein Gebäude im Weg (vnavmeshs Flug-
+            // Beeline findet dessen Ausgang nicht) - dann diesmal zu Fuß probieren (siehe
+            // BeginPathfind-Kommentar).
             if (stuckDetector.CheckStuck(playerPos))
             {
-                Plugin.Log.Info($"[HuntingLogAutomation] UpdateMoving({currentTargetEntry.Name}): scheinbar steckengeblieben - Laufweg wird neu angefordert.");
+                var wasFlying = flightUpgrade.IsFlying;
+                Plugin.Log.Info($"[HuntingLogAutomation] UpdateMoving({currentTargetEntry.Name}): scheinbar steckengeblieben{(wasFlying ? " (beim Fliegen, evtl. Gebäude im Weg)" : "")} - Laufweg wird neu angefordert.");
                 StopPath();
-                BeginPathfind();
+                BeginPathfind(forceGround: wasFlying);
                 return;
             }
 

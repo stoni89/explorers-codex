@@ -43,6 +43,7 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IChatGui ChatGui { get; private set; } = null!;
     [PluginService] internal static ICondition Condition { get; private set; } = null!;
     [PluginService] internal static IUnlockState UnlockState { get; private set; } = null!;
+    [PluginService] internal static IDutyState DutyState { get; private set; } = null!;
 
     private const string CommandName = "/exc";
 
@@ -283,7 +284,11 @@ public sealed class Plugin : IDalamudPlugin
         MainWindow.IsOpen = !MainWindow.IsOpen;
     }
 
-    private void DrawUI() => WindowSystem.Draw();
+    private void DrawUI()
+    {
+        TickPendingAchievementSearch();
+        WindowSystem.Draw();
+    }
 
     private void ToggleMainUI() => MainWindow.IsOpen = !MainWindow.IsOpen;
 
@@ -2014,13 +2019,13 @@ public sealed class Plugin : IDalamudPlugin
         [2162690] = new Vector3(-58.95674f, 27.313725f, -118.16382f),  // Seasong Grotto (Middle La Noscea)
         [2162692] = new Vector3(194.44441f, 73.78774f, 302.63824f),    // La Thagran Eastroad (Middle La Noscea)
         [2162708] = new Vector3(-72.16092f, 11.995184f, -416.05194f),  // Woad Whisper Canyon (Middle La Noscea)
-        [2162709] = new Vector3(213.05968f, 117.65125f, -222.40886f),  // Summerford Farms (Middle La Noscea)
         [2162695] = new Vector3(425.21655f, 15.025984f, 464.70297f),   // The Brewer's Beacon (Western La Noscea)
         [2162694] = new Vector3(597.14575f, 73.67687f, -112.00588f),   // Red Rooster Stead (Lower La Noscea)
         [2162710] = new Vector3(503.04245f, 106.69299f, -434.7053f),   // The Grey Fleet (Lower La Noscea)
-        [2162715] = new Vector3(67.52792f, 1.9575521f, 47.7629f),      // Camp Skull Valley (Western La Noscea)
+        [2162715] = new Vector3(67.4166f, 1.9575522f, 47.885967f),     // Camp Skull Valley (Western La Noscea)
         [2162719] = new Vector3(381.97714f, 5.188155f, 198.84981f),    // Jijiroon's Trading Post (Upper La Noscea)
-        [2162718] = new Vector3(-428.29407f, 69.60198f, 28.178936f),   // Thalaos (Upper La Noscea)
+        [2162718] = new Vector3(-428.3639f, 69.71088f, 28.31156f),     // Thalaos (Upper La Noscea)
+        [2162738] = new Vector3(-636.69324f, 65.58413f, -812.0154f),   // Castrum Marinum (Lower La Noscea)
     };
 
     // Je Zwischenstopp: Position + ob dieses Teilstück fliegend angeflogen werden darf (false =
@@ -2041,16 +2046,6 @@ public sealed class Plugin : IDalamudPlugin
     private static readonly Dictionary<uint, SightseeingApproachWaypoint[]> SightseeingApproachWaypoints = new()
     {
         [2162688] = new[] { new SightseeingApproachWaypoint(new Vector3(-82.96662f, 41.993416f, -170.93227f)) }, // Barracuda Piers (Limsa Lominsa Upper Decks)
-        [2162709] = new[] // Summerford Farms (Middle La Noscea) - erst hinfliegen, dann (weiterhin beritten, nur nicht mehr fliegend, siehe SightseeingAutomation.TryBeginPathfindAccepted) durch die Tür, dann fliegend hoch zum eigentlichen Punkt
-        {
-            new SightseeingApproachWaypoint(new Vector3(210.27715f, 113.26443f, -215.51048f)),
-            new SightseeingApproachWaypoint(new Vector3(224.70628f, 113.49955f, -227.0562f), AllowFlying: false),
-            // Erst senkrecht hoch (gleiche X/Z wie der Türausgang, nur auf Höhe von Punkt 3) - direkt
-            // von der Tür aus horizontal loszufliegen führte über einen Umweg (vermutlich, weil der
-            // Türausgang selbst navmesh-technisch noch als "drinnen" gilt).
-            new SightseeingApproachWaypoint(new Vector3(224.70628f, 118.22706f, -227.0562f)),
-            new SightseeingApproachWaypoint(new Vector3(213.03912f, 118.22706f, -222.41542f)),
-        },
     };
 
     /// <summary>Siehe SightseeingApproachWaypoints-Kommentar.</summary>
@@ -2067,22 +2062,25 @@ public sealed class Plugin : IDalamudPlugin
     }
 
     // Von Hand nachgetragene ZWISCHENSTOPPS, die NACH dem Freischalten eines Punkts der Reihe nach
-    // zu Fuß (nie fliegend) abgelaufen werden, bevor es zum nächsten Sightseeing-Punkt weitergeht
-    // (Key = Adventure-RowId) - für Punkte, deren Anflug (siehe SightseeingApproachWaypoints) durch
-    // einen engen Durchgang wie eine Tür führt: derselbe Weg muss zu Fuß auch wieder raus, bevor
-    // erneut losgeflogen werden kann. Nur, wenn nach dem aktuellen Punkt überhaupt noch ein anderer,
-    // aktuell erreichbarer Sightseeing-Punkt übrig ist (siehe SightseeingAutomation.TryWalkOutOrFinish).
-    private static readonly Dictionary<uint, Vector3[]> SightseeingPostCompletionWaypoints = new()
+    // abgelaufen werden, bevor es zum nächsten Sightseeing-Punkt weitergeht (Key = Adventure-RowId) -
+    // für Punkte, deren Anflug (siehe SightseeingApproachWaypoints/SightseeingJumpingPuzzles) durch
+    // einen engen Durchgang wie eine Tür führt oder einen Flug über einen Abgrund brauchte: derselbe
+    // Weg muss auch wieder raus, bevor erneut losgeflogen werden kann. Je Zwischenstopp AllowFlying
+    // wie bei SightseeingApproachWaypoint - true fliegt (mountet dafür bei Bedarf selbst wieder auf),
+    // false erzwingt zu Fuß/abgemountet (siehe SightseeingAutomation.TryRequestWalkOutPath). Nur, wenn
+    // nach dem aktuellen Punkt überhaupt noch ein anderer, aktuell erreichbarer Sightseeing-Punkt
+    // übrig ist (siehe SightseeingAutomation.TryWalkOutOrFinish).
+    private static readonly Dictionary<uint, SightseeingApproachWaypoint[]> SightseeingPostCompletionWaypoints = new()
     {
-        [2162709] = new[] // Summerford Farms (Middle La Noscea) - zu Fuß zurück durch die Tür
+        [2162756] = new[] // The Observatorium - fliegend zurück den Turm hinunter (aufmounten am Punkt, dann Punkt 2, dann zurück zum Startpunkt)
         {
-            new Vector3(219.65729f, 113.499664f, -223.12563f),
-            new Vector3(210.64354f, 113.49537f, -215.86862f),
+            new SightseeingApproachWaypoint(new Vector3(195.98488f, 234.7984f, 414.46854f)),
+            new SightseeingApproachWaypoint(new Vector3(187.42712f, 234.38025f, 403.59232f)),
         },
     };
 
     /// <summary>Siehe SightseeingPostCompletionWaypoints-Kommentar.</summary>
-    public static bool TryGetSightseeingPostCompletionWaypoints(uint adventureId, out IReadOnlyList<Vector3> waypoints)
+    public static bool TryGetSightseeingPostCompletionWaypoints(uint adventureId, out IReadOnlyList<SightseeingApproachWaypoint> waypoints)
     {
         if (SightseeingPostCompletionWaypoints.TryGetValue(adventureId, out var found))
         {
@@ -2090,7 +2088,7 @@ public sealed class Plugin : IDalamudPlugin
             return true;
         }
 
-        waypoints = Array.Empty<Vector3>();
+        waypoints = Array.Empty<SightseeingApproachWaypoint>();
         return false;
     }
 
@@ -2102,7 +2100,6 @@ public sealed class Plugin : IDalamudPlugin
     // gewartet/der Emote ausgeführt wird, sonst schaltet der Punkt u.U. gar nicht frei.
     private static readonly Dictionary<uint, Vector3> SightseeingExactStandPositions = new()
     {
-        [2162709] = new Vector3(213.07825f, 117.651245f, -222.44019f), // Summerford Farms (Middle La Noscea)
     };
 
     // Ein Schritt eines Jumping Puzzles: in gerader Linie (vnavmesh Path.MoveTo, ohne Wegsuche) zu
@@ -2114,7 +2111,16 @@ public sealed class Plugin : IDalamudPlugin
     // Exact = Target ohne Abweichung treffen (enge vnavmesh-Wegpunkt-Toleranz; als Absprungpunkt eines
     // Anlaufs wird genau beim Überqueren abgesprungen).
     // CancelSprintBefore = vor diesem Schritt einen noch aktiven Sprint entfernen.
-    public readonly record struct SightseeingPuzzleStep(Vector3 Target, bool Jump, bool RunUp = false, bool SprintBefore = false, bool Exact = false, bool CancelSprintBefore = false);
+    // Fly = dieser Schritt wird nicht zu Fuß/springend, sondern fliegend zurückgelegt: erst am
+    // Absprungpunkt (Ziel des vorherigen Schritts) aufmounten, dann fliegend zu Target navigieren,
+    // dort wieder abmounten, bevor der nächste Schritt beginnt - für Spalten/Abgründe, die kein
+    // Sprung überbrücken kann. Schließt sich mit Jump/RunUp gegenseitig aus (wird bei Fly ignoriert).
+    // JumpFromStandstill = bei Jump=true, RunUp=false: ohne die übliche kurze PuzzleJumpDelay-
+    // Verzögerung springen (siehe SightseeingAutomation.PuzzleJumpDelay) - normalerweise beginnt die
+    // Laufbewegung zum Ziel schon etwas VOR dem Sprung, was bei sehr kurzen Sprüngen leicht Anlauf
+    // gibt und über das Ziel hinausträgt (Nutzer-Report: "sonst fliegt man darüber"). Damit wird
+    // stattdessen sofort abgesprungen, quasi aus dem Stand.
+    public readonly record struct SightseeingPuzzleStep(Vector3 Target, bool Jump, bool RunUp = false, bool SprintBefore = false, bool Exact = false, bool CancelSprintBefore = false, bool Fly = false, bool JumpFromStandstill = false);
 
     // ExactStand = genaue Position der Sightseeing-Kugel, falls sie nicht exakt der Landepunkt des
     // letzten Schritts ist - dorthin wird nach der Landung noch genau gelaufen.
@@ -2199,11 +2205,160 @@ public sealed class Plugin : IDalamudPlugin
                 new SightseeingPuzzleStep(new Vector3(20.095932f, 30.999998f, 0.047614243f), Jump: true), // Punkt 2
                 new SightseeingPuzzleStep(new Vector3(15.2992935f, 19.797047f, -0.01418628f), Jump: false), // Punkt 3 (Sightseeing-Punkt)
             }),
+        [2162732] = new( // South Shroud Landing (South Shroud)
+            new Vector3(-344.5724f, 20.119482f, 623.85767f),
+            new[]
+            {
+                new SightseeingPuzzleStep(new Vector3(-340.88824f, 20.205257f, 619.6608f), Jump: false), // Punkt 2
+                new SightseeingPuzzleStep(new Vector3(-339.45047f, 20.119507f, 621.1662f), Jump: false),  // Punkt 3
+                new SightseeingPuzzleStep(new Vector3(-338.37112f, 21.07734f, 622.1615f), Jump: true),    // Punkt 4 (Sightseeing-Punkt)
+            },
+            DismountAtStart: true),
+        [2162733] = new( // Urth's Gift
+            new Vector3(586.7841f, 21.677586f, 119.33526f),
+            new[]
+            {
+                new SightseeingPuzzleStep(new Vector3(588.0782f, 23.80509f, 124.67797f), Jump: false), // Punkt 2 (Sightseeing-Punkt)
+            },
+            DismountAtStart: true),
+        [2162737] = new( // Alder Springs
+            new Vector3(-286.6414f, -8.795901f, 270.53632f),
+            new[]
+            {
+                new SightseeingPuzzleStep(new Vector3(-284.37823f, -8.066091f, 275.85077f), Jump: false), // Punkt 2
+                new SightseeingPuzzleStep(new Vector3(-291.59375f, -21.768698f, 281.29727f), Jump: false), // Punkt 3
+                new SightseeingPuzzleStep(new Vector3(-295.4308f, -26.975307f, 284.9268f), Jump: false),   // Punkt 4
+                new SightseeingPuzzleStep(new Vector3(-299.70035f, -30.911985f, 290.72318f), Jump: false), // Punkt 5
+                new SightseeingPuzzleStep(new Vector3(-300.75568f, -32.643612f, 293.41083f), Jump: false), // Punkt 6 (Sightseeing-Punkt)
+            },
+            DismountAtStart: true),
+        [2162743] = new( // The Golden Bazaar
+            new Vector3(-575.7023f, 12.059179f, -239.43886f),
+            new[]
+            {
+                new SightseeingPuzzleStep(new Vector3(-572.05695f, 12.352968f, -241.44843f), Jump: false), // Punkt 2
+                new SightseeingPuzzleStep(new Vector3(-572.4715f, 12.898257f, -238.76697f), Jump: false),  // Punkt 3 (Sightseeing-Punkt)
+            },
+            DismountAtStart: true),
+        [2162750] = new( // East Watchtower
+            new Vector3(31.40298f, 36.567436f, 212.94495f),
+            new[]
+            {
+                new SightseeingPuzzleStep(new Vector3(35.936108f, 37.68783f, 213.0675f), Jump: true),   // Punkt 2
+                new SightseeingPuzzleStep(new Vector3(36.457993f, 37.68799f, 213.20955f), Jump: false),  // Punkt 3
+                new SightseeingPuzzleStep(new Vector3(36.950417f, 37.56473f, 212.10846f), Jump: false),  // Punkt 4
+                new SightseeingPuzzleStep(new Vector3(40.050797f, 41.062893f, 213.06375f), Jump: false), // Punkt 5 (Sightseeing-Punkt)
+            },
+            DismountAtStart: true),
+        [2162753] = new( // Raubahn's Push
+            new Vector3(-67.37562f, 71.24493f, -190.45703f),
+            new[]
+            {
+                new SightseeingPuzzleStep(new Vector3(-66.58007f, 72.49203f, -197.67438f), Jump: false),  // Punkt 2
+                new SightseeingPuzzleStep(new Vector3(-69.97595f, 75.0573f, -194.6576f), Jump: false),     // Punkt 3
+                new SightseeingPuzzleStep(new Vector3(-72.356735f, 77.46811f, -191.8156f), Jump: false),   // Punkt 4
+                new SightseeingPuzzleStep(new Vector3(-73.17321f, 79.53891f, -190.59827f), Jump: true),    // Punkt 5
+                new SightseeingPuzzleStep(new Vector3(-73.93539f, 81.31033f, -188.78125f), Jump: false),   // Punkt 6 (Sightseeing-Punkt)
+            },
+            DismountAtStart: true),
+        [2162709] = new( // Summerford Farms (Middle La Noscea)
+            new Vector3(211.08124f, 113.49538f, -215.90604f),
+            new[]
+            {
+                new SightseeingPuzzleStep(new Vector3(222.35657f, 113.5246f, -228.68694f), Jump: false),               // Punkt 2 (hier aufmounten)
+                new SightseeingPuzzleStep(new Vector3(213.00624f, 118.13567f, -222.4607f), Jump: false, Fly: true),    // Punkt 3 (fliegend, danach wieder abmounten)
+                new SightseeingPuzzleStep(new Vector3(213.08737f, 117.651245f, -222.4444f), Jump: false),              // Punkt 4 (Sightseeing-Punkt)
+            },
+            DismountAtStart: true),
+        [2162757] = new( // The Frozen Fang
+            new Vector3(-495.33237f, 213.04973f, -279.07925f),
+            new[]
+            {
+                new SightseeingPuzzleStep(new Vector3(-492.3486f, 209.48744f, -280.61807f), Jump: false), // Punkt 2
+                new SightseeingPuzzleStep(new Vector3(-490.27847f, 209.48744f, -281.5403f), Jump: false), // Punkt 3
+                new SightseeingPuzzleStep(new Vector3(-488.52838f, 209.48744f, -281.76263f), Jump: false), // Punkt 4
+                new SightseeingPuzzleStep(new Vector3(-486.6726f, 209.48744f, -281.4051f), Jump: false),  // Punkt 5
+                new SightseeingPuzzleStep(new Vector3(-484.5645f, 209.48747f, -280.9535f), Jump: false),  // Punkt 6 (Sightseeing-Punkt)
+            },
+            DismountAtStart: true),
+        [2162759] = new( // Boulder Downs
+            new Vector3(-686.17816f, 315.51788f, 375.33148f),
+            new[]
+            {
+                new SightseeingPuzzleStep(new Vector3(-682.58685f, 315.5668f, 373.07422f), Jump: false), // Punkt 2 (Sightseeing-Punkt)
+            },
+            DismountAtStart: true),
+        [2162755] = new( // The Nail
+            new Vector3(200.99124f, 312.62598f, 420.37384f),
+            new[]
+            {
+                new SightseeingPuzzleStep(new Vector3(200.82906f, 310.8367f, 420.1173f), Jump: false), // Punkt 2 (Sightseeing-Punkt)
+            },
+            DismountAtStart: true),
+        [2162756] = new( // The Observatorium
+            new Vector3(187.42712f, 234.38025f, 403.59232f),
+            new[]
+            {
+                new SightseeingPuzzleStep(new Vector3(195.98488f, 234.7984f, 414.46854f), Jump: false),               // Punkt 2 (hier aufmounten)
+                new SightseeingPuzzleStep(new Vector3(197.65483f, 283.54507f, 416.3392f), Jump: false, Fly: true),    // Punkt 3 (fliegend, Sightseeing-Punkt)
+            },
+            DismountAtStart: true),
+        [2162722] = new( // U'Ghamaro Mines (Outer La Noscea)
+            new Vector3(98.35974f, 57.215237f, -471.80798f),
+            new[]
+            {
+                new SightseeingPuzzleStep(new Vector3(97.226295f, 59.743057f, -474.94293f), Jump: true),                     // Punkt 1
+                new SightseeingPuzzleStep(new Vector3(96.900154f, 60.601845f, -475.57516f), Jump: false),                    // Punkt 2
+                new SightseeingPuzzleStep(new Vector3(96.45128f, 62.092f, -477.96954f), Jump: true, JumpFromStandstill: true), // Punkt 3 - aus dem Stand, sonst fliegt man darüber
+                new SightseeingPuzzleStep(new Vector3(96.54945f, 62.090305f, -477.42578f), Jump: false),                     // Punkt 4
+                new SightseeingPuzzleStep(new Vector3(96.37351f, 62.092182f, -478.4005f), Jump: false, SprintBefore: true),  // Punkt 5 - Sprint, dann Anlauf
+                new SightseeingPuzzleStep(new Vector3(95.66097f, 63.449345f, -482.26147f), Jump: true, RunUp: true),         // Punkt 6 - bei Punkt 5 abspringen
+                new SightseeingPuzzleStep(new Vector3(96.159256f, 63.449345f, -482.43964f), Jump: false),                    // Punkt 7
+                new SightseeingPuzzleStep(new Vector3(96.25108f, 63.449345f, -482.53964f), Jump: false),                     // Punkt 8
+                new SightseeingPuzzleStep(new Vector3(92.56192f, 65.24594f, -485.55588f), Jump: true, RunUp: true),          // Punkt 9 - bei Punkt 8 abspringen
+                new SightseeingPuzzleStep(new Vector3(92.57982f, 65.57783f, -486.54486f), Jump: false),                      // Punkt 10
+                new SightseeingPuzzleStep(new Vector3(93.8758f, 66.83331f, -486.28745f), Jump: true),                        // Punkt 11
+                new SightseeingPuzzleStep(new Vector3(95.40166f, 68.67571f, -486.0416f), Jump: true),                        // Punkt 12
+                new SightseeingPuzzleStep(new Vector3(96.52743f, 70.19558f, -486.0492f), Jump: false),                       // Punkt 13 (Sightseeing-Punkt)
+            },
+            DismountAtStart: true),
+        [2162715] = new( // Camp Skull Valley (Western La Noscea)
+            new Vector3(62.28901f, 0.030244112f, 48.545948f),
+            new[]
+            {
+                new SightseeingPuzzleStep(new Vector3(64.00007f, 0.4575119f, 50.961147f), Jump: false),               // Punkt 1
+                new SightseeingPuzzleStep(new Vector3(64.65887f, 0.21221948f, 50.28869f), Jump: false, SprintBefore: true), // Absprungpunkt - Sprint, dann Anlauf
+                new SightseeingPuzzleStep(new Vector3(67.4166f, 1.9575522f, 47.885967f), Jump: true, RunUp: true),    // Sightseeing-Punkt - mit Anlauf ab Absprungpunkt
+            },
+            DismountAtStart: true),
     };
 
     /// <summary>Siehe SightseeingJumpingPuzzles-Kommentar.</summary>
     public static bool TryGetSightseeingJumpingPuzzle(uint adventureId, out SightseeingJumpingPuzzle puzzle) =>
         SightseeingJumpingPuzzles.TryGetValue(adventureId, out puzzle!);
+
+    // Start = wird ganz normal (Mount/vnavmesh) angesteuert, erst DORT abgemountet. RunUp = danach zu
+    // Fuß (kein Sprung) dorthin, um von dort mit Anlauf abzuspringen - Absprung/Landung bei
+    // JumpTarget. Erst danach läuft die Automation normal über BeginFinalApproach zur echten, bereits
+    // bekannten Position (entry.WorldPosition) weiter. Viel einfacher als SightseeingJumpingPuzzle
+    // (nur EIN Sprung, kein Mehrschritt-Parcours), daher ein eigener, schlankerer Record statt
+    // SightseeingPuzzleStep wiederzuverwenden.
+    public readonly record struct AetherCurrentJumpRoute(Vector3 Start, Vector3 RunUpPoint, Vector3 JumpTarget);
+
+    // Von Hand hinterlegte Ätherströmungen, die nur über einen kurzen Sprung erreichbar sind (Key =
+    // AetherCurrent-RowId, siehe AetherCurrentAutomation-Kommentar) - z.B. "The Dravanian Forelands
+    // (Loth ast Gnath past second door)".
+    private static readonly Dictionary<uint, AetherCurrentJumpRoute> AetherCurrentJumpRoutes = new()
+    {
+        [2818077] = new( // The Dravanian Forelands (Loth ast Gnath past second door)
+            new Vector3(399.45297f, -92.03338f, 683.3449f),
+            new Vector3(401.5101f, -92.208374f, 684.6267f),
+            new Vector3(403.9884f, -90.32586f, 686.1742f)),
+    };
+
+    /// <summary>Siehe AetherCurrentJumpRoutes-Kommentar.</summary>
+    public static bool TryGetAetherCurrentJumpRoute(uint aetherCurrentId, out AetherCurrentJumpRoute route) =>
+        AetherCurrentJumpRoutes.TryGetValue(aetherCurrentId, out route);
 
     private const uint JumpGeneralActionId = 2;
 
@@ -2739,17 +2894,24 @@ public sealed class Plugin : IDalamudPlugin
 
     /// <summary>
     /// Ob alle ersten SightseeingFirstBookCount A-Realm-Reborn-Sichtungspunkte bereits aufgezeichnet
-    /// sind - live über PlayerState.IsAdventureComplete, für SightseeingNeedsFirstTwenty. Es gibt
-    /// kein eigenes "ist A Realm Reborn"-Feld auf CollectibleEntry - SightseeingWeatherMask != 0
-    /// identifiziert dieselbe Menge zuverlässig (siehe RealmRebornVistaWeathers-Kommentar: JEDER
-    /// A-Realm-Reborn-Punkt hat eine Wetter-Bedingung, KEIN späterer), kombiniert mit
-    /// "!SightseeingNeedsFirstTwenty" (nur bei A-Realm-Reborn-Nummer 1-20 gesetzt) ergibt das genau
-    /// die ersten 20.
+    /// sind - für SightseeingNeedsFirstTwenty. Es gibt kein eigenes "ist A Realm Reborn"-Feld auf
+    /// CollectibleEntry - SightseeingWeatherMask != 0 identifiziert dieselbe Menge zuverlässig (siehe
+    /// RealmRebornVistaWeathers-Kommentar: JEDER A-Realm-Reborn-Punkt hat eine Wetter-Bedingung, KEIN
+    /// späterer), kombiniert mit "!SightseeingNeedsFirstTwenty" (nur bei A-Realm-Reborn-Nummer 1-20
+    /// gesetzt) ergibt das genau die ersten 20.
+    ///
+    /// WICHTIG: nutzt bewusst denselben IsAdventureComplete(uint)-Helfer (Dalamuds IUnlockState-
+    /// Service) wie die grüne/rote Markierung der einzelnen Punkte selbst (siehe Zeile ~314) - NICHT
+    /// den rohen PlayerState.Instance()->IsAdventureComplete(...)-Aufruf, der hier vorher direkt
+    /// verwendet wurde. Nutzer-Report: nach Abschluss aller ersten 20 UND dem freischaltenden Gespräch
+    /// mit Millith Ironheart blieben Punkte ab 21 trotzdem als "Bedingung nicht erfüllt" markiert -
+    /// die beiden APIs lieferten hier unterschiedliche Ergebnisse, wodurch diese Prüfung fälschlich
+    /// weiterhin "unvollständig" meldete, obwohl die einzelnen Punkte selbst schon korrekt grün waren.
     /// </summary>
-    private static unsafe bool AreFirstSightseeingBookEntriesComplete()
+    private static bool AreFirstSightseeingBookEntriesComplete()
     {
         var firstBook = GetSightseeingEntries().Where(e => !e.SightseeingNeedsFirstTwenty && e.SightseeingWeatherMask != 0);
-        return firstBook.All(e => PlayerState.Instance()->IsAdventureComplete(e.Id));
+        return firstBook.All(e => IsAdventureComplete(e.Id));
     }
 
     private static Dictionary<uint, string>? questNameByIdCache;
@@ -3489,6 +3651,21 @@ public sealed class Plugin : IDalamudPlugin
 
     private uint? liveEntriesZoneId;
     private List<CollectibleEntry> liveEntriesCache = new();
+    private int liveEntriesAcceptedQuestCount = -1;
+
+    /// <summary>
+    /// QuestManager.NumAcceptedQuests - günstiger Zähler der aktuell angenommenen Quests, ändert sich
+    /// bei JEDER abgegebenen (Abnahme) oder neu angenommenen (Zunahme, auch automatisch durch die
+    /// MSQ) Quest. Statt einer festen Zeitspanne (siehe GetLiveZoneEntries/GetAllTrackedQuestEntries)
+    /// wird die Quest-Liste jetzt GENAU dann neu berechnet, wenn sich dieser Zähler seit dem letzten
+    /// Aufruf geändert hat (Nutzeranforderung: "nach jeder abgegebenen Quest" statt alle 20 Sekunden) -
+    /// kein teures Scannen des kompletten Quest-Sheets bei unveränderten Werten.
+    /// </summary>
+    private static unsafe int GetNumAcceptedQuests()
+    {
+        var manager = QuestManager.Instance();
+        return manager != null ? manager->NumAcceptedQuests : -1;
+    }
 
     // Immer auf Englisch geladen (unabhängig von der Spielclient-Sprache) - wird nur für den
     // sprachunabhängigen "startet mit All"-Check bei der Quest-Klassenfilterung gebraucht,
@@ -3640,7 +3817,8 @@ public sealed class Plugin : IDalamudPlugin
     /// </summary>
     public List<CollectibleEntry> GetLiveZoneEntries(uint territoryId)
     {
-        if (liveEntriesZoneId == territoryId)
+        var acceptedQuestCount = GetNumAcceptedQuests();
+        if (liveEntriesZoneId == territoryId && acceptedQuestCount == liveEntriesAcceptedQuestCount)
             return liveEntriesCache;
 
         // Direkt nach einem Zonenwechsel/Login ist der lokale Spieler (insbesondere Level) manchmal
@@ -3667,6 +3845,7 @@ public sealed class Plugin : IDalamudPlugin
 
         liveEntriesZoneId = territoryId;
         liveEntriesCache = result;
+        liveEntriesAcceptedQuestCount = acceptedQuestCount;
         return result;
     }
 
@@ -4348,6 +4527,22 @@ public sealed class Plugin : IDalamudPlugin
             }
         }
 
+        // ALLE Ätherströmungen setzen die abgeschlossene Quest "Divine Intervention" voraus
+        // (Nutzeranforderung: ohne die Quest sind alle Ätherströmungen gesperrt, in jeder Zone
+        // gleichermaßen) - global statt per Eintrag in aethercurrents.json, gleiches Prinzip wie
+        // MountRequiredQuest oben, nur ohne Namens-Dictionary, da es für den ganzen Typ gilt.
+        if (entry.Type == CollectibleType.AetherCurrent)
+        {
+            const string requiredQuestForAetherCurrent = "Divine Intervention";
+            var requiredQuestId = ResolveQuestIdByName(requiredQuestForAetherCurrent);
+            if (requiredQuestId == null || !QuestManager.IsQuestComplete((ushort)requiredQuestId.Value))
+            {
+                return Loc.T(
+                    $"Benötigt die abgeschlossene Quest \"{requiredQuestForAetherCurrent}\".",
+                    $"Requires the completed quest \"{requiredQuestForAetherCurrent}\".");
+            }
+        }
+
         // Quests mit einer manuell erfassten Zusatz-Voraussetzung (siehe QuestRequiredMounts-
         // Kommentar) - live gegen den tatsächlichen Mount-Besitz geprüft.
         if (entry.Type == CollectibleType.Quest && QuestRequiredMounts.TryGetValue(entry.Name, out var requiredMounts))
@@ -4524,6 +4719,13 @@ public sealed class Plugin : IDalamudPlugin
 
     public static bool IsAchievementOrRankGated(CollectibleEntry entry) =>
         ComputeGrandCompanyOrTribeGateReason(entry) != null;
+
+    /// <summary>Ob die Quest "Divine Intervention" (Voraussetzung für ALLE Ätherströmungen, siehe ComputeGrandCompanyOrTribeGateReason) noch fehlt - für den genauen Tooltip am Auto-Ätherströmung-Knopf, wenn er deshalb ausgegraut ist.</summary>
+    public static bool IsDivineInterventionMissing()
+    {
+        var id = ResolveQuestIdByName("Divine Intervention");
+        return id == null || !QuestManager.IsQuestComplete((ushort)id.Value);
+    }
 
     // Stammeshändler, die mit GIL statt der stammeseigenen Währung verkaufen - dort lässt sich der
     // Stamm nicht über die Währung (siehe ResolveBeastTribe) bestimmen. Wert = Lumina-BeastTribe-RowId.
@@ -4866,13 +5068,17 @@ public sealed class Plugin : IDalamudPlugin
 
         // Klassengebundene Quests bewusst ausklammern - aber nicht nur Kategorie 1 ("All
         // Classes") akzeptieren, sondern jede Kategorie, deren Name mit "All" beginnt
-        // (z.B. Kategorie 130 "All classes and jobs (excluding limited jobs)"). Das
-        // deckt die meisten normalen Quests ab, die nur Limited Jobs wie Blue Mage ausschließen.
+        // (z.B. Kategorie 130 "All classes and jobs (excluding limited jobs)"). Ebenso
+        // Kategorien, die mit "Any" beginnen (z.B. 142 "Any Disciple of War or Magic
+        // (excluding limited jobs)") - das sind KEINE auf einen einzelnen Job beschränkten
+        // Quests, sondern nur reine Kampf-/Crafter-Gruppen-Einschränkungen (z.B. Primal-
+        // Quests wie "Drop Dead Shiva", die jeder Kampfjob annehmen kann, nur keine
+        // Sammler/Handwerker). Ohne "Any" fielen solche Quests fälschlich ganz raus.
         // WICHTIG: Der Name muss explizit auf Englisch abgefragt werden - row.ClassJobCategory0
         // liefert sonst den Namen in der Spielclient-Sprache (z.B. Deutsch "Alle Klassen"),
         // der nie mit "All" beginnt und dadurch ausnahmslos JEDE Quest ausgeschlossen hätte.
         var categoryName = GetEnglishClassJobCategoryName(row.ClassJobCategory0.RowId);
-        if (!categoryName.StartsWith("All", StringComparison.Ordinal))
+        if (!categoryName.StartsWith("All", StringComparison.Ordinal) && !categoryName.StartsWith("Any", StringComparison.Ordinal))
             return false;
         if (row.ClassJobLevel[0] > playerLevel)
             return false;
@@ -4942,20 +5148,105 @@ public sealed class Plugin : IDalamudPlugin
         return !string.IsNullOrEmpty(row.Name.ToString());
     }
 
+    private static HashSet<uint>? questIdsGrantingAetherCurrentCache;
+
+    /// <summary>
+    /// Ob der Abschluss dieser Quest automatisch eine Ätherströmung freischaltet (Lumina
+    /// "AetherCurrent".Quest - siehe DumpAetherCurrentDebugInfoForZone-Kommentar: solche
+    /// Strömungen haben keine begehbare Position, sie schalten sich beim Questabschluss von selbst
+    /// frei) - für die "(Aether Current)"-Markierung hinter dem Questnamen im Overlay
+    /// (Nutzeranforderung), damit sofort klar ist, welche Quests nebenbei eine sonst mühsam zu Fuß
+    /// erreichbare Strömung mitbringen. Einmalig aus dem kompletten AetherCurrent-Sheet aufgebaut.
+    /// </summary>
+    public static bool QuestGrantsAetherCurrent(uint questId)
+    {
+        if (questIdsGrantingAetherCurrentCache == null)
+        {
+            var set = new HashSet<uint>();
+            var sheet = DataManager.GetExcelSheet<Lumina.Excel.Sheets.AetherCurrent>();
+            if (sheet != null)
+            {
+                foreach (var row in sheet)
+                {
+                    if (row.Quest.RowId != 0)
+                        set.Add(row.Quest.RowId);
+                }
+            }
+
+            questIdsGrantingAetherCurrentCache = set;
+        }
+
+        return questIdsGrantingAetherCurrentCache.Contains(questId);
+    }
+
+    /// <summary>
+    /// Einmaliger Debug-Dump für eine einzelne Quest (per Namens-Teilstring gesucht) - loggt jede
+    /// Bedingung aus IsQuestCurrentlyAcceptable einzeln, um zu klären, warum eine erwartete Quest
+    /// nicht in der Automation/Datenbank auftaucht (Nutzer-Report: "Protecting What's Important" in
+    /// Coerthas Western Highlands taucht trotz Freischaltung durch die MSQ nicht auf).
+    /// </summary>
+    public unsafe void DumpQuestAcceptabilityDebugInfo(string questNameContains)
+    {
+        var questSheet = DataManager.GetExcelSheet<Quest>();
+        if (questSheet == null)
+        {
+            Log.Info("[QuestDebug] Quest-Sheet nicht geladen.");
+            return;
+        }
+
+        var playerLevel = ObjectTable.LocalPlayer?.Level ?? 0;
+        var matches = questSheet.Where(q => q.Name.ToString().Contains(questNameContains, StringComparison.OrdinalIgnoreCase)).ToList();
+        if (matches.Count == 0)
+        {
+            Log.Info($"[QuestDebug] Keine Quest mit \"{questNameContains}\" im Namen gefunden.");
+            return;
+        }
+
+        foreach (var row in matches)
+        {
+            var placeName = row.PlaceName.ValueNullable?.Name.ToString();
+            var issuerTerritory = row.IssuerLocation.ValueNullable?.Territory.RowId ?? 0;
+            var journalSection = row.JournalGenre.ValueNullable?.JournalCategory.ValueNullable?.JournalSection.RowId;
+            var categoryName = GetEnglishClassJobCategoryName(row.ClassJobCategory0.RowId);
+
+            var prevList = row.PreviousQuest.Where(p => p.RowId != 0).ToList();
+            var prevStatus = prevList.Count == 0 ? "keine" : string.Join(", ", prevList.Select(p => $"#{p.RowId}={(QuestManager.IsQuestComplete((ushort)p.RowId) ? "erledigt" : "OFFEN")}"));
+
+            var lockList = row.QuestLock.Where(l => l.RowId != 0).ToList();
+            var lockStatus = lockList.Count == 0 ? "keine" : string.Join(", ", lockList.Select(l => $"#{l.RowId}={(QuestManager.IsQuestComplete((ushort)l.RowId) ? "erledigt" : "OFFEN")}"));
+
+            var instanceList = row.InstanceContent.Where(i => i.RowId != 0).ToList();
+            var instanceStatus = instanceList.Count == 0 ? "keine" : string.Join(", ", instanceList.Select(i => $"#{i.RowId}={(i.ValueNullable is { } ir && UnlockState.IsInstanceContentUnlocked(ir) ? "freigeschaltet" : "OFFEN")}"));
+
+            Log.Info($"[QuestDebug] \"{row.Name}\" (#{row.RowId}): " +
+                     $"IsRepeatable={row.IsRepeatable}, BeastTribe={row.BeastTribe.RowId}, JournalGenre={row.JournalGenre.RowId}, " +
+                     $"PlaceName=\"{placeName}\" (#{row.PlaceName.RowId}), IssuerTerritory={issuerTerritory}, " +
+                     $"JournalSection={journalSection}, Festival={row.Festival.RowId} (aktiv={(row.Festival.RowId != 0 && IsFestivalActive((ushort)row.Festival.RowId))}), " +
+                     $"GrandCompany={row.GrandCompany.RowId} (eigene={PlayerState.Instance()->GrandCompany}), " +
+                     $"ClassJobCategory=\"{categoryName}\" (#{row.ClassJobCategory0.RowId}), ClassJobLevel={row.ClassJobLevel[0]} (Spieler={playerLevel}), " +
+                     $"PreviousQuest=[{prevStatus}], QuestLock=[{lockStatus}], InstanceContent=[{instanceStatus}], " +
+                     $"IsQuestComplete={QuestManager.IsQuestComplete((ushort)row.RowId)}, " +
+                     $"IsQuestCurrentlyAcceptable={IsQuestCurrentlyAcceptable(row, playerLevel)}");
+        }
+    }
+
     private static List<CollectibleEntry>? globalQuestEntriesCache;
+    private static int globalQuestEntriesAcceptedQuestCount = -1;
 
     /// <summary>
     /// Alle Quests, die der Charakter aktuell (unabhängig von der Zone) annehmen könnte oder
     /// bereits abgeschlossen hat - für die globale Statistik (siehe MainWindow.DrawStatisticsPage)
     /// und die Datenbank-Seite (siehe MainWindow.DrawDatabasePage). Anders als ComputeLiveZoneEntries
     /// wird hier NICHT nach Vergabeort gefiltert, sondern einmal über das komplette Quest-Sheet
-    /// gegangen. Wird wie frameKitEntriesCache nur einmal pro Plugin-Sitzung berechnet (nicht jeden
-    /// Frame) - neu erreichte Story-/Level-Fortschritte, die weitere Quests freischalten, tauchen
-    /// erst nach einem Plugin-Neuladen auf.
+    /// gegangen. Wird wie GetLiveZoneEntries neu berechnet, sobald sich GetNumAcceptedQuests ändert
+    /// (Quest abgegeben oder neu angenommen) statt nur einmal pro Plugin-Sitzung - sonst tauchten neu
+    /// erreichte Story-/Level-Fortschritte, die weitere Quests freischalten, erst nach einem Plugin-
+    /// Neuladen auf (Nutzer-Report: MSQ in derselben Zone gemacht, Liste hat sich nicht aktualisiert).
     /// </summary>
     public unsafe List<CollectibleEntry> GetAllTrackedQuestEntries()
     {
-        if (globalQuestEntriesCache != null)
+        var acceptedQuestCount = GetNumAcceptedQuests();
+        if (globalQuestEntriesCache != null && acceptedQuestCount == globalQuestEntriesAcceptedQuestCount)
             return globalQuestEntriesCache;
 
         var result = new List<CollectibleEntry>();
@@ -4988,6 +5279,7 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         globalQuestEntriesCache = result;
+        globalQuestEntriesAcceptedQuestCount = acceptedQuestCount;
         return result;
     }
 
@@ -5403,6 +5695,7 @@ public sealed class Plugin : IDalamudPlugin
         [234] = new Vector3(-30.803701f, 38.0566f, -343.41434f),       // Solution Nine: Resolution
         [235] = new Vector3(-159.09541f, 6.4373016e-06f, 23.499605f),  // Solution Nine: Nexus Arcade
         [236] = new Vector3(-376.37665f, 14.030001f, 137.58334f),      // Solution Nine: Residential Sector
+        [77] = new Vector3(-302.19894f, -21.131083f, 35.627785f),      // The Dravanian Forelands: Anyx Trine
     };
 
     /// <summary>
@@ -6086,6 +6379,39 @@ public sealed class Plugin : IDalamudPlugin
     public static bool IsInInstancedContent() =>
         Condition[ConditionFlag.BoundByDuty] || Condition[ConditionFlag.BoundByDuty56] || Condition[ConditionFlag.BoundByDuty95];
 
+    // Für IsInMsqSoloDuty - wie GetEnglishClassJobCategoryName: ContentType-Namen sprachunabhängig
+    // auf Englisch abfragen (row.Name in Client-Sprache würde nie mit "Quest Battles" übereinstimmen).
+    private static Lumina.Excel.ExcelSheet<ContentType>? contentTypeSheetEnglish;
+
+    private static string GetEnglishContentTypeName(uint contentTypeId)
+    {
+        contentTypeSheetEnglish ??= DataManager.GetExcelSheet<ContentType>(Dalamud.Game.ClientLanguage.English);
+        return contentTypeSheetEnglish?.GetRowOrDefault(contentTypeId)?.Name.ToString() ?? string.Empty;
+    }
+
+    /// <summary>
+    /// Ob man sich GERADE JETZT in einer MSQ-Solo-Duty befindet (Nutzeranforderung: Overlay dort
+    /// ausblenden, danach wieder einblenden). Bewusst über TerritoryType.ContentFinderCondition der
+    /// AKTUELLEN Zone statt IDutyState.ContentFinderCondition - Quest Battles laufen nicht über die
+    /// normale Duty-Finder-Warteschlange, IDutyState blieb dabei laut Nutzer-Report (Beispiel "Divine
+    /// Intervention") leer/das Overlay verschwand nicht. Die Instanz-Zone selbst kennt ihre CFC aber
+    /// immer direkt über die Lumina-Zonendaten, unabhängig davon, wie man reingekommen ist. ContentType
+    /// wird per Namenstext ("Quest Battles", englisch) statt Raten der RowId geprüft (Konvention wie
+    /// GetEnglishClassJobCategoryName).
+    /// </summary>
+    public static bool IsInMsqSoloDuty()
+    {
+        if (!IsInInstancedContent())
+            return false;
+
+        var territorySheet = DataManager.GetExcelSheet<TerritoryType>();
+        if (territorySheet == null || !territorySheet.TryGetRow(ClientState.TerritoryType, out var territory))
+            return false;
+
+        var contentTypeId = territory.ContentFinderCondition.ValueNullable?.ContentType.RowId;
+        return contentTypeId != null && GetEnglishContentTypeName(contentTypeId.Value).Equals("Quest Battles", StringComparison.OrdinalIgnoreCase);
+    }
+
     public static bool IsChocoboCompanionSummoned() => GetChocoboSummonTimeLeft() > 0f;
 
     public static uint GetGysahlGreensCount() => instance.GetCurrencyAmount(GysahlGreensItemId);
@@ -6327,6 +6653,80 @@ public sealed class Plugin : IDalamudPlugin
     {
         if (itemId != 0)
             OpenAllaganToolsItemInfo(itemId.ToString());
+    }
+
+    private static string? pendingAchievementSearchName;
+    private static DateTime pendingAchievementSearchSince;
+    private static readonly TimeSpan AchievementSearchTimeout = TimeSpan.FromSeconds(3);
+
+    /// <summary>
+    /// Öffnet das native Achievement-Fenster und trägt den Namen dieser Errungenschaft ins Suchfeld
+    /// ein, damit sie oben in der gefilterten Liste steht (Nutzeranforderung: Klick auf einen
+    /// Achievement-Eintrag im Overlay/Hauptfenster soll dort landen). Anders als bei Quests (siehe
+    /// QuestPayload) gibt es dafür keine dokumentierte "spring direkt zu Eintrag X"-Funktion - das
+    /// Fenster wird daher normal geöffnet und die Suche best-effort automatisch befüllt (siehe
+    /// TickPendingAchievementSearch), sobald das native Fenster tatsächlich erschienen ist.
+    /// </summary>
+    public static unsafe void OpenAchievementWindow(string achievementName)
+    {
+        var agentModule = AgentModule.Instance();
+        var agent = agentModule != null ? agentModule->GetAgentByInternalId(AgentId.Achievement) : null;
+        if (agent == null)
+            return;
+
+        agent->Show();
+
+        pendingAchievementSearchName = achievementName;
+        pendingAchievementSearchSince = DateTime.UtcNow;
+    }
+
+    /// <summary>
+    /// Jeden Frame aus DrawUI aufgerufen (auch wenn kein eigenes Fenster offen ist) - wartet, bis das
+    /// native "Achievement"-Fenster nach OpenAchievementWindow tatsächlich erschienen ist, sucht darin
+    /// generisch nach der ersten Sucheingabe-Komponente (FFXIVClientStructs hat keinen eigenen
+    /// AddonAchievement-Typ mit benannten Node-IDs, deshalb kein fester Index) und trägt den Namen
+    /// dort ein. Gibt nach AchievementSearchTimeout auf, falls das Fenster nicht erscheint/keine
+    /// Sucheingabe gefunden wird.
+    /// </summary>
+    private static unsafe void TickPendingAchievementSearch()
+    {
+        if (pendingAchievementSearchName == null)
+            return;
+
+        if (DateTime.UtcNow - pendingAchievementSearchSince > AchievementSearchTimeout)
+        {
+            pendingAchievementSearchName = null;
+            return;
+        }
+
+        var addon = (AtkUnitBase*)GameGui.GetAddonByName("Achievement").Address;
+        if (addon == null || !addon->IsVisible)
+            return;
+
+        var textInput = FindTextInputComponent(addon);
+        if (textInput == null)
+            return;
+
+        textInput->SetText(pendingAchievementSearchName);
+        Log.Info($"[Achievements] Suchfeld im Achievement-Fenster auf \"{pendingAchievementSearchName}\" gesetzt.");
+        pendingAchievementSearchName = null;
+    }
+
+    /// <summary>Erste TextInput-Komponente irgendwo im Node-Baum dieses Addons - siehe TickPendingAchievementSearch.</summary>
+    private static unsafe AtkComponentTextInput* FindTextInputComponent(AtkUnitBase* addon)
+    {
+        for (var i = 0; i < addon->UldManager.NodeListCount; i++)
+        {
+            var node = addon->UldManager.NodeList[i];
+            if (node == null || node->GetNodeType() != NodeType.Component)
+                continue;
+
+            var component = ((AtkComponentNode*)node)->Component;
+            if (component != null && component->GetComponentType() == ComponentType.TextInput)
+                return (AtkComponentTextInput*)component;
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -6747,6 +7147,45 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         return result;
+    }
+
+    // CriticalCommonLib.Models.InventoryCategory (per Reflektieren von CriticalCommonLib.dll
+    // ermittelt, siehe GetRetainerItemCounts-Kommentar zur selben Vorgehensweise) - die Satteltasche
+    // zählt bei Allagan Tools als eigene Kategorie, aber unter der EIGENEN Charakter-ID statt einer
+    // separaten Retainer-ID, deshalb von GetRetainerItemCounts (das die eigene ID bewusst ausschließt)
+    // nicht erfasst.
+    private const uint SaddlebagInventoryCategory = 2;
+    private const uint PremiumSaddlebagInventoryCategory = 3;
+
+    /// <summary>
+    /// Wie viel eines Items in der (ggf. erweiterten) Chocobo-Satteltasche liegt - Ergänzung zu
+    /// GetRetainerItemCounts für denselben "(<Anzahl>)"-Zusatz (Nutzeranforderung: Satteltasche mit
+    /// dazu). Gezielt nur diese beiden Kategorien abgefragt statt wie dort aller, da sie unter der
+    /// eigenen Charakter-ID laufen und sonst mit dem "was man selbst am Körper/im Inventar trägt"-
+    /// Ausschluss dort kollidieren würden.
+    /// </summary>
+    public static uint GetSaddlebagItemCount(uint itemId)
+    {
+        if (itemId == 0 || !instance.Configuration.ShowRetainerItemCounts || !IsAllaganToolsAvailable())
+            return 0;
+
+        allaganToolsGetItemCountsByCharacter ??=
+            PluginInterface.GetIpcSubscriber<uint, bool, uint[], bool, Dictionary<ulong, uint>>("AllaganTools.GetItemCountsByCharacter");
+
+        try
+        {
+            if (!allaganToolsGetItemCountsByCharacter.HasFunction)
+                return 0;
+
+            var byCharacter = allaganToolsGetItemCountsByCharacter.InvokeFunc(
+                itemId, true, new[] { SaddlebagInventoryCategory, PremiumSaddlebagInventoryCategory }, false);
+            return (uint)byCharacter.Values.Sum(v => (long)v);
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Fehler beim Abfragen der Chocobo-Satteltasche über Allagan Tools.");
+            return 0;
+        }
     }
 
     // Von Hand als "nicht von der Automation unterstützt" markierte Sightseeing-Punkte (Key =
@@ -7601,6 +8040,9 @@ public sealed class FlightPathUpgrade
     private DateTime? canFlySince;
     private DateTime lastAttemptAt = DateTime.MinValue;
 
+    /// <summary>Ob der aktuell laufende Laufauftrag fliegend angenommen wurde (siehe OnPathStarted).</summary>
+    public bool IsFlying => pathIsFlying;
+
     /// <summary>Nach jedem angenommenen Laufauftrag - flying = ob er fliegend angenommen wurde.</summary>
     public void OnPathStarted(bool flying)
     {
@@ -7665,5 +8107,50 @@ public sealed class NavigationStuckDetector
         lastPosition = currentPosition;
         lastCheckAt = DateTime.UtcNow;
         return stuck;
+    }
+}
+
+/// <summary>
+/// Erkennt einen plötzlichen Höhenverlust (z.B. von einer Klippe/einem schmalen Grat gefallen) beim
+/// Zufuß-Laufen zu einem Sightseeing-Punkt - NICHT beim Fliegen/Mounten (das legitim schnell absteigen
+/// kann, siehe CheckFell-Aufrufer). Für Punkte mit engem Klippen-Anflug ohne eigenes Jumping-Puzzle-
+/// Setup (siehe SightseeingAutomation.UpdateMoving), bei denen ein Absturz sonst unbemerkt zu einem
+/// sinnlosen Weiterlaufen von ganz unten geführt hätte (Nutzeranforderung).
+/// </summary>
+public sealed class FallDetector
+{
+    private static readonly TimeSpan CheckInterval = TimeSpan.FromSeconds(1);
+    private const float FallDropThreshold = 6f;
+
+    private float? lastY;
+    private DateTime lastCheckAt = DateTime.MinValue;
+
+    public void Reset()
+    {
+        lastY = null;
+        lastCheckAt = DateTime.MinValue;
+    }
+
+    /// <summary>
+    /// true, wenn die Höhe seit der letzten Prüfung (CheckInterval) um mehr als FallDropThreshold
+    /// gefallen ist. Startet nach jedem Reset()/true-Ergebnis wieder bei null, prüft also nur alle
+    /// paar Sekunden statt jeden Frame (gleiches Prinzip wie NavigationStuckDetector.CheckStuck).
+    /// </summary>
+    public bool CheckFell(float currentY)
+    {
+        if (lastCheckAt == DateTime.MinValue)
+        {
+            lastY = currentY;
+            lastCheckAt = DateTime.UtcNow;
+            return false;
+        }
+
+        if (DateTime.UtcNow - lastCheckAt < CheckInterval)
+            return false;
+
+        var fell = lastY.HasValue && lastY.Value - currentY > FallDropThreshold;
+        lastY = currentY;
+        lastCheckAt = DateTime.UtcNow;
+        return fell;
     }
 }

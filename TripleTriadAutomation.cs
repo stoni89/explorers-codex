@@ -522,11 +522,14 @@ public sealed class TripleTriadAutomation
                 return;
             }
 
+            // War der festgesteckte Weg fliegend, steckt meist ein Gebäude im Weg (vnavmeshs Flug-
+            // Beeline findet dessen Ausgang nicht) - dann diesmal zu Fuß probieren (siehe BeginPathfind).
             if (stuckDetector.CheckStuck(playerPos))
             {
-                Plugin.Log.Info($"[TripleTriadAutomation] Unterwegs zu {currentNpcName}: scheinbar steckengeblieben - Laufweg wird neu angefordert.");
+                var wasFlying = flightUpgrade.IsFlying;
+                Plugin.Log.Info($"[TripleTriadAutomation] Unterwegs zu {currentNpcName}: scheinbar steckengeblieben{(wasFlying ? " (beim Fliegen, evtl. Gebäude im Weg)" : "")} - Laufweg wird neu angefordert.");
                 StopPath();
-                BeginPathfind(currentTargetPosition, currentPathTolerance, currentAllowFly);
+                BeginPathfind(currentTargetPosition, currentPathTolerance, allowFly: currentAllowFly && !wasFlying);
                 return;
             }
 

@@ -123,6 +123,7 @@ public sealed class SightseeingAutomation
     private bool hasSeenPathRunning;
     private DateTime lastRemountAttempt = DateTime.MinValue;
     private readonly NavigationStuckDetector stuckDetector = new();
+    private readonly FallDetector fallDetector = new(); // siehe Plugin.FallDetector - erkennt Abstürze beim Zufuß-Anflug (UpdateMoving)
     private readonly FlightPathUpgrade flightUpgrade = new(); // siehe Plugin.FlightPathUpgrade (Flugverbots-Bereiche)
     private bool hasSentEmote;
     private bool didFinalApproach;
@@ -132,7 +133,7 @@ public sealed class SightseeingAutomation
     private IReadOnlyList<Plugin.SightseeingApproachWaypoint>? pendingApproachWaypoints;
     private int pendingApproachWaypointIndex;
     private bool hasLandedAtFirstApproachWaypoint;
-    private IReadOnlyList<Vector3>? pendingPostCompletionWaypoints;
+    private IReadOnlyList<Plugin.SightseeingApproachWaypoint>? pendingPostCompletionWaypoints;
     private int postCompletionWaypointIndex;
     private bool hasEnsuredExactPosition;
 
@@ -143,6 +144,23 @@ public sealed class SightseeingAutomation
     // BeginPathfind gelesen, das bei erneuten Versuchen (Steckengeblieben, nach dem Aufsteigen) für
     // GENAU DASSELBE Teilstück erneut aufgerufen wird.
     private bool currentLegAllowsFlying = true;
+
+    // Gegenwehr, falls unterwegs (z.B. beim Anflug auf einen Punkt) ein Gegner angreift - siehe
+    // UpdateDefendingSelf (dasselbe Prinzip wie HuntingLogAutomation.UpdateDefendingSelf). Sightseeing
+    // selbst plant nie einen Kampf ein, jeder Kampf hier ist also immer ungeplante Gegenwehr.
+    private bool isDefendingSelf;
+    private const float AttackRange = 3.5f;
+    private DateTime lastDefendApproachAt = DateTime.MinValue;
+    private static readonly TimeSpan DefendApproachRetryInterval = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan CombatEnsureInterval = TimeSpan.FromSeconds(2);
+    private DateTime lastCombatEnsureAt = DateTime.MinValue;
+
+    // Siehe Stop()/ForceStop() - statt MITTEN im Kampf das Kampf-Plugin abzuschalten (Charakter
+    // bliebe angeschlagen und wehrlos stehen), wird der eigentliche Stopp zurückgehalten, bis der
+    // aktuell laufende (Verteidigungs-)Kampf zu Ende ist. Gleiches Muster wie HuntingLogAutomation.
+    private bool stopRequested;
+    private DateTime stopRequestedAt;
+    private static readonly TimeSpan StopAfterCombatTimeout = TimeSpan.FromMinutes(2);
 
     public bool IsActive { get; private set; }
 
@@ -236,12 +254,39 @@ public sealed class SightseeingAutomation
         currentTargetEntry = null;
         skippedIds.Clear();
         attemptCounts.Clear();
+        isDefendingSelf = false;
+        stopRequested = false;
+        lastCombatEnsureAt = DateTime.MinValue;
         StatusText = Loc.T("Automation gestartet...", "Automation started...");
     }
 
+    /// <summary>
+    /// Wird MITTEN in einer Gegenwehr (siehe UpdateDefendingSelf) nicht sofort ausgeführt, sonst
+    /// bliebe der Charakter angeschlagen und ohne Gegenwehr stehen (das Kampf-Plugin wäre schon
+    /// abgeschaltet) - stattdessen erst gemerkt (siehe Update) und der aktuelle Kampf zu Ende
+    /// gebracht, bevor wirklich gestoppt wird. Gleiches Muster wie HuntingLogAutomation.Stop.
+    /// </summary>
     public void Stop()
     {
+        if (Plugin.Condition[ConditionFlag.InCombat])
+        {
+            if (stopRequested)
+                return;
+
+            stopRequested = true;
+            stopRequestedAt = DateTime.UtcNow;
+            StatusText = Loc.T("Beende aktuellen Kampf, dann Stopp...", "Finishing current fight, then stopping...");
+            return;
+        }
+
+        ForceStop();
+    }
+
+    private void ForceStop()
+    {
         IsActive = false;
+        isDefendingSelf = false;
+        stopRequested = false;
         state = State.Idle;
         currentTargetEntry = null;
         StopPath();
@@ -253,6 +298,7 @@ public sealed class SightseeingAutomation
 
         StopLifestream();
         Plugin.ClearNavigationTarget();
+        SetCombatMode(false, force: true);
     }
 
     public void MarkUnavailable()
@@ -272,6 +318,18 @@ public sealed class SightseeingAutomation
     public void Update(IReadOnlyList<CollectibleEntry> sightseeingInZone, IReadOnlyList<CollectibleEntry> pendingInZone)
     {
         if (!IsActive)
+            return;
+
+        // Zurückgehaltener Stopp (siehe Stop()) - sobald wirklich kein Kampf mehr läuft (oder die
+        // Notbremse StopAfterCombatTimeout greift, falls InCombat aus irgendeinem Grund hängen
+        // bleibt), jetzt tatsächlich stoppen, bevor der normale Zustandsautomat weiterläuft.
+        if (stopRequested && (!Plugin.Condition[ConditionFlag.InCombat] || DateTime.UtcNow - stopRequestedAt > StopAfterCombatTimeout))
+        {
+            ForceStop();
+            return;
+        }
+
+        if (UpdateDefendingSelf())
             return;
 
         // Nach einem Fehler kurz pausieren, dann einfach weitermachen (nie selbst abbrechen).
@@ -330,6 +388,123 @@ public sealed class SightseeingAutomation
             state = State.Idle;
             pausedUntil = DateTime.UtcNow + ErrorPauseDuration;
         }
+    }
+
+    /// <summary>
+    /// Gegenwehr, falls unterwegs (Anflug, Warten, Jumping Puzzle, ...) ein Gegner angreift - Sightseeing
+    /// plant selbst nie einen Kampf ein, jeder Kampf hier ist also ungeplante Gegenwehr. Hält den
+    /// normalen Zustandsautomaten an, stoppt den Laufweg, visiert den Angreifer an (bei Bedarf
+    /// hingelaufen) und hält das Kampf-Plugin im Manual-Modus, bis kein Kampf mehr läuft - danach wird
+    /// das aktuelle Ziel komplett neu angesteuert (robuster, als den genauen unterbrochenen
+    /// Zwischenschritt der 8 möglichen Zustände zu rekonstruieren). Gibt true zurück, solange
+    /// verteidigt wird (Aufrufer überspringt dann den Zustandsautomaten für diesen Frame). Gleiches
+    /// Prinzip wie HuntingLogAutomation.UpdateDefendingSelf.
+    /// </summary>
+    private bool UpdateDefendingSelf()
+    {
+        // NUR zwischen zwei Punkten (State.Idle) - Nutzeranforderung: "erst den Sightseeing Punkt
+        // erledigen, dann die Infight Gegner töten, dann zum nächsten Punkt". Ein Kampf während des
+        // Hinlaufens/Wartens auf Freischaltung/Jumping Puzzle unterbricht den aktuellen Punkt also
+        // bewusst NICHT mehr (anders als bei HuntingLogAutomation, wo jede Unterbrechung sofort
+        // pariert wird) - erst wenn der Punkt fertig ist und wieder Idle erreicht wird, wird verteidigt.
+        if (state != State.Idle)
+        {
+            isDefendingSelf = false;
+            return false;
+        }
+
+        if (Plugin.Condition[ConditionFlag.InCombat])
+        {
+            var playerPos = Plugin.ObjectTable.LocalPlayer?.Position ?? currentTargetPosition;
+            var attacker = Plugin.FindNearestAttacker(playerPos);
+            if (attacker != null || (isDefendingSelf && Plugin.HasLiveTarget()))
+            {
+                if (!isDefendingSelf)
+                {
+                    Plugin.Log.Info($"[SightseeingAutomation] Angegriffen im Zustand {state} (von {attacker?.Name}) - wehre mich, bevor es weitergeht.");
+                    isDefendingSelf = true;
+                    StopPath();
+                }
+
+                if (!Plugin.HasLiveTarget() && attacker != null)
+                    Plugin.SetTarget(attacker);
+
+                Plugin.TryDismount();
+                EnsureCombatMode();
+
+                // Das Kampf-Plugin bewegt den Charakter nicht selbst - steht das Ziel außer
+                // Reichweite (z.B. Fernkämpfer-Gegner, Nahkampf-Klasse), gedrosselt hinlaufen.
+                if (Plugin.TargetManager.Target is { } target
+                    && Vector3.Distance(playerPos, target.Position) > AttackRange
+                    && !pathIsRunning.InvokeFunc() && !Plugin.IsVnavPathfindInProgress()
+                    && DateTime.UtcNow - lastDefendApproachAt > DefendApproachRetryInterval)
+                {
+                    lastDefendApproachAt = DateTime.UtcNow;
+                    pathfindAndMoveCloseTo.InvokeFunc(target.Position, false, AttackRange);
+                }
+
+                StatusText = Loc.T($"Wehre mich gegen: {Plugin.TargetManager.Target?.Name}...", $"Defending against: {Plugin.TargetManager.Target?.Name}...");
+                return true;
+            }
+        }
+
+        if (!isDefendingSelf)
+            return false;
+
+        isDefendingSelf = false;
+        StopPath();
+
+        // Anders als bei HuntingLogAutomation (wo ein Kampf der eigentliche Zweck jedes Ziels ist und
+        // das Kampf-Plugin daher zwischen mehreren Zielen aktiv bleibt) ist hier JEDER Kampf reine,
+        // ungeplante Gegenwehr - das Kampf-Plugin also sofort wieder ausschalten, sobald er vorbei ist,
+        // statt bis zum nächsten Ziel-Wechsel eingeschaltet zu lassen.
+        SetCombatMode(false);
+        Plugin.Log.Info($"[SightseeingAutomation] Kampf vorbei - steuere aktuelles Ziel neu an ({currentTargetEntry?.Name}).");
+
+        // Unabhängig vom unterbrochenen Zustand: das aktuelle Ziel komplett neu ansteuern (robuster,
+        // als den genauen Zwischenschritt zu rekonstruieren, aus dem heraus unterbrochen wurde) - ohne
+        // dass die Unterbrechung als Fehlversuch zählt (siehe MaxAttemptsPerTarget).
+        if (currentTargetEntry is { } entry)
+        {
+            attemptCounts[entry.Id] = Math.Max(0, attemptCounts.GetValueOrDefault(entry.Id, 0) - 1);
+            StartMovingTo(entry);
+        }
+        else
+        {
+            state = State.Idle;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Solange gekämpft wird, jeden Frame aufrufen - schaltet das Kampf-Plugin (gedrosselt) wieder in
+    /// den Manual-Modus, falls es laut IPC gerade NICHT aktiv ist. Gleiches Muster wie
+    /// HuntingLogAutomation.EnsureCombatMode (identische Begründung).
+    /// </summary>
+    private void EnsureCombatMode()
+    {
+        if (DateTime.UtcNow - lastCombatEnsureAt < CombatEnsureInterval)
+            return;
+
+        lastCombatEnsureAt = DateTime.UtcNow;
+        if (Plugin.CombatPlugin.IsCombatModeActive())
+            return;
+
+        Plugin.Log.Info($"[SightseeingAutomation] {CombatPluginBridge.DisplayName(CombatPluginBridge.GetEffective() ?? CombatPluginKind.RotationSolver)} ist mitten im Kampf nicht aktiv - schalte den Kampfmodus wieder ein.");
+        SetCombatMode(true);
+    }
+
+    /// <summary>Manual-Modus statt Auto - siehe HuntingLogAutomation.SetCombatMode (identische Begründung).</summary>
+    private void SetCombatMode(bool enabled, bool force = false)
+    {
+        if (!enabled && !force && Plugin.Condition[ConditionFlag.InCombat])
+        {
+            Plugin.Log.Info("[SightseeingAutomation] Ausschalten des Kampfmodus zurückgehalten - noch im Kampf.");
+            return;
+        }
+
+        Plugin.CombatPlugin.SetCombatMode(enabled);
     }
 
     // Siehe Update - Pause nach einem Fehler, und wann übersprungene Punkte erneut versucht werden.
@@ -453,6 +628,7 @@ public sealed class SightseeingAutomation
         currentPuzzle = Plugin.TryGetSightseeingJumpingPuzzle(entry.Id, out var puzzle) ? puzzle : null;
         puzzleAttempts = 0;
         puzzleStepRetries = 0;
+        dismountStuckSince = null;
 
         // Sightseeing-Punkte einer geteilten Hauptstadt können in einem ANDEREN Bezirk liegen als
         // dem, in dem man gerade steht (siehe siblingTerritories-Filter in CompactOverlayWindow, z.B.
@@ -729,9 +905,9 @@ public sealed class SightseeingAutomation
         }
     }
 
-    private void BeginPathfind()
+    private void BeginPathfind(bool forceGround = false)
     {
-        if (!TryBeginPathfindAccepted())
+        if (!TryBeginPathfindAccepted(forceGround))
         {
             SkipCurrent(Loc.T("vnavmesh lehnt Laufweg ab", "vnavmesh rejected the path"));
             return;
@@ -741,6 +917,7 @@ public sealed class SightseeingAutomation
         stateEnteredAt = DateTime.UtcNow;
         hasSeenPathRunning = false;
         stuckDetector.Reset();
+        fallDetector.Reset();
         StatusText = Loc.T($"Laufe zu: {currentTargetEntry?.Name}...", $"Walking to: {currentTargetEntry?.Name}...");
     }
 
@@ -783,7 +960,13 @@ public sealed class SightseeingAutomation
     }
 
     /// <summary>Wie BeginPathfind, gibt aber zusätzlich zurück, ob vnavmesh den Laufweg angenommen hat (statt bei Ablehnung SkipCurrent aufzurufen) - für Aufrufer, die bei Ablehnung selbst einen Fallback haben (siehe BeginNextApproachWaypoint).</summary>
-    private bool TryBeginPathfindAccepted()
+    /// <param name="forceGround">
+    /// Fliegen für diesen Versuch gar nicht erst probieren - für den Steckengeblieben-Retry (siehe
+    /// UpdateMoving): steckte der Charakter beim Fliegen fest, ist das oft ein Gebäude, gegen das
+    /// vnavmeshs Flug-Beeline läuft (Nutzer-Report) - ein Fußweg findet dort eher den Ausgang. Sobald
+    /// die verbleibende Strecke wieder groß genug ist, plant FlightPathUpgrade von selbst auf Fliegen um.
+    /// </param>
+    private bool TryBeginPathfindAccepted(bool forceGround = false)
     {
         // Bewusst KEIN erzwungenes Abmounten mehr hier, auch wenn currentLegAllowsFlying false ist -
         // der Charakter soll während des Anflugs (auch für Teilstücke, die nicht fliegend
@@ -793,7 +976,7 @@ public sealed class SightseeingAutomation
         var mounted = Plugin.Condition[ConditionFlag.Mounted];
         var accepted = false;
         var flyingAccepted = false;
-        if (currentLegAllowsFlying && mounted && Plugin.CanFly)
+        if (!forceGround && currentLegAllowsFlying && mounted && Plugin.CanFly)
             accepted = flyingAccepted = pathfindAndMoveCloseTo.InvokeFunc(currentTargetPosition, true, ArrivalTolerance);
 
         if (!accepted)
@@ -852,12 +1035,38 @@ public sealed class SightseeingAutomation
             }
 
             // Steckengeblieben (z.B. gegen eine Wand) - Pfad neu anfordern statt untätig zu warten.
+            // War der festgesteckte Weg fliegend, steckt meist ein Gebäude im Weg (vnavmeshs Flug-
+            // Beeline findet dessen Ausgang nicht) - dann diesmal zu Fuß probieren (siehe
+            // TryBeginPathfindAccepted-Kommentar).
             if (stuckDetector.CheckStuck(playerPos))
             {
-                Plugin.Log.Info($"[SightseeingAutomation] UpdateMoving({currentTargetEntry.Name}): scheinbar steckengeblieben - Laufweg wird neu angefordert.");
+                var wasFlying = flightUpgrade.IsFlying;
+                Plugin.Log.Info($"[SightseeingAutomation] UpdateMoving({currentTargetEntry.Name}): scheinbar steckengeblieben{(wasFlying ? " (beim Fliegen, evtl. Gebäude im Weg)" : "")} - Laufweg wird neu angefordert.");
                 StopPath();
-                BeginPathfind();
+                BeginPathfind(forceGround: wasFlying);
                 return;
+            }
+
+            // Von einer Klippe/einem Grat gefallen (nur beritten/fliegend legitimer schneller
+            // Höhenverlust, siehe FallDetector) - Laufweg neu anfordern statt von ganz unten sinnlos
+            // weiterzulaufen (Nutzeranforderung: "Wenn man runterfällt bitte erneut versuchen").
+            // currentPuzzle hat dafür bereits eine eigene, feinere Absturzerkennung (siehe
+            // UpdateJumpingPuzzle), deshalb hier nur außerhalb davon relevant.
+            if (currentPuzzle == null && !Plugin.Condition[ConditionFlag.Mounted])
+            {
+                if (fallDetector.CheckFell(playerPos.Y))
+                {
+                    Plugin.Log.Info($"[SightseeingAutomation] UpdateMoving({currentTargetEntry.Name}): Absturz erkannt - Laufweg wird neu angefordert.");
+                    StopPath();
+                    BeginPathfind();
+                    return;
+                }
+            }
+            else
+            {
+                // Beritten/fliegend (legitimer schneller Höhenverlust) oder im Jumping-Puzzle (eigene
+                // Absturzerkennung) - keinen veralteten Höhenwert für den nächsten Zufuß-Abschnitt stehen lassen.
+                fallDetector.Reset();
             }
 
             if (DateTime.UtcNow - stateEnteredAt > StepMaxDuration)
@@ -892,6 +1101,7 @@ public sealed class SightseeingAutomation
                         hasSeenPathRunning = false;
                         stateEnteredAt = DateTime.UtcNow;
                         stuckDetector.Reset();
+                        fallDetector.Reset();
                         StatusText = Loc.T(
                             $"Lande am Zwischenstopp: {currentTargetEntry.Name}...",
                             $"Landing at the waypoint: {currentTargetEntry.Name}...");
@@ -913,6 +1123,7 @@ public sealed class SightseeingAutomation
                     hasSeenPathRunning = false;
                     stateEnteredAt = DateTime.UtcNow;
                     stuckDetector.Reset();
+                    fallDetector.Reset();
                     StatusText = Loc.T(
                         $"Laufe zum nächsten Zwischenstopp: {currentTargetEntry.Name}...",
                         $"Walking to the next waypoint: {currentTargetEntry.Name}...");
@@ -939,6 +1150,7 @@ public sealed class SightseeingAutomation
                     hasSeenPathRunning = false;
                     stateEnteredAt = DateTime.UtcNow;
                     stuckDetector.Reset();
+                    fallDetector.Reset();
                     StatusText = Loc.T(
                         $"Laufe genau auf den Punkt: {currentTargetEntry.Name}...",
                         $"Walking precisely onto the point: {currentTargetEntry.Name}...");
@@ -985,11 +1197,32 @@ public sealed class SightseeingAutomation
         // AetheryteAutomation.UpdateInteracting (siehe DismountSettleDelay-Kommentar).
         if (Plugin.Condition[ConditionFlag.Mounted])
         {
+            // Manche Stellen lehnen das Abmounten offenbar dauerhaft ab (siehe DismountStuckTimeout-
+            // Kommentar bei den Jumping-Puzzle-Feldern) - nach demselben Timeout erst wieder höher
+            // fliegen und den Anflug (BeginFinalApproach) von dort neu versuchen, statt endlos an
+            // derselben Stelle weiter TryDismount() aufzurufen.
+            dismountStuckSince ??= DateTime.UtcNow;
+            if (DateTime.UtcNow - dismountStuckSince.Value > DismountStuckTimeout)
+            {
+                Plugin.Log.Info($"[SightseeingAutomation] UpdateWaitingForUnlock({currentTargetEntry.Name}): Abmounten klappt seit {DismountStuckTimeout.TotalSeconds:F0}s nicht - fliege höher und versuche erneut.");
+                dismountStuckSince = null;
+                var playerPos = Plugin.ObjectTable.LocalPlayer?.Position ?? currentTargetPosition;
+                var ascendTarget = playerPos + new Vector3(0f, DismountRetryAscendHeight, 0f);
+                pathfindAndMoveCloseTo.InvokeFunc(ascendTarget, true, PuzzleFlyToStartTolerance);
+                didFinalApproach = false;
+                state = State.MovingTo;
+                hasSeenPathRunning = false;
+                stateEnteredAt = DateTime.UtcNow;
+                stuckDetector.Reset();
+                return;
+            }
+
             Plugin.TryDismount();
             dismountedAt = null;
             return;
         }
 
+        dismountStuckSince = null;
         dismountedAt ??= DateTime.UtcNow;
         if (DateTime.UtcNow - dismountedAt.Value < DismountSettleDelay)
             return;
@@ -1174,7 +1407,9 @@ public sealed class SightseeingAutomation
             return;
         }
 
-        currentTargetPosition = pendingPostCompletionWaypoints[postCompletionWaypointIndex];
+        var waypoint = pendingPostCompletionWaypoints[postCompletionWaypointIndex];
+        currentTargetPosition = waypoint.Position;
+        currentLegAllowsFlying = waypoint.AllowFlying;
 
         state = State.WalkingOut;
         stateEnteredAt = DateTime.UtcNow;
@@ -1186,16 +1421,36 @@ public sealed class SightseeingAutomation
             $"Walking back to the exit: {currentTargetEntry?.Name}...");
 
         // Erster Versuch direkt hier - weitere folgen ggf. über UpdateWalkingOut (siehe dort und
-        // PathRetryInterval-Kommentar). Nie fliegend, immer zu Fuß.
+        // PathRetryInterval-Kommentar).
         TryRequestWalkOutPath();
     }
 
-    /// <summary>Immer zu Fuß (nie fliegend) - sicherheitshalber vor jedem Versuch abmounten.</summary>
+    /// <summary>
+    /// Je Zwischenstopp zu Fuß (currentLegAllowsFlying=false, sicherheitshalber vor jedem Versuch
+    /// abgemountet) oder fliegend (true) - für Letzteres wird bei Bedarf zuerst wieder aufgemountet;
+    /// bis das geschehen ist, schlägt der Flugversuch hier harmlos fehl und wird beim nächsten Tick
+    /// (siehe PathRetryInterval) automatisch erneut versucht.
+    /// </summary>
     private void TryRequestWalkOutPath()
     {
         lastPathRetryAt = DateTime.UtcNow;
-        Plugin.TryDismount();
-        pathfindAndMoveCloseTo.InvokeFunc(currentTargetPosition, false, ArrivalTolerance);
+
+        if (!currentLegAllowsFlying)
+        {
+            Plugin.TryDismount();
+            pathfindAndMoveCloseTo.InvokeFunc(currentTargetPosition, false, ArrivalTolerance);
+            return;
+        }
+
+        if (!Plugin.Condition[ConditionFlag.Mounted])
+        {
+            Plugin.TryRequestAetheryteMount();
+            return;
+        }
+
+        var accepted = Plugin.CanFly && pathfindAndMoveCloseTo.InvokeFunc(currentTargetPosition, true, ArrivalTolerance);
+        if (!accepted)
+            pathfindAndMoveCloseTo.InvokeFunc(currentTargetPosition, false, ArrivalTolerance);
     }
 
     // Zwischen zwei erneuten Pathfind-Versuchen, falls der erste Aufruf noch keinen sichtbaren
@@ -1308,6 +1563,14 @@ public sealed class SightseeingAutomation
         ReturningToStepStart,
         FinalPrecisePosition,
         FlyingToStart,
+
+        // Siehe SightseeingPuzzleStep.Fly-Kommentar: ein einzelner Schritt wird fliegend statt zu
+        // Fuß/springend zurückgelegt - erst aufmounten (FlyingStepMounting), dann fliegend zum
+        // Schritt-Ziel (FlyingStepMoving), dann wieder abmounten (FlyingStepDismounting), bevor der
+        // nächste (normalerweise wieder zu Fuß laufende) Schritt beginnt.
+        FlyingStepMounting,
+        FlyingStepMoving,
+        FlyingStepDismounting,
     }
 
     private const float PuzzleFlyToStartTolerance = 0.1f;
@@ -1395,6 +1658,15 @@ public sealed class SightseeingAutomation
     private int puzzleAttempts;
     private DateTime puzzlePhaseStartedAt;
     private DateTime lastPuzzleDismountAttempt = DateTime.MinValue;
+
+    // Manche Stellen (z.B. zu wenig Abstand über dem Boden/eine niedrige Decke) lehnen das Abmounten
+    // offenbar dauerhaft ab (Condition[Mounted] bleibt trotz wiederholtem TryDismount() true) - nach
+    // DismountStuckTimeout wird dann angenommen, dass hier gerade nicht abgemountet werden kann, statt
+    // endlos an derselben Stelle weiter zu versuchen: stattdessen etwas höher fliegen und von dort neu
+    // versuchen (Nutzerwunsch).
+    private DateTime? dismountStuckSince;
+    private static readonly TimeSpan DismountStuckTimeout = TimeSpan.FromSeconds(6);
+    private const float DismountRetryAscendHeight = 10f;
     private bool puzzleJumpSent;
     private bool puzzleGoToStartRequested;
     private float puzzleStepFromY;
@@ -1476,6 +1748,20 @@ public sealed class SightseeingAutomation
                 // Gesprungen wird zu Fuß.
                 if (Plugin.Condition[ConditionFlag.Mounted])
                 {
+                    dismountStuckSince ??= DateTime.UtcNow;
+                    if (DateTime.UtcNow - dismountStuckSince.Value > DismountStuckTimeout)
+                    {
+                        // Abmounten klappt hier offenbar nicht (z.B. zu wenig Abstand über dem Boden/
+                        // eine niedrige Decke) - statt endlos an derselben Stelle weiter zu versuchen,
+                        // erst wieder etwas höher fliegen und von dort neu ansetzen.
+                        Plugin.Log.Info($"[SightseeingAutomation] Jumping Puzzle {currentTargetEntry?.Name}: Abmounten klappt seit {DismountStuckTimeout.TotalSeconds:F0}s nicht - fliege höher und versuche erneut.");
+                        dismountStuckSince = null;
+                        var ascendTarget = playerPos + new Vector3(0f, DismountRetryAscendHeight, 0f);
+                        pathfindAndMoveCloseTo.InvokeFunc(ascendTarget, true, PuzzleFlyToStartTolerance);
+                        SetPuzzlePhase(PuzzlePhase.FlyingToStart);
+                        return;
+                    }
+
                     if (DateTime.UtcNow - lastPuzzleDismountAttempt > TimeSpan.FromSeconds(1))
                     {
                         lastPuzzleDismountAttempt = DateTime.UtcNow;
@@ -1485,6 +1771,8 @@ public sealed class SightseeingAutomation
                     puzzlePhaseStartedAt = DateTime.UtcNow;
                     return;
                 }
+
+                dismountStuckSince = null;
 
                 if (sinceStart < DismountSettleDelay || Plugin.Condition[ConditionFlag.Jumping])
                     return;
@@ -1511,6 +1799,78 @@ public sealed class SightseeingAutomation
                 RestorePathTolerance();
                 SetPuzzlePhase(PuzzlePhase.Dismounting);
                 return;
+
+            case PuzzlePhase.FlyingStepMounting:
+            {
+                var step = currentPuzzle.Steps[puzzleStepIndex];
+                if (Plugin.Condition[ConditionFlag.Mounted])
+                {
+                    var tolerance = step.Exact ? PuzzleFinalPreciseTolerance : PuzzleFlyToStartTolerance;
+                    var accepted = Plugin.CanFly && pathfindAndMoveCloseTo.InvokeFunc(step.Target, true, tolerance);
+                    if (!accepted)
+                        accepted = pathfindAndMoveCloseTo.InvokeFunc(step.Target, false, tolerance);
+                    if (!accepted)
+                        moveToPath.InvokeAction(new List<Vector3> { step.Target }, Plugin.CanFly);
+
+                    SetPuzzlePhase(PuzzlePhase.FlyingStepMoving);
+                    StatusText = Loc.T(
+                        $"Jumping Puzzle: fliege zu Schritt {puzzleStepIndex + 1}/{currentPuzzle.Steps.Length}...",
+                        $"Jumping puzzle: flying to step {puzzleStepIndex + 1}/{currentPuzzle.Steps.Length}...");
+                    return;
+                }
+
+                if (sinceStart > MountWaitTimeout)
+                    FailPuzzleAttempt($"Konnte für Schritt {puzzleStepIndex + 1} nicht aufsteigen");
+                return;
+            }
+
+            case PuzzlePhase.FlyingStepMoving:
+            {
+                if (Plugin.IsVnavPathfindInProgress() || pathIsRunning.InvokeFunc() || sinceStart < TimeSpan.FromSeconds(0.5))
+                {
+                    if (sinceStart < PuzzleStepTimeout)
+                        return;
+                    StopPath();
+                }
+
+                var step = currentPuzzle.Steps[puzzleStepIndex];
+                if (!IsAtPuzzlePoint(playerPos, step.Target))
+                {
+                    FailPuzzleAttempt($"Schritt {puzzleStepIndex + 1} (Flug) nicht erreicht");
+                    return;
+                }
+
+                SetPuzzlePhase(PuzzlePhase.FlyingStepDismounting);
+                return;
+            }
+
+            case PuzzlePhase.FlyingStepDismounting:
+            {
+                if (Plugin.Condition[ConditionFlag.Mounted])
+                {
+                    if (DateTime.UtcNow - lastPuzzleDismountAttempt > TimeSpan.FromSeconds(1))
+                    {
+                        lastPuzzleDismountAttempt = DateTime.UtcNow;
+                        Plugin.TryDismount();
+                    }
+                    return;
+                }
+
+                if (sinceStart < DismountSettleDelay || Plugin.Condition[ConditionFlag.Jumping])
+                    return;
+
+                var step = currentPuzzle.Steps[puzzleStepIndex];
+                puzzleStepFromY = playerPos.Y;
+                puzzleStepRetries = 0;
+                if (puzzleStepIndex + 1 < currentPuzzle.Steps.Length)
+                {
+                    BeginPuzzleStep(puzzleStepIndex + 1);
+                    return;
+                }
+
+                BeginFinalPrecisePosition(currentPuzzle.ExactStand ?? step.Target);
+                return;
+            }
 
             case PuzzlePhase.GoingToStart:
             {
@@ -1590,6 +1950,16 @@ public sealed class SightseeingAutomation
 
                 puzzleStepFromY = playerPos.Y;
 
+                if (step.Fly)
+                {
+                    Plugin.TryRequestAetheryteMount();
+                    SetPuzzlePhase(PuzzlePhase.FlyingStepMounting);
+                    StatusText = Loc.T(
+                        $"Jumping Puzzle: steige auf für Schritt {puzzleStepIndex + 1}/{currentPuzzle.Steps.Length}...",
+                        $"Jumping puzzle: mounting up for step {puzzleStepIndex + 1}/{currentPuzzle.Steps.Length}...");
+                    return;
+                }
+
                 // Folgt ein Sprung mit Anlauf: durchgehend über diesen Punkt hinaus zum Sprungziel
                 // laufen, abgesprungen wird beim Überqueren (siehe StepMoving).
                 // Auch über mehrere Punkte hintereinander (Kette aus RunUp-Schritten).
@@ -1657,7 +2027,7 @@ public sealed class SightseeingAutomation
                 }
 
                 var step = currentPuzzle.Steps[puzzleStepIndex];
-                if (step.Jump && !step.RunUp && !puzzleJumpSent && sinceStart >= PuzzleJumpDelay)
+                if (step.Jump && !step.RunUp && !puzzleJumpSent && (step.JumpFromStandstill || sinceStart >= PuzzleJumpDelay))
                 {
                     puzzleJumpSent = true;
                     Plugin.TryJump();

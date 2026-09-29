@@ -215,6 +215,22 @@ public sealed class AetheryteAutomation
     private DateTime? districtTravelFinishedAt;
     private readonly HashSet<uint> skippedIds = new();
 
+    // Wie lange Path.IsRunning ununterbrochen false bleiben muss, bevor vor dem Interagieren
+    // tatsächlich als "steht still" gilt - siehe UpdateInteracting-Kommentar (ein einzelner
+    // StopPath()-Aufruf reichte laut Diagnose-Log nicht, der Laufauftrag lief nach wenigen Frames
+    // von selbst weiter).
+    private static readonly TimeSpan InteractPathSettleDuration = TimeSpan.FromMilliseconds(500);
+    private DateTime? interactPathSettleConfirmedSince;
+
+    // Diagnose für den Nutzer-Report "interagiert, 1 Sekunde später läuft er gegen den Kristall und
+    // bricht ab" (trotz StopPath() vor dem Interact weiterhin aufgetreten) - loggt für kurze Zeit
+    // NACH dem Interact-Aufruf jeden Frame Position + relevante Condition-Flags, um zu sehen, WER die
+    // Bewegung nach dem Interagieren tatsächlich auslöst (Spiel-Client selbst? vnavmesh doch noch
+    // aktiv? eine andere Automation?), statt weiter ins Blaue zu raten.
+    private DateTime? postInteractDiagnosticStartedAt;
+    private Vector3? postInteractDiagnosticLastPos;
+    private static readonly TimeSpan PostInteractDiagnosticDuration = TimeSpan.FromSeconds(3);
+
     // Manueller Bezirks-Zugang (siehe Plugin.ManualDistrictEntryPoints/TryTravelToDistrict).
     private ManualEntryPhase manualEntryPhase;
     private DateTime manualEntryPhaseStartedAt;
@@ -514,20 +530,22 @@ public sealed class AetheryteAutomation
 
     private void StartMovingTo(CollectibleEntry next, Vector3 targetPosition)
     {
+        // VOR dem Versuchszähler prüfen (Nutzer-Report: Automationsstart während eines laufenden
+        // vnavmesh-Meshbaus überspringt das Ziel sofort als "zu oft versucht") - siehe
+        // ChocobokeepAutomation.StartMovingTo-Kommentar (identisches Problem/dieselbe Lösung).
+        var navReady = navmeshIsReady.InvokeFunc();
+        if (!navReady)
+        {
+            StatusText = Loc.T("Warte auf vnavmesh-Navmesh für diese Zone...", "Waiting for vnavmesh's navmesh for this zone...");
+            return;
+        }
+
         var attempts = attemptCounts.GetValueOrDefault(next.Id, 0) + 1;
         attemptCounts[next.Id] = attempts;
         if (attempts > MaxAttemptsPerAetheryte)
         {
             skippedIds.Add(next.Id);
             StatusText = Loc.T($"Übersprungen (zu oft versucht): {next.Name}", $"Skipped (too many attempts): {next.Name}");
-            return;
-        }
-
-        var navReady = navmeshIsReady.InvokeFunc();
-        Plugin.Log.Info($"[AetheryteAutomation] StartMovingTo({next.Name}): navmeshIsReady={navReady}");
-        if (!navReady)
-        {
-            StatusText = Loc.T("Warte auf vnavmesh-Navmesh für diese Zone...", "Waiting for vnavmesh's navmesh for this zone...");
             return;
         }
 
@@ -613,13 +631,19 @@ public sealed class AetheryteAutomation
     /// Mount am Boden geritten. Ohne Mount (aus, oder das Aufsteigen hat nicht geklappt) ganz normal
     /// zu Fuß wie bisher (siehe SprintDisableDistance/TryUseSprint in UpdateMoving).
     /// </summary>
-    private void BeginPathfind()
+    /// <param name="forceGround">
+    /// Fliegen für diesen Versuch gar nicht erst probieren - für den Steckengeblieben-Retry (siehe
+    /// UpdateMoving): steckte der Charakter beim Fliegen fest, ist das oft ein Gebäude, gegen das
+    /// vnavmeshs Flug-Beeline läuft (Nutzer-Report). Ein Fußweg findet dort eher den Ausgang; sobald
+    /// die verbleibende Strecke wieder groß genug ist, plant FlightPathUpgrade von selbst auf Fliegen um.
+    /// </param>
+    private void BeginPathfind(bool forceGround = false)
     {
         var mounted = Plugin.Condition[ConditionFlag.Mounted];
         var accepted = false;
         var flyingAccepted = false;
 
-        if (mounted && Plugin.CanFly)
+        if (!forceGround && mounted && Plugin.CanFly)
         {
             accepted = flyingAccepted = pathfindAndMoveCloseTo.InvokeFunc(currentTargetPosition, true, currentArrivalTolerance);
             Plugin.Log.Info($"[AetheryteAutomation] BeginPathfind({currentTargetName}): pathfindAndMoveCloseTo(fly=true, tolerance={currentArrivalTolerance}) accepted={accepted}");
@@ -1022,11 +1046,20 @@ public sealed class AetheryteAutomation
             // weiter) - NICHT dasselbe wie "Distanz zum Ziel nimmt nicht ab" (siehe Kommentar unten,
             // das wäre auf verwinkelten Wegen ein Fehlalarm), sondern die eigene POSITION hat sich
             // seit Sekunden gar nicht mehr verändert. Pfad neu anfordern statt untätig zu warten.
-            if (stuckDetector.CheckStuck(movingPlayerPos))
+            // War der festgesteckte Weg fliegend, steckt meist ein Gebäude im Weg (vnavmeshs Flug-
+            // Beeline findet dessen Ausgang nicht) - dann diesmal zu Fuß probieren (siehe
+            // BeginPathfind-Kommentar). NICHT während eines Casts/einer Animationssperre neu
+            // anfordern (Nutzer-Report: "rennt mitten im Cast gegen den Kristall") - der Charakter
+            // steht dann bewusst still (z.B. gerade attunierend/interagierend, siehe
+            // UpdateInteracting), kein echtes Steckenbleiben. Ein neuer Laufauftrag würde ihn sonst
+            // buchstäblich mitten in den laufenden Cast hinein in den (kollidierenden) Kristall-Sockel
+            // schieben und ihn dadurch abbrechen.
+            if (!Plugin.Condition[ConditionFlag.Casting] && !Plugin.IsAnimationLocked() && stuckDetector.CheckStuck(movingPlayerPos))
             {
-                Plugin.Log.Info($"[AetheryteAutomation] UpdateMoving(#{currentTargetId}): scheinbar steckengeblieben - Laufweg wird neu angefordert.");
+                var wasFlying = flightUpgrade.IsFlying;
+                Plugin.Log.Info($"[AetheryteAutomation] UpdateMoving(#{currentTargetId}): scheinbar steckengeblieben{(wasFlying ? " (beim Fliegen, evtl. Gebäude im Weg)" : "")} - Laufweg wird neu angefordert.");
                 StopPath();
-                BeginPathfind();
+                BeginPathfind(forceGround: wasFlying);
                 return;
             }
 
@@ -1060,6 +1093,7 @@ public sealed class AetheryteAutomation
                 stateEnteredAt = DateTime.UtcNow;
                 hasInteractedThisCycle = false;
                 interactObjectNotFoundSince = null;
+                interactPathSettleConfirmedSince = null;
                 StatusText = Loc.T("Interagiere...", "Interacting...");
             }
             else
@@ -1248,6 +1282,26 @@ public sealed class AetheryteAutomation
 
         if (!hasInteractedThisCycle)
         {
+            // Per Diagnose-Log bestätigt: ein einzelner StopPath()-Aufruf reicht NICHT - der zuvor
+            // als "steckengeblieben" abgebrochene enge Laufauftrag lief nach 4-5 Frames von selbst
+            // wieder weiter (Path.IsRunning wechselte eigenständig zurück auf true) und schob den
+            // Charakter noch während des Interagierens in den Kristall, was den kurzen Entdecken-Cast
+            // abbrach (Nutzer-Report: "interagiert... 1 Sekunde später läuft er gegen den Kristall und
+            // bricht ab"). Deshalb jetzt: JEDEN Frame erneut stoppen UND eine kurze Zeit lang
+            // bestätigt bekommen, dass wirklich nichts mehr läuft, bevor überhaupt Ziel gesetzt/
+            // interagiert wird - läuft es währenddessen doch wieder an, fängt die Bestätigung neu an.
+            StopPath();
+
+            if (pathIsRunning.InvokeFunc())
+            {
+                interactPathSettleConfirmedSince = null;
+                return;
+            }
+
+            interactPathSettleConfirmedSince ??= DateTime.UtcNow;
+            if (DateTime.UtcNow - interactPathSettleConfirmedSince.Value < InteractPathSettleDuration)
+                return;
+
             // Interact braucht das Objekt als aktuelles Ziel - das muss erst einen Frame lang
             // angewendet worden sein, bevor der eigentliche Interact-Aufruf greift.
             if (!Plugin.IsCurrentTarget(gameObject))
@@ -1259,8 +1313,31 @@ public sealed class AetheryteAutomation
             Plugin.InteractWithGameObject(gameObject);
             hasInteractedThisCycle = true;
             stateEnteredAt = DateTime.UtcNow;
+            postInteractDiagnosticStartedAt = DateTime.UtcNow;
+            postInteractDiagnosticLastPos = Plugin.ObjectTable.LocalPlayer?.Position;
             Plugin.Log.Info($"[AetheryteAutomation] UpdateInteracting(#{currentTargetId}): interagiert mit BaseId={gameObject.BaseId} @ {gameObject.Position}, warte auf Freischaltung...");
             return;
+        }
+
+        // Siehe postInteractDiagnosticStartedAt-Kommentar - jeden Frame für kurze Zeit NACH dem
+        // Interact loggen, was mit der Position passiert und welche Condition-Flags aktiv sind.
+        if (postInteractDiagnosticStartedAt is { } diagStart)
+        {
+            if (DateTime.UtcNow - diagStart < PostInteractDiagnosticDuration)
+            {
+                var diagPos = Plugin.ObjectTable.LocalPlayer?.Position ?? Vector3.Zero;
+                var movedSinceLastFrame = postInteractDiagnosticLastPos.HasValue ? Vector3.Distance(postInteractDiagnosticLastPos.Value, diagPos) : 0f;
+                postInteractDiagnosticLastPos = diagPos;
+                Plugin.Log.Info($"[AetheryteAutomation] PostInteractDiag(#{currentTargetId}): pos={diagPos}, movedSinceLastFrame={movedSinceLastFrame:F4}, " +
+                                 $"distToObject={Vector3.Distance(diagPos, gameObject.Position):F3}, Mounted={Plugin.Condition[ConditionFlag.Mounted]}, " +
+                                 $"Casting={Plugin.Condition[ConditionFlag.Casting]}, OccupiedInEvent={Plugin.Condition[ConditionFlag.OccupiedInEvent]}, " +
+                                 $"InCombat={Plugin.Condition[ConditionFlag.InCombat]}, BetweenAreas={Plugin.Condition[ConditionFlag.BetweenAreas]}, " +
+                                 $"IsAnimationLocked={Plugin.IsAnimationLocked()}, pathIsRunning={pathIsRunning.InvokeFunc()}, unlocked={Plugin.IsAetheryteUnlocked(currentTargetId.Value)}");
+            }
+            else
+            {
+                postInteractDiagnosticStartedAt = null;
+            }
         }
 
         // Das Entdecken eines Aetheryten spielt einen kurzen Cast ab, bevor er wirklich

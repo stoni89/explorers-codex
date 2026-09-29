@@ -26,6 +26,19 @@ public sealed class AetherCurrentAutomation
         Mounting,
         MovingTo,
         Interacting,
+        JumpRoute,
+    }
+
+    // Manche Ätherströmungen sind nur über einen kurzen Sprung erreichbar (z.B. "The Dravanian
+    // Forelands (Loth ast Gnath past second door)", siehe Plugin.AetherCurrentJumpRoutes) - State.
+    // MovingTo läuft dafür zuerst ganz normal zum Startpunkt (Route.Start), erst DANACH übernimmt
+    // dieser Zustand: abmounten, zum Absprungpunkt laufen+springen, dann normal zur echten Position
+    // (entry.WorldPosition) weiter über BeginFinalApproach.
+    private enum JumpPhase
+    {
+        Dismounting,
+        WalkingToRunUp,
+        RunningToJump,
     }
 
     private static readonly TimeSpan MountWaitTimeout = TimeSpan.FromSeconds(6);
@@ -35,6 +48,14 @@ public sealed class AetherCurrentAutomation
     // AetheryteAutomation.InteractDistance, um trotz ungenauer Community-Koordinaten trotzdem noch
     // in den (unbekannten, vermutlich mehrere Yalm großen) Entdeckungsradius zu kommen.
     private const float ArrivalTolerance = 6f;
+
+    // Zweiter, viel engerer Laufauftrag direkt zur bekannten WorldPosition (siehe BeginFinalApproach) -
+    // NACH dem groben Anflug (ArrivalTolerance), NUR wenn eine exakte Weltposition hinterlegt ist
+    // (z.B. per Hand nachgetragen wie "Overlooking The Convictory", siehe aethercurrents.json), sonst
+    // bliebe der Charakter bis zu ArrivalTolerance-Yalm neben dem tatsächlichen Punkt stehen
+    // (Nutzeranforderung: "exakt auf die Position laufen"). Gleiche Toleranz wie SightseeingAutomation.
+    private const float FinalApproachTolerance = 0.1f;
+
     private const float SprintDisableDistance = 8f;
     private static readonly TimeSpan StepMaxDuration = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan PathStartGracePeriod = TimeSpan.FromSeconds(5);
@@ -59,11 +80,29 @@ public sealed class AetherCurrentAutomation
     private readonly Dictionary<uint, int> attemptCounts = new();
     private readonly HashSet<uint> skippedIds = new();
 
+    // Gegenwehr, falls man auf dem Weg zur/an der Ätherströmung angegriffen wird (Nutzeranforderung:
+    // "alle Gegner töten, falls man im Kampf ist, sonst nicht") - identisches Vorgehen wie
+    // HuntingLogAutomation.UpdateDefendingSelf, nur ohne dessen eigentlichen Kampf-Zustand (Aether
+    // Currents kämpfen nie absichtlich, das hier ist ausschließlich ungeplante Gegenwehr).
+    private const float AttackRange = 3.5f;
+    private bool isDefendingSelf;
+    private DateTime lastDefendApproachAt = DateTime.MinValue;
+    private static readonly TimeSpan DefendApproachRetryInterval = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan CombatEnsureInterval = TimeSpan.FromSeconds(2);
+    private DateTime lastCombatEnsureAt = DateTime.MinValue;
+
     private readonly ICallGateSubscriber<Vector3, bool, float, bool> pathfindAndMoveCloseTo;
     private readonly ICallGateSubscriber<bool> pathIsRunning;
     private readonly ICallGateSubscriber<object> pathStop;
     private readonly ICallGateSubscriber<bool> navmeshIsReady;
     private readonly ICallGateSubscriber<Vector3?> queryFlagToPoint;
+
+    // Rohe Wegpunkt-Bewegung (kein Pathfinding) für den Sprung selbst (siehe State.JumpRoute) - genau
+    // dieselbe IPC wie SightseeingAutomation für ihre Jumping Puzzles nutzt.
+    private readonly ICallGateSubscriber<List<Vector3>, bool, object> moveToPath;
+    private readonly ICallGateSubscriber<float> pathGetTolerance;
+    private readonly ICallGateSubscriber<float, object> pathSetTolerance;
+    private float? savedPathTolerance;
 
     private State state = State.Idle;
     private CollectibleEntry? currentTargetEntry;
@@ -75,6 +114,25 @@ public sealed class AetherCurrentAutomation
     private readonly FlightPathUpgrade flightUpgrade = new(); // siehe Plugin.FlightPathUpgrade (Flugverbots-Bereiche)
     private bool hasInteractedThisCycle;
     private DateTime? interactObjectNotFoundSince;
+    private bool didFinalApproach;
+
+    // Verhindert, dass Plugin.TryRemountAfterForcedDismount (gedacht für unfreiwilliges Absteigen
+    // beim Schwimmen) den Charakter wieder aufsitzen lässt, nachdem WIR ihn absichtlich für den
+    // engen Final Approach abgestiegen haben (siehe BeginFinalApproach) - sonst versucht er auf dem
+    // letzten Stück wieder aufzumounten, statt zu Fuß exakt anzukommen (Nutzer-Report: "mountet paar
+    // yards vorher ab und auf dem Punkt mountet er wieder auf"). Identisches Problem/dieselbe Lösung
+    // wie in AetheryteAutomation/ChocobokeepAutomation/SightseeingAutomation.
+    private bool hasIntentionallyDismounted;
+
+    // Siehe Plugin.AetherCurrentJumpRoutes/State.JumpRoute-Kommentar - null, solange das aktuelle
+    // Ziel keine hinterlegte Sprungroute hat oder noch nicht am Startpunkt angekommen ist.
+    private Plugin.AetherCurrentJumpRoute? activeJumpRoute;
+    private JumpPhase jumpPhase;
+    private DateTime? jumpDismountedAt;
+
+    // Kurze Wartezeit nach dem Abmounten (wie DismountSettleDelay in anderen Automationen) - ein
+    // Sprung-Versuch mitten in der Absteige-Animation greift nicht.
+    private static readonly TimeSpan JumpDismountSettleDelay = TimeSpan.FromSeconds(1);
 
     public bool IsActive { get; private set; }
 
@@ -101,6 +159,9 @@ public sealed class AetherCurrentAutomation
         pathStop = Plugin.PluginInterface.GetIpcSubscriber<object>("vnavmesh.Path.Stop");
         navmeshIsReady = Plugin.PluginInterface.GetIpcSubscriber<bool>("vnavmesh.Nav.IsReady");
         queryFlagToPoint = Plugin.PluginInterface.GetIpcSubscriber<Vector3?>("vnavmesh.Query.Mesh.FlagToPoint");
+        moveToPath = Plugin.PluginInterface.GetIpcSubscriber<List<Vector3>, bool, object>("vnavmesh.Path.MoveTo");
+        pathGetTolerance = Plugin.PluginInterface.GetIpcSubscriber<float>("vnavmesh.Path.GetTolerance");
+        pathSetTolerance = Plugin.PluginInterface.GetIpcSubscriber<float, object>("vnavmesh.Path.SetTolerance");
     }
 
     public bool IsVNavmeshAvailable()
@@ -135,6 +196,10 @@ public sealed class AetherCurrentAutomation
         currentTargetEntry = null;
         skippedIds.Clear();
         attemptCounts.Clear();
+        isDefendingSelf = false;
+        lastCombatEnsureAt = DateTime.MinValue;
+        hasIntentionallyDismounted = false;
+        activeJumpRoute = null;
         StatusText = Loc.T("Automation gestartet...", "Automation started...");
     }
 
@@ -145,11 +210,138 @@ public sealed class AetherCurrentAutomation
         currentTargetEntry = null;
         StopPath();
         Plugin.ClearNavigationTarget();
+
+        // Mitten in einer Sprungroute gestoppt - enge vnavmesh-Toleranz nicht dauerhaft gesetzt lassen.
+        RestorePathTolerance();
+        activeJumpRoute = null;
     }
 
     public void MarkUnavailable()
     {
         StatusText = Loc.T("vnavmesh nicht gefunden - bitte installieren.", "vnavmesh not found - please install it.");
+    }
+
+    /// <summary>
+    /// NUR am Ziel (State.Interacting, siehe Nutzeranforderung "erst wenn man am Ziel angekommen ist")
+    /// - wird man dort angegriffen, wird der normale Zustandsautomat angehalten, der Angreifer
+    /// anvisiert (bei Bedarf hingelaufen) und das Kampf-Plugin (RotationSolver/WrathCombo/BossMod,
+    /// siehe Plugin.CombatPlugin) eingeschaltet, bis kein Gegner mehr lebt - danach wird erst die
+    /// Ätherströmung aktiviert. Während des Hinlaufens (MovingTo/Mounting) greift diese Gegenwehr
+    /// bewusst NICHT, da sie sonst auch fremde, nur zufällig in der Nähe kämpfende Gegner einbeziehen
+    /// würde. Ähnliches Vorgehen wie HuntingLogAutomation.UpdateDefendingSelf. Gibt true zurück,
+    /// solange verteidigt wird (Aufrufer überspringt dann den Zustandsautomaten für diesen Frame).
+    /// </summary>
+    private bool UpdateDefendingSelf()
+    {
+        if (state != State.Interacting)
+        {
+            isDefendingSelf = false;
+            return false;
+        }
+
+        if (Plugin.Condition[ConditionFlag.InCombat])
+        {
+            var playerPos = Plugin.ObjectTable.LocalPlayer?.Position ?? currentTargetPosition;
+            var attacker = Plugin.FindNearestAttacker(playerPos);
+            if (attacker != null || (isDefendingSelf && Plugin.HasLiveTarget()))
+            {
+                if (!isDefendingSelf)
+                {
+                    Plugin.Log.Info($"[AetherCurrentAutomation] Angegriffen im Zustand {state} (von {attacker?.Name}) - wehre mich, bevor es weitergeht.");
+                    isDefendingSelf = true;
+                    StopPath();
+                }
+
+                if (!Plugin.HasLiveTarget() && attacker != null)
+                    Plugin.SetTarget(attacker);
+
+                Plugin.TryDismount();
+                EnsureCombatMode();
+
+                // Kampf-Plugins bewegen den Charakter nicht selbst - steht das Ziel außer Reichweite,
+                // gedrosselt hinlaufen.
+                if (Plugin.TargetManager.Target is { } target
+                    && Vector3.Distance(playerPos, target.Position) > AttackRange
+                    && !pathIsRunning.InvokeFunc()
+                    && DateTime.UtcNow - lastDefendApproachAt > DefendApproachRetryInterval)
+                {
+                    lastDefendApproachAt = DateTime.UtcNow;
+                    pathfindAndMoveCloseTo.InvokeFunc(target.Position, false, AttackRange);
+                }
+
+                StatusText = Loc.T($"Wehre mich gegen: {Plugin.TargetManager.Target?.Name}...", $"Defending against: {Plugin.TargetManager.Target?.Name}...");
+                return true;
+            }
+        }
+
+        if (!isDefendingSelf)
+            return false;
+
+        isDefendingSelf = false;
+        Plugin.CombatPlugin.SetCombatMode(false);
+
+        // Der Kampf kann den Charakter vom eigentlichen Ziel weggezogen haben (z.B. einem Angreifer
+        // hinterher) - IMMER zurück zur Ätherströmung laufen, bevor wieder interagiert wird (Nutzer-
+        // Report: "wenn man recht nah dran ist... muss er trotzdem danach zu dem Aether Punkt
+        // laufen, sonst kann er ihn nicht aktivieren"). InteractObjectSearchRadius (20y, zum bloßen
+        // AUFFINDEN des Objekts) reicht dafür nicht als Kriterium - der echte Interact-Radius des
+        // Spiels ist viel enger. Statt BeginPathfind() (das bei Ablehnung überspringen würde) direkt
+        // per pathfindAndMoveCloseTo: lehnt vnavmesh ab, weil ohnehin schon nah genug dran, bleibt es
+        // einfach bei State.Interacting - kein Überspringen.
+        if (currentTargetEntry != null)
+        {
+            // Ätherströmungen mit Sprungroute (siehe Plugin.AetherCurrentJumpRoutes) lassen sich vom
+            // Kampf-Ort aus meist gar nicht direkt anlaufen (genau deshalb braucht es den Sprung) -
+            // dort komplett neu vom Startpunkt aus versuchen statt direkt zur Zielposition zu laufen
+            // (Nutzeranforderung: "danach vom Startpunkt es erneut versuchen").
+            if (Plugin.TryGetAetherCurrentJumpRoute(currentTargetEntry.Id, out var route))
+            {
+                Plugin.Log.Info($"[AetherCurrentAutomation] Kampf vorbei - Kampf-Plugin wieder aus, starte Sprungroute neu: {currentTargetEntry.Name}.");
+                activeJumpRoute = route;
+                didFinalApproach = false;
+                currentTargetPosition = route.Start;
+                if (pathfindAndMoveCloseTo.InvokeFunc(route.Start, false, ArrivalTolerance))
+                {
+                    state = State.MovingTo;
+                    stateEnteredAt = DateTime.UtcNow;
+                    hasSeenPathRunning = false;
+                    stuckDetector.Reset();
+                }
+
+                return false;
+            }
+
+            Plugin.Log.Info($"[AetherCurrentAutomation] Kampf vorbei - Kampf-Plugin wieder aus, laufe zurück zu: {currentTargetEntry.Name}.");
+            didFinalApproach = false;
+            Plugin.TryDismount();
+            hasIntentionallyDismounted = true;
+            if (pathfindAndMoveCloseTo.InvokeFunc(currentTargetPosition, false, ArrivalTolerance))
+            {
+                state = State.MovingTo;
+                stateEnteredAt = DateTime.UtcNow;
+                hasSeenPathRunning = false;
+                stuckDetector.Reset();
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Solange gekämpft wird, jeden Frame aufrufen - schaltet das Kampf-Plugin (gedrosselt) wieder in
+    /// den Manual-Modus, falls es laut IPC gerade NICHT aktiv ist (siehe HuntingLogAutomation.
+    /// EnsureCombatMode - identisches Vorgehen).
+    /// </summary>
+    private void EnsureCombatMode()
+    {
+        if (DateTime.UtcNow - lastCombatEnsureAt < CombatEnsureInterval)
+            return;
+
+        lastCombatEnsureAt = DateTime.UtcNow;
+        if (Plugin.CombatPlugin.IsCombatModeActive())
+            return;
+
+        Plugin.CombatPlugin.SetCombatMode(true);
     }
 
     /// <summary>
@@ -159,6 +351,9 @@ public sealed class AetherCurrentAutomation
     public void Update(IReadOnlyList<CollectibleEntry> aetherCurrentsInZone)
     {
         if (!IsActive)
+            return;
+
+        if (UpdateDefendingSelf())
             return;
 
         try
@@ -179,6 +374,10 @@ public sealed class AetherCurrentAutomation
 
                 case State.Interacting:
                     UpdateInteracting(aetherCurrentsInZone);
+                    break;
+
+                case State.JumpRoute:
+                    UpdateJumpRoute(aetherCurrentsInZone);
                     break;
             }
         }
@@ -208,12 +407,18 @@ public sealed class AetherCurrentAutomation
             return;
         }
 
-        // Nur sortierbar für Einträge MIT roher Weltposition - reine Kartenkoordinaten-Einträge
-        // bleiben einfach in der gegebenen Reihenfolge (kommt praktisch aufs Gleiche raus, da ohnehin
-        // alle nacheinander abgelaufen werden).
+        // Die räumlich nächstgelegene noch nicht freigeschaltete Ätherströmung zuerst (Nutzeranforderung),
+        // statt stur der Zonen-Listenreihenfolge zu folgen - Ätherströmungen kommen (anders als Hunting-
+        // Log-Monster) meist nur als Kartenkoordinate (VendorMapX/Y) ohne rohe Weltposition, deshalb wie
+        // bei QuestAutomation.TryStartNext über Plugin.ResolveWorldPositionFromMapCoords zurückgerechnet.
+        // Einträge ohne auflösbare Position fallen ans Ende, statt die Sortierung abzubrechen.
         var playerPos = Plugin.ObjectTable.LocalPlayer?.Position ?? Vector3.Zero;
         var next = candidates
-            .OrderBy(e => e.WorldPosition.HasValue ? Vector3.Distance(playerPos, e.WorldPosition.Value) : float.MaxValue)
+            .OrderBy(e => e.WorldPosition is { } worldPos
+                ? Vector3.Distance(playerPos, worldPos)
+                : Plugin.ResolveWorldPositionFromMapCoords(e.MapId, e.VendorMapX, e.VendorMapY) is { } mapPos
+                    ? Vector3.Distance(playerPos, mapPos)
+                    : float.MaxValue)
             .ThenBy(e => e.Name)
             .First();
         StartMovingTo(next);
@@ -221,6 +426,15 @@ public sealed class AetherCurrentAutomation
 
     private void StartMovingTo(CollectibleEntry entry)
     {
+        // VOR dem Versuchszähler prüfen (Nutzer-Report: Automationsstart während eines laufenden
+        // vnavmesh-Meshbaus überspringt das Ziel sofort als "zu oft versucht") - siehe
+        // ChocobokeepAutomation.StartMovingTo-Kommentar (identisches Problem/dieselbe Lösung).
+        if (!navmeshIsReady.InvokeFunc())
+        {
+            StatusText = Loc.T("Warte auf vnavmesh-Navmesh für diese Zone...", "Waiting for vnavmesh's navmesh for this zone...");
+            return;
+        }
+
         var attempts = attemptCounts.GetValueOrDefault(entry.Id, 0) + 1;
         attemptCounts[entry.Id] = attempts;
         if (attempts > MaxAttemptsPerTarget)
@@ -231,18 +445,27 @@ public sealed class AetherCurrentAutomation
             return;
         }
 
-        if (!navmeshIsReady.InvokeFunc())
-        {
-            StatusText = Loc.T("Warte auf vnavmesh-Navmesh für diese Zone...", "Waiting for vnavmesh's navmesh for this zone...");
-            return;
-        }
-
-        // Genau derselbe Trick wie bei GoToAutomation/HuntingLogAutomation: die Karten-Flagge auf
-        // die (rohe) Zielposition setzen und vnavmesh nach einem begehbaren Punkt in deren Nähe
+        // Ist eine exakte WorldPosition hinterlegt (z.B. per Hand nachgetragen wie "Overlooking The
+        // Convictory", siehe aethercurrents.json), DIREKT dorthin laufen statt über den Karten-
+        // Flaggen-Umweg - dessen Rückumrechnung (Weltposition -> Kartenkoordinate -> Flagge ->
+        // FlagToPoint) landete beim ersten Versuch teils an einer anderen, falschen Stelle und traf
+        // die echte Position erst beim zweiten (BeginFinalApproach), was wie ein falscher erster
+        // Anlauf aussah (Nutzer-Report). Ohne bekannte WorldPosition weiterhin derselbe Trick wie bei
+        // GoToAutomation/HuntingLogAutomation: die Karten-Flagge auf die (rohe, aus VendorMapX/Y
+        // umgerechnete) Zielposition setzen und vnavmesh nach einem begehbaren Punkt in deren Nähe
         // fragen - Ätherströmungen liegen oft in der Luft/an Klippenkanten, eine reine
         // Koordinatensuche (PointOnFloor) fände dort häufig gar keinen begehbaren Punkt.
-        Plugin.OpenEntryMap(entry, showMapWindow: false);
-        var floorPoint = queryFlagToPoint.InvokeFunc();
+        Vector3? floorPoint;
+        if (entry.WorldPosition is { } exactPosition)
+        {
+            floorPoint = exactPosition;
+        }
+        else
+        {
+            Plugin.OpenEntryMap(entry, showMapWindow: false);
+            floorPoint = queryFlagToPoint.InvokeFunc();
+        }
+
         if (floorPoint == null)
         {
             skippedIds.Add(entry.Id);
@@ -255,6 +478,22 @@ public sealed class AetherCurrentAutomation
         currentTargetPosition = floorPoint.Value;
         hasInteractedThisCycle = false;
         interactObjectNotFoundSince = null;
+        didFinalApproach = false;
+        hasIntentionallyDismounted = false;
+
+        // Sprungroute hinterlegt (siehe Plugin.AetherCurrentJumpRoutes)? Dann erst zum Startpunkt der
+        // Route laufen (ganz normal, siehe unten) - der Sprung selbst passiert erst nach Ankunft dort
+        // (siehe UpdateMoving/State.JumpRoute), die eigentliche Zielposition bleibt unverändert
+        // bekannt (entry.WorldPosition).
+        if (Plugin.TryGetAetherCurrentJumpRoute(entry.Id, out var jumpRoute))
+        {
+            activeJumpRoute = jumpRoute;
+            currentTargetPosition = jumpRoute.Start;
+        }
+        else
+        {
+            activeJumpRoute = null;
+        }
 
         if (Plugin.TryRequestAetheryteMount())
         {
@@ -267,7 +506,13 @@ public sealed class AetherCurrentAutomation
         BeginPathfind();
     }
 
-    private void BeginPathfind()
+    /// <param name="forceGround">
+    /// Fliegen für diesen Versuch gar nicht erst probieren - für den Steckengeblieben-Retry (siehe
+    /// UpdateMoving): steckte der Charakter beim Fliegen fest, ist das oft ein Gebäude, gegen das
+    /// vnavmeshs Flug-Beeline läuft (Nutzer-Report). Ein Fußweg findet dort eher den Ausgang; sobald
+    /// die verbleibende Strecke wieder groß genug ist, plant FlightPathUpgrade von selbst auf Fliegen um.
+    /// </param>
+    private void BeginPathfind(bool forceGround = false)
     {
         var mounted = Plugin.Condition[ConditionFlag.Mounted];
         var accepted = false;
@@ -280,7 +525,7 @@ public sealed class AetherCurrentAutomation
         // ersten einer Zone müssen ohnehin ohne Fliegen erreichbar sein (Henne-Ei: Fliegen schaltet
         // erst frei, wenn alle Strömungen der Zone eingesammelt sind) - zu Fuß ist also immer ein
         // gültiger Fallback.
-        if (mounted && Plugin.CanFly)
+        if (!forceGround && mounted && Plugin.CanFly)
             accepted = flyingAccepted = pathfindAndMoveCloseTo.InvokeFunc(currentTargetPosition, true, ArrivalTolerance);
 
         if (!accepted)
@@ -312,6 +557,176 @@ public sealed class AetherCurrentAutomation
             BeginPathfind();
     }
 
+    /// <summary>
+    /// Wie BeginPathfind, aber mit FinalApproachTolerance direkt zur bekannten WorldPosition - siehe
+    /// deren Kommentar. Gibt zurück, ob vnavmesh den Laufweg angenommen hat (false z.B. wenn der
+    /// Charakter bereits nah genug dran ist, dann direkt weiter zu Interacting statt hier hängen zu bleiben).
+    /// Bewusst NIE fliegend: die enge FinalApproachTolerance (0.1y) lässt sich fliegend oft gar nicht
+    /// erreichen (der Charakter schwebt nur knapp daneben, ohne je "anzukommen") - dadurch blieb die
+    /// Automation nach dem Verteidigen (siehe UpdateDefendingSelf, das währenddessen wieder aufsitzen
+    /// lässt) sichtbar auf dem Punkt stehen, ohne je zu interagieren (Nutzer-Report).
+    /// </summary>
+    private bool BeginFinalApproach(Vector3 target)
+    {
+        currentTargetPosition = target;
+
+        Plugin.TryDismount();
+        hasIntentionallyDismounted = true;
+        var accepted = pathfindAndMoveCloseTo.InvokeFunc(target, false, FinalApproachTolerance);
+
+        return accepted;
+    }
+
+    /// <summary>Startpunkt einer Sprungroute erreicht - siehe JumpPhase/UpdateJumpRoute.</summary>
+    // Enge vnavmesh-Wegpunkt-Toleranz für die Sprungroute (Nutzeranforderung: "genaue Positionen
+    // nutzen, ohne große Toleranz") - Absprung-/Landepunkte liegen auf schmalen Vorsprüngen, die
+    // normale (großzügigere) vnavmesh-Standardtoleranz würde dort schon viel zu früh "angekommen"
+    // meldet. Gleicher Wert wie SightseeingAutomation.PuzzleFinalPreciseTolerance.
+    private const float JumpRoutePreciseTolerance = 0.05f;
+
+    private void BeginJumpRoute()
+    {
+        Plugin.TryDismount();
+        hasIntentionallyDismounted = true;
+        jumpDismountedAt = null;
+        jumpPhase = JumpPhase.Dismounting;
+        state = State.JumpRoute;
+        stateEnteredAt = DateTime.UtcNow;
+        StatusText = Loc.T($"Springe zur Ätherströmung: {currentTargetEntry?.Name}...", $"Jumping to the aether current: {currentTargetEntry?.Name}...");
+    }
+
+    /// <summary>
+    /// Abmounten, dann zu Fuß zum Anlaufpunkt der Route, von dort mit Anlauf zum Absprung-/
+    /// Landepunkt springen - viel einfacher als SightseeingAutomation.UpdateJumpingPuzzle, da hier nur
+    /// EIN Sprung nötig ist, kein Mehrschritt-Parcours. Nach der Landung geht es normal über
+    /// BeginFinalApproach zur echten Position weiter (siehe Plugin.AetherCurrentJumpRoutes-Kommentar).
+    /// </summary>
+    private void UpdateJumpRoute(IReadOnlyList<CollectibleEntry> entries)
+    {
+        if (currentTargetEntry == null || activeJumpRoute is not { } route)
+        {
+            state = State.Idle;
+            return;
+        }
+
+        if (!StillNeeded(entries, currentTargetEntry.Id))
+        {
+            FinishCurrent();
+            return;
+        }
+
+        switch (jumpPhase)
+        {
+            case JumpPhase.Dismounting:
+            {
+                if (Plugin.Condition[ConditionFlag.Mounted])
+                {
+                    Plugin.TryDismount();
+                    return;
+                }
+
+                // Condition[Mounted] wird schon VOR dem Ende der sichtbaren Absteige-Animation false -
+                // ein Laufauftrag mitten in dieser Animation greift nicht (identisches Problem/dieselbe
+                // Lösung wie DismountSettleDelay in anderen Automationen).
+                jumpDismountedAt ??= DateTime.UtcNow;
+                if (DateTime.UtcNow - jumpDismountedAt.Value < JumpDismountSettleDelay)
+                    return;
+
+                SetExactPathTolerance(true);
+                moveToPath.InvokeAction(new List<Vector3> { route.RunUpPoint }, false);
+                jumpPhase = JumpPhase.WalkingToRunUp;
+                stateEnteredAt = DateTime.UtcNow;
+                return;
+            }
+
+            case JumpPhase.WalkingToRunUp:
+            {
+                if (pathIsRunning.InvokeFunc())
+                {
+                    if (DateTime.UtcNow - stateEnteredAt > StepMaxDuration)
+                        SkipCurrent(Loc.T("Anlauf zur Ätherströmung dauert zu lange", "Run-up to the aether current is taking too long"));
+                    return;
+                }
+
+                moveToPath.InvokeAction(new List<Vector3> { route.JumpTarget }, false);
+                Plugin.TryJump();
+                jumpPhase = JumpPhase.RunningToJump;
+                stateEnteredAt = DateTime.UtcNow;
+                return;
+            }
+
+            case JumpPhase.RunningToJump:
+            {
+                if (pathIsRunning.InvokeFunc())
+                {
+                    if (DateTime.UtcNow - stateEnteredAt > StepMaxDuration)
+                        SkipCurrent(Loc.T("Sprung zur Ätherströmung dauert zu lange", "Jump to the aether current is taking too long"));
+                    return;
+                }
+
+                // Gelandet - Route abgeschlossen, wieder normale Toleranz, normal zur echten Position
+                // weiter (BeginFinalApproach übernimmt auch das Abmounten erneut, schadet aber nicht,
+                // falls schon unten).
+                RestorePathTolerance();
+                activeJumpRoute = null;
+                didFinalApproach = true;
+                if (currentTargetEntry.WorldPosition is { } exactPosition && BeginFinalApproach(exactPosition))
+                {
+                    state = State.MovingTo;
+                    hasSeenPathRunning = false;
+                    stateEnteredAt = DateTime.UtcNow;
+                    stuckDetector.Reset();
+                    StatusText = Loc.T(
+                        $"Laufe genau auf den Punkt: {currentTargetEntry.Name}...",
+                        $"Walking precisely onto the point: {currentTargetEntry.Name}...");
+                    return;
+                }
+
+                state = State.Interacting;
+                stateEnteredAt = DateTime.UtcNow;
+                StatusText = Loc.T($"Interagiere: {currentTargetEntry.Name}...", $"Interacting: {currentTargetEntry.Name}...");
+                return;
+            }
+        }
+    }
+
+    // Für die Sprungroute: enge vnavmesh-Wegpunkt-Toleranz, sonst wieder die ursprüngliche - gleiches
+    // Prinzip wie SightseeingAutomation.SetExactPathTolerance/RestorePathTolerance.
+    private void SetExactPathTolerance(bool exact)
+    {
+        if (!exact)
+        {
+            RestorePathTolerance();
+            return;
+        }
+
+        try
+        {
+            savedPathTolerance ??= pathGetTolerance.InvokeFunc();
+            pathSetTolerance.InvokeAction(JumpRoutePreciseTolerance);
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Warning(ex, "[AetherCurrentAutomation] vnavmesh-Toleranz konnte nicht gesetzt werden.");
+        }
+    }
+
+    private void RestorePathTolerance()
+    {
+        if (savedPathTolerance is not { } tolerance)
+            return;
+
+        savedPathTolerance = null;
+        try
+        {
+            pathSetTolerance.InvokeAction(tolerance);
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Warning(ex, "[AetherCurrentAutomation] vnavmesh-Toleranz konnte nicht zurückgesetzt werden.");
+        }
+    }
+
     private void UpdateMoving(IReadOnlyList<CollectibleEntry> entries)
     {
         if (currentTargetEntry == null)
@@ -335,8 +750,10 @@ public sealed class AetherCurrentAutomation
                 Plugin.TryUseSprint();
 
             // Falls unterwegs durch Schwimmen zwangsweise abgestiegen wurde - sobald wieder Land
-            // erreicht ist, erneut aufsitzen.
-            Plugin.TryRemountAfterForcedDismount(ref lastRemountAttempt);
+            // erreicht ist, erneut aufsitzen. NICHT, nachdem wir selbst absichtlich für den Final
+            // Approach abgestiegen sind (siehe hasIntentionallyDismounted).
+            if (!hasIntentionallyDismounted)
+                Plugin.TryRemountAfterForcedDismount(ref lastRemountAttempt);
 
             // Aus einem Flugverbots-Bereich heraus (siehe FlightPathUpgrade) - jetzt fliegend weiter.
             if (flightUpgrade.ShouldReplanFlying(playerPos, currentTargetPosition))
@@ -347,11 +764,15 @@ public sealed class AetherCurrentAutomation
             }
 
             // Steckengeblieben (z.B. gegen eine Wand) - Pfad neu anfordern statt untätig zu warten.
+            // War der festgesteckte Weg fliegend, steckt meist ein Gebäude im Weg (vnavmeshs Flug-
+            // Beeline findet dessen Ausgang nicht) - dann diesmal zu Fuß probieren (siehe
+            // BeginPathfind-Kommentar).
             if (stuckDetector.CheckStuck(playerPos))
             {
-                Plugin.Log.Info($"[AetherCurrentAutomation] UpdateMoving({currentTargetEntry.Name}): scheinbar steckengeblieben - Laufweg wird neu angefordert.");
+                var wasFlying = flightUpgrade.IsFlying;
+                Plugin.Log.Info($"[AetherCurrentAutomation] UpdateMoving({currentTargetEntry.Name}): scheinbar steckengeblieben{(wasFlying ? " (beim Fliegen, evtl. Gebäude im Weg)" : "")} - Laufweg wird neu angefordert.");
                 StopPath();
-                BeginPathfind();
+                BeginPathfind(forceGround: wasFlying);
                 return;
             }
 
@@ -363,6 +784,34 @@ public sealed class AetherCurrentAutomation
 
         if (hasSeenPathRunning)
         {
+            // Gerade am Startpunkt einer Sprungroute angekommen (siehe StartMovingTo/
+            // Plugin.AetherCurrentJumpRoutes) - jetzt abmounten+springen, statt normal weiterzumachen.
+            if (activeJumpRoute != null)
+            {
+                BeginJumpRoute();
+                return;
+            }
+
+            // Zweiter, engerer Laufauftrag direkt zur bekannten WorldPosition, falls hinterlegt (siehe
+            // FinalApproachTolerance-Kommentar) - nur einmal pro Ziel, danach normal weiter zu Interacting.
+            if (!didFinalApproach)
+            {
+                didFinalApproach = true;
+                if (currentTargetEntry.WorldPosition is { } exactPosition && BeginFinalApproach(exactPosition))
+                {
+                    hasSeenPathRunning = false;
+                    stateEnteredAt = DateTime.UtcNow;
+                    stuckDetector.Reset();
+                    StatusText = Loc.T(
+                        $"Laufe genau auf den Punkt: {currentTargetEntry.Name}...",
+                        $"Walking precisely onto the point: {currentTargetEntry.Name}...");
+                    return;
+                }
+
+                // Keine WorldPosition hinterlegt, oder vnavmesh lehnt ab (z.B. schon nah genug dran) -
+                // direkt weiter wie bisher.
+            }
+
             state = State.Interacting;
             stateEnteredAt = DateTime.UtcNow;
             StatusText = Loc.T($"Interagiere: {currentTargetEntry.Name}...", $"Interacting: {currentTargetEntry.Name}...");

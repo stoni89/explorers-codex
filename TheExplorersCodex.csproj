@@ -1,6 +1,6 @@
 <Project Sdk="Dalamud.NET.Sdk/15.0.0">
   <PropertyGroup>
-    <Version>1.4.0.0</Version>
+    <Version>1.5.0.0</Version>
     <!-- Manifest-Felder (siehe https://github.com/goatcorp/DalamudPackager) -->
     <Author>Stoni</Author>
     <Name>The Explorer's Codex</Name>
@@ -8,6 +8,8 @@
     <Description>Completionist plugin per zone with automation capabilities.</Description>
     <RepoUrl>https://github.com/stoni89/explorers-codex</RepoUrl>
     <Tags>collection;tracker;utility;explorerscodex</Tags>
+    <!-- Icon im Dalamud-Plugin-Installer (Dev Plugins-Liste) statt Platzhalter - wird als URL geladen, deshalb der rohe GitHub-Link statt eines lokalen Pfads. -->
+    <IconUrl>https://raw.githubusercontent.com/stoni89/explorers-codex/main/Data/icon.png</IconUrl>
   </PropertyGroup>
 
   <ItemGroup>

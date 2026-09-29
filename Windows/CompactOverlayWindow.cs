@@ -116,8 +116,14 @@ public class CompactOverlayWindow : Window
     /// Dalamuds WindowSystem VOR PreDraw/Draw/PostDraw geprüft, das Fenster erscheint also gar
     /// nicht erst statt nur mit falschem Inhalt.
     /// </summary>
+    /// <summary>
+    /// Zusätzlich (Nutzeranforderung): während MSQ-Solo-Duties (siehe Plugin.IsInMsqSoloDuty)
+    /// ausgeblendet, danach automatisch wieder eingeblendet - wird jeden Frame neu geprüft, kein
+    /// eigener An-/Aus-Zustand nötig.
+    /// </summary>
     public override bool DrawConditions() =>
-        Plugin.ClientState.IsLoggedIn && !Plugin.Condition[ConditionFlag.BetweenAreas] && !Plugin.Condition[ConditionFlag.BetweenAreas51];
+        Plugin.ClientState.IsLoggedIn && !Plugin.Condition[ConditionFlag.BetweenAreas] && !Plugin.Condition[ConditionFlag.BetweenAreas51]
+        && !Plugin.IsInMsqSoloDuty();
 
     // Dezentes Weiß-Grau statt der vorherigen lila Farbe - klein und unauffällig, zeigt aber
     // weiterhin an, wo sich das Fenster zum Skalieren greifen lässt.
@@ -378,7 +384,7 @@ public class CompactOverlayWindow : Window
         // Wie Hunting Log bewusst NICHT stadtweit - Ätherströmungen kommen aus aethercurrents.json
         // mit exakter Zonen-Zuordnung, kein Bezirkswechsel nötig.
         var missingAetherCurrentsInZone = allForZone
-            .Where(e => e.Type == CollectibleType.AetherCurrent && !plugin.IsOwned(e))
+            .Where(e => e.Type == CollectibleType.AetherCurrent && (config.SimulateAetherCurrentAutomation || !plugin.IsOwned(e)))
             .ToList();
         if (!exitingNoFlyArea)
             plugin.AetherCurrentAutomation.Update(missingAetherCurrentsInZone);
@@ -467,11 +473,21 @@ public class CompactOverlayWindow : Window
         var hasActionableQuests = missingQuests.Any(q => !plugin.QuestAutomation.IsKnownUnsupported(q.Id));
         var hasActionableAetherytes = missingAetherytesCity.Count > 0;
         var hasActionableHuntingLog = missingHuntingLogInZone.Any(e => e.WorldPosition.HasValue);
-        var hasActionableAetherCurrents = missingAetherCurrentsInZone.Any(e => e.HasGoToTarget);
+        // Ohne die abgeschlossene Quest "Divine Intervention" (siehe Plugin.ComputeGrandCompanyOrTribeGateReason)
+        // sind ALLE Ätherströmungen gesperrt - der Automations-Knopf soll dann ausgegraut bleiben statt
+        // sinnlos loszulaufen (Nutzeranforderung).
+        var hasActionableAetherCurrents = missingAetherCurrentsInZone.Any(e => e.HasGoToTarget && !Plugin.IsAchievementOrRankGated(e));
         // hasVisibleSightseeing entscheidet nur, ob der Knopf überhaupt gezeichnet wird (siehe
         // DrawAutomationButtonIfNeeded) - hasActionableSightseeing (gerade durch Wetter/Uhrzeit/
-        // Buch-Freischaltung eingeschränkt) entscheidet zusätzlich, ob er dabei ausgegraut ist.
-        var hasVisibleSightseeing = visibleSightseeingInZone.Any(e => e.HasGoToTarget) && Plugin.IsSightseeingLogUnlocked();
+        // Buch-Freischaltung eingeschränkt) entscheidet zusätzlich, ob er dabei ausgegraut ist. Im
+        // Simulation-Modus (Configuration.SimulateSightseeingAutomation) zählen bewusst auch schon
+        // BESESSENE Punkte (nicht nur visibleSightseeingInZone, das die nur zum Testen ausblendet) -
+        // sonst verschwindet der Knopf dort, sobald alle Punkte der Zone bereits abgeschlossen sind,
+        // obwohl der Simulation-Modus ja gerade dafür da ist, genau solche Punkte erneut anzulaufen.
+        var hasVisibleSightseeing = (config.SimulateSightseeingAutomation
+                ? allForZone.Any(e => e.Type == CollectibleType.Sightseeing && e.HasGoToTarget)
+                : visibleSightseeingInZone.Any(e => e.HasGoToTarget))
+            && Plugin.IsSightseeingLogUnlocked();
         var hasActionableSightseeing = missingSightseeingInZone.Any(e => e.HasGoToTarget) && Plugin.IsSightseeingLogUnlocked();
         var hasActionableChocobokeeps = missingChocobokeepsInZone.Any(e => e.HasGoToTarget);
         var hasActionableTripleTriad = missingNpcCardsInZone.Count > 0;
@@ -1018,6 +1034,15 @@ public class CompactOverlayWindow : Window
         ImGui.SameLine();
         DrawClickableName(entry, isNotYetPossible);
 
+        // Quests, die beim Abschluss automatisch eine Ätherströmung mitbringen (siehe Plugin.
+        // QuestGrantsAetherCurrent) - dieselbe Farbe wie der Auto-Ätherströmung-Knopf, damit der
+        // Zusammenhang optisch sofort klar ist (Nutzeranforderung).
+        if (entry.Type == CollectibleType.Quest && Plugin.QuestGrantsAetherCurrent(entry.Id))
+        {
+            ImGui.SameLine(0f, 4f);
+            OutlineText("(Aether Current)", TypeColors[CollectibleType.AetherCurrent]);
+        }
+
         if (!string.IsNullOrEmpty(entry.Currency))
         {
             ImGui.SameLine();
@@ -1242,7 +1267,11 @@ public class CompactOverlayWindow : Window
                 ? EmptyRetainerCounts
                 : Plugin.GetRetainerItemCounts(sample.CurrencyItemId);
             var retainerTotal = retainerCounts.Count == 0 ? 0u : (uint)retainerCounts.Values.Sum(v => (long)v);
-            var retainerSuffix = retainerTotal > 0 ? $" ({retainerTotal})" : string.Empty;
+            // Chocobo-Satteltasche mit in denselben "(<Anzahl>)"-Zusatz (Nutzeranforderung) - eigene
+            // Abfrage, siehe Plugin.GetSaddlebagItemCount-Kommentar.
+            var saddlebagCount = showCurrencyCostMode ? 0u : Plugin.GetSaddlebagItemCount(sample.CurrencyItemId);
+            var combinedRetainerTotal = retainerTotal + saddlebagCount;
+            var retainerSuffix = combinedRetainerTotal > 0 ? $" ({combinedRetainerTotal.ToString("N0", CultureInfo.InvariantCulture)})" : string.Empty;
 
             var itemWidth = ImGui.CalcTextSize(text + retainerSuffix).X + (hasIcon ? iconSize + itemSpacing : 0f);
 
@@ -1278,9 +1307,20 @@ public class CompactOverlayWindow : Window
                 OutlineText(retainerSuffix, MutedColor);
                 if (ImGui.IsItemHovered())
                 {
-                    ImGui.SetTooltip(string.Join("\n", retainerCounts
-                        .OrderByDescending(kv => kv.Value)
-                        .Select(kv => $"{kv.Key}: {kv.Value.ToString("N0", CultureInfo.InvariantCulture)}")));
+                    ImGui.BeginTooltip();
+                    foreach (var kv in retainerCounts.OrderByDescending(kv => kv.Value))
+                        ImGui.TextUnformatted($"{kv.Key}: {kv.Value.ToString("N0", CultureInfo.InvariantCulture)}");
+
+                    // Satteltasche unten, per echter Trennlinie abgesetzt (Nutzeranforderung) - nicht
+                    // einfach mit in die Retainer-Liste gemischt, da konzeptionell kein Retainer.
+                    if (saddlebagCount > 0)
+                    {
+                        if (retainerCounts.Count > 0)
+                            ImGui.Separator();
+                        ImGui.TextUnformatted($"{Loc.T("Chocobo-Satteltasche", "Chocobo Saddlebag")}: {saddlebagCount.ToString("N0", CultureInfo.InvariantCulture)}");
+                    }
+
+                    ImGui.EndTooltip();
                 }
             }
         }
@@ -1765,9 +1805,13 @@ public class CompactOverlayWindow : Window
                     : otherAutomationActive
                         ? OtherAutomationActiveTooltip
                     : isDisabled
-                        ? Loc.T(
-                            "Keine Ätherströmungen mit bekannter Position in dieser Zone.",
-                            "No aether currents with a known position in this zone.")
+                        ? Plugin.IsDivineInterventionMissing()
+                            ? Loc.T(
+                                "Benötigt die abgeschlossene Quest \"Divine Intervention\".",
+                                "Requires the completed quest \"Divine Intervention\".")
+                            : Loc.T(
+                                "Keine Ätherströmungen mit bekannter Position in dieser Zone.",
+                                "No aether currents with a known position in this zone.")
                     : automation.IsActive
                         ? Loc.T("Bricht die Laufbewegung sofort ab und stoppt die Automation.", "Immediately stops movement and the automation.")
                         : Loc.T(
@@ -2003,6 +2047,16 @@ public class CompactOverlayWindow : Window
             onStart();
     }
 
+    // Nutzeranforderung: im Overlay nur noch "Zone (Landmark)" statt "Aether Current - Zone
+    // (Landmark)" anzeigen - die Daten selbst (Data/aethercurrents.json, Suche, Tooltips etc.)
+    // behalten den vollen Namen, das ist rein eine Anzeige-Kürzung hier im Overlay.
+    private const string AetherCurrentNamePrefix = "Aether Current - ";
+
+    private static string GetOverlayDisplayName(CollectibleEntry entry) =>
+        entry.Type == CollectibleType.AetherCurrent && entry.Name.StartsWith(AetherCurrentNamePrefix, StringComparison.Ordinal)
+            ? entry.Name[AetherCurrentNamePrefix.Length..]
+            : entry.Name;
+
     private void DrawClickableName(CollectibleEntry entry, bool isNotYetPossible = false)
     {
         var affordable = plugin.CanAfford(entry);
@@ -2020,17 +2074,28 @@ public class CompactOverlayWindow : Window
         // vorne in der Zeile (siehe DrawGoToColumn).
         if (!entry.HasGoToTarget)
         {
-            OutlineText(entry.Name, isNotYetPossible ? NotYetPossibleColor : affordable ? AffordableColor : NormalColor);
+            // Achievements haben zwar kein Kartenziel, aber (wie Einträge mit Verlinkung unten,
+            // siehe VendorLinkColor) trotzdem einen Linksklick-Effekt - deshalb dieselbe Schriftfarbe,
+            // damit man ihnen die Verlinkung genauso ansieht (Nutzeranforderung).
+            var isLinked = entry.Type == CollectibleType.Achievement;
+            OutlineText(GetOverlayDisplayName(entry), isNotYetPossible ? NotYetPossibleColor : affordable ? AffordableColor : isLinked ? VendorLinkColor : NormalColor);
 
-            // Ohne Kartenziel sonst nicht interaktiv - außer für das Rechtsklick-Menü (siehe unten).
+            // Ohne Kartenziel sonst nicht interaktiv - außer für das Rechtsklick-Menü (siehe unten)
+            // und, nur bei Achievements, den Linksklick unten (Nutzeranforderung).
             if (ImGui.IsItemHovered())
                 ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
+
+            // Linksklick auf einen Achievement-Eintrag öffnet das native Achievement-Fenster und
+            // trägt den Namen ins Suchfeld ein, siehe Plugin.OpenAchievementWindow-Kommentar (kein
+            // direkter Sprung zum Eintrag möglich, nur best-effort vorgefüllte Suche).
+            if (entry.Type == CollectibleType.Achievement && ImGui.IsItemClicked())
+                Plugin.OpenAchievementWindow(entry.Name);
 
             DrawEntryContextMenu(entry, allaganToolsEnabled);
             return;
         }
 
-        OutlineText(entry.Name, isNotYetPossible ? NotYetPossibleColor : affordable ? AffordableColor : VendorLinkColor);
+        OutlineText(GetOverlayDisplayName(entry), isNotYetPossible ? NotYetPossibleColor : affordable ? AffordableColor : VendorLinkColor);
         if (ImGui.IsItemHovered())
         {
             ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
@@ -2061,7 +2126,7 @@ public class CompactOverlayWindow : Window
         if (!ImGui.BeginPopup(popupId))
             return;
 
-        if (allaganToolsEnabled && ImGui.Selectable(Loc.T("Mehr Informationen (Allagan Tools)", "More information (Allagan Tools)")))
+        if (allaganToolsEnabled && ImGui.Selectable(Loc.T("Mehr Informationen", "More information")))
             Plugin.OpenAllaganToolsItemInfo(entry);
 
         if (Plugin.IsOnToDoList(entry))
@@ -2074,7 +2139,14 @@ public class CompactOverlayWindow : Window
             Plugin.AddToToDoList(entry);
         }
 
-        if (ImGui.Selectable(Loc.T("Auf die Blacklist setzen", "Add to blacklist")))
+        // Abgetrennt und rot eingefärbt (Nutzeranforderung) - blendet den Eintrag komplett aus, statt
+        // ihn wie die ToDo-Liste nur zu markieren, daher optisch klar von den Einträgen darüber
+        // abgesetzt, damit man ihn nicht aus Versehen anklickt.
+        ImGui.Separator();
+        ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(0.9f, 0.35f, 0.35f, 1f));
+        var blacklistClicked = ImGui.Selectable(Loc.T("Auf die Blacklist setzen", "Add to blacklist"));
+        ImGui.PopStyleColor();
+        if (blacklistClicked)
             Plugin.AddToBlacklist(entry);
 
         ImGui.EndPopup();

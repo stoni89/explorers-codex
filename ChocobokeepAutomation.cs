@@ -247,6 +247,19 @@ public sealed class ChocobokeepAutomation
 
     private void StartMovingTo(CollectibleEntry entry)
     {
+        // VOR dem Versuchszähler prüfen (Nutzer-Report: Automationsstart während eines laufenden
+        // vnavmesh-Meshbaus überspringt das Ziel sofort als "zu oft versucht") - TryStartNext ruft
+        // diese Methode jeden Frame erneut auf, solange State.Idle bleibt; stand die Mesh-Wartezeit
+        // VOR dem Zähler, zählte jeder dieser Frames als eigener Fehlversuch und erschöpfte
+        // MaxAttemptsPerTarget oft schon nach wenigen Frames, lange bevor das Mesh überhaupt bereit
+        // war. Jetzt zählt reines Warten nicht als Versuch - die Automation bleibt einfach im
+        // Wartezustand (mit Statusanzeige), bis vnavmesh tatsächlich bereit ist.
+        if (!navmeshIsReady.InvokeFunc())
+        {
+            StatusText = Loc.T("Warte auf vnavmesh-Navmesh für diese Zone...", "Waiting for vnavmesh's navmesh for this zone...");
+            return;
+        }
+
         var attempts = attemptCounts.GetValueOrDefault(entry.Id, 0) + 1;
         attemptCounts[entry.Id] = attempts;
         if (attempts > MaxAttemptsPerTarget)
@@ -257,17 +270,20 @@ public sealed class ChocobokeepAutomation
             return;
         }
 
-        if (!navmeshIsReady.InvokeFunc())
+        // Chocobokeep-Einträge haben immer eine exakte, von Hand erfasste WorldPosition (siehe
+        // Plugin.ChocobokeepLocations) - DIREKT dorthin laufen statt über den Karten-Flaggen-Umweg
+        // (Weltposition -> Kartenkoordinate -> Flagge -> FlagToPoint): dessen Rückumrechnung kann an
+        // einer anderen, ungünstigeren Stelle landen als die echte Position selbst, was z.B. bei
+        // Falcon's Nest zu einem unnötigen Umweg über den Berg führte, statt direkt zur Position zu
+        // laufen (Nutzer-Report). Genau dasselbe Problem/dieselbe Lösung wie zuvor bei
+        // AetherCurrentAutomation.StartMovingTo.
+        var floorPoint = entry.WorldPosition;
+        if (floorPoint == null)
         {
-            StatusText = Loc.T("Warte auf vnavmesh-Navmesh für diese Zone...", "Waiting for vnavmesh's navmesh for this zone...");
-            return;
+            Plugin.OpenEntryMap(entry, showMapWindow: false);
+            floorPoint = queryFlagToPoint.InvokeFunc();
         }
 
-        // Genau derselbe Trick wie bei HuntingLogAutomation/AetheryteAutomation: die Karten-Flagge
-        // auf die (rohe) Zielposition setzen und vnavmesh nach einem begehbaren Punkt in deren Nähe
-        // fragen.
-        Plugin.OpenEntryMap(entry, showMapWindow: false);
-        var floorPoint = queryFlagToPoint.InvokeFunc();
         if (floorPoint == null)
         {
             skippedIds.Add(entry.Id);
@@ -294,7 +310,13 @@ public sealed class ChocobokeepAutomation
         BeginPathfind();
     }
 
-    private void BeginPathfind()
+    /// <param name="forceGround">
+    /// Fliegen für diesen Versuch gar nicht erst probieren - für den Steckengeblieben-Retry (siehe
+    /// UpdateMoving): steckte der Charakter beim Fliegen fest, ist das oft ein Gebäude, gegen das
+    /// vnavmeshs Flug-Beeline läuft (Nutzer-Report). Ein Fußweg findet dort eher den Ausgang; sobald
+    /// die verbleibende Strecke wieder groß genug ist, plant FlightPathUpgrade von selbst auf Fliegen um.
+    /// </param>
+    private void BeginPathfind(bool forceGround = false)
     {
         var mounted = Plugin.Condition[ConditionFlag.Mounted];
         var accepted = false;
@@ -303,7 +325,7 @@ public sealed class ChocobokeepAutomation
         // Fliegend nur versuchen, wenn Plugin.CanFly gerade true ist - sonst nimmt vnavmesh einen
         // Flugauftrag teils trotzdem an, obwohl der Charakter gar nicht abheben kann, und hüpft nur
         // sinnlos am Boden herum statt zu laufen.
-        if (mounted && Plugin.CanFly)
+        if (!forceGround && mounted && Plugin.CanFly)
             accepted = flyingAccepted = pathfindAndMoveCloseTo.InvokeFunc(currentTargetPosition, true, PathTolerance);
 
         if (!accepted)
@@ -368,11 +390,15 @@ public sealed class ChocobokeepAutomation
             }
 
             // Steckengeblieben (z.B. gegen eine Wand) - Pfad neu anfordern statt untätig zu warten.
+            // War der festgesteckte Weg fliegend, steckt meist ein Gebäude im Weg (vnavmeshs Flug-
+            // Beeline findet dessen Ausgang nicht) - dann diesmal zu Fuß probieren (siehe
+            // BeginPathfind-Kommentar).
             if (stuckDetector.CheckStuck(playerPos))
             {
-                Plugin.Log.Info($"[ChocobokeepAutomation] UpdateMoving({currentTargetEntry.Name}): scheinbar steckengeblieben - Laufweg wird neu angefordert.");
+                var wasFlying = flightUpgrade.IsFlying;
+                Plugin.Log.Info($"[ChocobokeepAutomation] UpdateMoving({currentTargetEntry.Name}): scheinbar steckengeblieben{(wasFlying ? " (beim Fliegen, evtl. Gebäude im Weg)" : "")} - Laufweg wird neu angefordert.");
                 StopPath();
-                BeginPathfind();
+                BeginPathfind(forceGround: wasFlying);
                 return;
             }
 

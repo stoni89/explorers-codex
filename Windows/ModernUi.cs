@@ -267,25 +267,30 @@ public static class ModernUi
     /// </summary>
     public static void LabelRow(string label, float controlWidth, string? helpText = null)
     {
+        // Von Hand positioniert statt AlignTextToFramePadding()+SameLine() (identisches Problem wie
+        // in BigFishHelper per Nutzer-Screenshot entdeckt: Beschriftung sitzt bei Combo-/Slider-Zeilen
+        // spürbar über der Mitte des Widgets, während ToggleRow-Zeilen direkt darunter sauber
+        // zentriert wirken) - exakt dieselbe Technik wie ToggleRow schon nutzt (siehe dessen
+        // Kommentar): Label UND das direkt danach vom Aufrufer gezeichnete Widget beide von Hand
+        // gegen dieselbe Zeilenhöhe (GetFrameHeight(), die Standardhöhe von Combo/Slider/Button)
+        // zentrieren, statt AlignTextToFramePadding zu vertrauen.
+        var rowHeight = ImGui.GetFrameHeight();
+        var textHeight = ImGui.GetTextLineHeight();
+        var rowStart = ImGui.GetCursorPos();
         var rowScreenMin = ImGui.GetCursorScreenPos();
         var totalAvail = ImGui.GetContentRegionAvail().X - CardMargin;
 
-        // Richtet die Textgrundlinie an der eines Standard-Widgets (Slider/Dropdown/Button) aus -
-        // ohne das säße der (niedrigere) reine Text sichtbar zu weit oben, während das danach per
-        // SameLine() gezeichnete, durch FramePadding höhere Widget die restliche Zeilenhöhe füllt.
-        ImGui.AlignTextToFramePadding();
+        ImGui.SetCursorPos(rowStart + new Vector2(0f, (rowHeight - textHeight) * 0.5f));
         ImGui.TextUnformatted(label);
         var labelMax = ImGui.GetItemRectMax();
         var labelMinY = ImGui.GetItemRectMin().Y;
 
-        ImGui.SameLine();
-        var avail = ImGui.GetContentRegionAvail().X - CardMargin;
-        if (avail > controlWidth)
-            ImGui.SetCursorPosX(ImGui.GetCursorPosX() + avail - controlWidth);
+        var widgetX = totalAvail > controlWidth ? rowStart.X + totalAvail - controlWidth : rowStart.X;
+        ImGui.SetCursorPos(new Vector2(widgetX, rowStart.Y));
         ImGui.SetNextItemWidth(controlWidth);
 
         if (!string.IsNullOrEmpty(helpText))
-            HelpIconIfHovered(rowScreenMin, new Vector2(totalAvail, ImGui.GetFrameHeight()), labelMax, labelMinY, helpText);
+            HelpIconIfHovered(rowScreenMin, new Vector2(totalAvail, rowHeight), labelMax, labelMinY, helpText);
     }
 
     /// <summary>
