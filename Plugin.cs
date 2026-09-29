@@ -284,7 +284,11 @@ public sealed class Plugin : IDalamudPlugin
         MainWindow.IsOpen = !MainWindow.IsOpen;
     }
 
-    private void DrawUI() => WindowSystem.Draw();
+    private void DrawUI()
+    {
+        TickPendingAchievementSearch();
+        WindowSystem.Draw();
+    }
 
     private void ToggleMainUI() => MainWindow.IsOpen = !MainWindow.IsOpen;
 
@@ -6497,6 +6501,80 @@ public sealed class Plugin : IDalamudPlugin
     {
         if (itemId != 0)
             OpenAllaganToolsItemInfo(itemId.ToString());
+    }
+
+    private static string? pendingAchievementSearchName;
+    private static DateTime pendingAchievementSearchSince;
+    private static readonly TimeSpan AchievementSearchTimeout = TimeSpan.FromSeconds(3);
+
+    /// <summary>
+    /// Öffnet das native Achievement-Fenster und trägt den Namen dieser Errungenschaft ins Suchfeld
+    /// ein, damit sie oben in der gefilterten Liste steht (Nutzeranforderung: Klick auf einen
+    /// Achievement-Eintrag im Overlay/Hauptfenster soll dort landen). Anders als bei Quests (siehe
+    /// QuestPayload) gibt es dafür keine dokumentierte "spring direkt zu Eintrag X"-Funktion - das
+    /// Fenster wird daher normal geöffnet und die Suche best-effort automatisch befüllt (siehe
+    /// TickPendingAchievementSearch), sobald das native Fenster tatsächlich erschienen ist.
+    /// </summary>
+    public static unsafe void OpenAchievementWindow(string achievementName)
+    {
+        var agentModule = AgentModule.Instance();
+        var agent = agentModule != null ? agentModule->GetAgentByInternalId(AgentId.Achievement) : null;
+        if (agent == null)
+            return;
+
+        agent->Show();
+
+        pendingAchievementSearchName = achievementName;
+        pendingAchievementSearchSince = DateTime.UtcNow;
+    }
+
+    /// <summary>
+    /// Jeden Frame aus DrawUI aufgerufen (auch wenn kein eigenes Fenster offen ist) - wartet, bis das
+    /// native "Achievement"-Fenster nach OpenAchievementWindow tatsächlich erschienen ist, sucht darin
+    /// generisch nach der ersten Sucheingabe-Komponente (FFXIVClientStructs hat keinen eigenen
+    /// AddonAchievement-Typ mit benannten Node-IDs, deshalb kein fester Index) und trägt den Namen
+    /// dort ein. Gibt nach AchievementSearchTimeout auf, falls das Fenster nicht erscheint/keine
+    /// Sucheingabe gefunden wird.
+    /// </summary>
+    private static unsafe void TickPendingAchievementSearch()
+    {
+        if (pendingAchievementSearchName == null)
+            return;
+
+        if (DateTime.UtcNow - pendingAchievementSearchSince > AchievementSearchTimeout)
+        {
+            pendingAchievementSearchName = null;
+            return;
+        }
+
+        var addon = (AtkUnitBase*)GameGui.GetAddonByName("Achievement").Address;
+        if (addon == null || !addon->IsVisible)
+            return;
+
+        var textInput = FindTextInputComponent(addon);
+        if (textInput == null)
+            return;
+
+        textInput->SetText(pendingAchievementSearchName);
+        Log.Info($"[Achievements] Suchfeld im Achievement-Fenster auf \"{pendingAchievementSearchName}\" gesetzt.");
+        pendingAchievementSearchName = null;
+    }
+
+    /// <summary>Erste TextInput-Komponente irgendwo im Node-Baum dieses Addons - siehe TickPendingAchievementSearch.</summary>
+    private static unsafe AtkComponentTextInput* FindTextInputComponent(AtkUnitBase* addon)
+    {
+        for (var i = 0; i < addon->UldManager.NodeListCount; i++)
+        {
+            var node = addon->UldManager.NodeList[i];
+            if (node == null || node->GetNodeType() != NodeType.Component)
+                continue;
+
+            var component = ((AtkComponentNode*)node)->Component;
+            if (component != null && component->GetComponentType() == ComponentType.TextInput)
+                return (AtkComponentTextInput*)component;
+        }
+
+        return null;
     }
 
     /// <summary>

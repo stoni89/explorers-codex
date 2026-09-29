@@ -2094,6 +2094,12 @@ public class CompactOverlayWindow : Window
         if (allaganToolsEnabled && ImGui.Selectable(Loc.T("Mehr Informationen", "More information")))
             Plugin.OpenAllaganToolsItemInfo(entry);
 
+        // Nur für Achievements (Nutzeranforderung) - öffnet das native Achievement-Fenster und trägt
+        // den Namen ins Suchfeld ein, siehe Plugin.OpenAchievementWindow-Kommentar (kein direkter
+        // Sprung zum Eintrag möglich, nur best-effort vorgefüllte Suche).
+        if (entry.Type == CollectibleType.Achievement && ImGui.Selectable(Loc.T("Im Achievement-Fenster öffnen", "Open in Achievement window")))
+            Plugin.OpenAchievementWindow(entry.Name);
+
         if (Plugin.IsOnToDoList(entry))
         {
             if (ImGui.Selectable(Loc.T("Von der ToDo-Liste entfernen", "Remove from ToDo list")))
