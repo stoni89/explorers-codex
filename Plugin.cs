@@ -7771,6 +7771,9 @@ public sealed class FlightPathUpgrade
     private DateTime? canFlySince;
     private DateTime lastAttemptAt = DateTime.MinValue;
 
+    /// <summary>Ob der aktuell laufende Laufauftrag fliegend angenommen wurde (siehe OnPathStarted).</summary>
+    public bool IsFlying => pathIsFlying;
+
     /// <summary>Nach jedem angenommenen Laufauftrag - flying = ob er fliegend angenommen wurde.</summary>
     public void OnPathStarted(bool flying)
     {

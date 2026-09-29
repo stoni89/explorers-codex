@@ -613,13 +613,19 @@ public sealed class AetheryteAutomation
     /// Mount am Boden geritten. Ohne Mount (aus, oder das Aufsteigen hat nicht geklappt) ganz normal
     /// zu Fuß wie bisher (siehe SprintDisableDistance/TryUseSprint in UpdateMoving).
     /// </summary>
-    private void BeginPathfind()
+    /// <param name="forceGround">
+    /// Fliegen für diesen Versuch gar nicht erst probieren - für den Steckengeblieben-Retry (siehe
+    /// UpdateMoving): steckte der Charakter beim Fliegen fest, ist das oft ein Gebäude, gegen das
+    /// vnavmeshs Flug-Beeline läuft (Nutzer-Report). Ein Fußweg findet dort eher den Ausgang; sobald
+    /// die verbleibende Strecke wieder groß genug ist, plant FlightPathUpgrade von selbst auf Fliegen um.
+    /// </param>
+    private void BeginPathfind(bool forceGround = false)
     {
         var mounted = Plugin.Condition[ConditionFlag.Mounted];
         var accepted = false;
         var flyingAccepted = false;
 
-        if (mounted && Plugin.CanFly)
+        if (!forceGround && mounted && Plugin.CanFly)
         {
             accepted = flyingAccepted = pathfindAndMoveCloseTo.InvokeFunc(currentTargetPosition, true, currentArrivalTolerance);
             Plugin.Log.Info($"[AetheryteAutomation] BeginPathfind({currentTargetName}): pathfindAndMoveCloseTo(fly=true, tolerance={currentArrivalTolerance}) accepted={accepted}");
@@ -1022,11 +1028,15 @@ public sealed class AetheryteAutomation
             // weiter) - NICHT dasselbe wie "Distanz zum Ziel nimmt nicht ab" (siehe Kommentar unten,
             // das wäre auf verwinkelten Wegen ein Fehlalarm), sondern die eigene POSITION hat sich
             // seit Sekunden gar nicht mehr verändert. Pfad neu anfordern statt untätig zu warten.
+            // War der festgesteckte Weg fliegend, steckt meist ein Gebäude im Weg (vnavmeshs Flug-
+            // Beeline findet dessen Ausgang nicht) - dann diesmal zu Fuß probieren (siehe
+            // BeginPathfind-Kommentar).
             if (stuckDetector.CheckStuck(movingPlayerPos))
             {
-                Plugin.Log.Info($"[AetheryteAutomation] UpdateMoving(#{currentTargetId}): scheinbar steckengeblieben - Laufweg wird neu angefordert.");
+                var wasFlying = flightUpgrade.IsFlying;
+                Plugin.Log.Info($"[AetheryteAutomation] UpdateMoving(#{currentTargetId}): scheinbar steckengeblieben{(wasFlying ? " (beim Fliegen, evtl. Gebäude im Weg)" : "")} - Laufweg wird neu angefordert.");
                 StopPath();
-                BeginPathfind();
+                BeginPathfind(forceGround: wasFlying);
                 return;
             }
 

@@ -273,7 +273,13 @@ public sealed class AetherCurrentAutomation
         BeginPathfind();
     }
 
-    private void BeginPathfind()
+    /// <param name="forceGround">
+    /// Fliegen für diesen Versuch gar nicht erst probieren - für den Steckengeblieben-Retry (siehe
+    /// UpdateMoving): steckte der Charakter beim Fliegen fest, ist das oft ein Gebäude, gegen das
+    /// vnavmeshs Flug-Beeline läuft (Nutzer-Report). Ein Fußweg findet dort eher den Ausgang; sobald
+    /// die verbleibende Strecke wieder groß genug ist, plant FlightPathUpgrade von selbst auf Fliegen um.
+    /// </param>
+    private void BeginPathfind(bool forceGround = false)
     {
         var mounted = Plugin.Condition[ConditionFlag.Mounted];
         var accepted = false;
@@ -286,7 +292,7 @@ public sealed class AetherCurrentAutomation
         // ersten einer Zone müssen ohnehin ohne Fliegen erreichbar sein (Henne-Ei: Fliegen schaltet
         // erst frei, wenn alle Strömungen der Zone eingesammelt sind) - zu Fuß ist also immer ein
         // gültiger Fallback.
-        if (mounted && Plugin.CanFly)
+        if (!forceGround && mounted && Plugin.CanFly)
             accepted = flyingAccepted = pathfindAndMoveCloseTo.InvokeFunc(currentTargetPosition, true, ArrivalTolerance);
 
         if (!accepted)
@@ -353,11 +359,15 @@ public sealed class AetherCurrentAutomation
             }
 
             // Steckengeblieben (z.B. gegen eine Wand) - Pfad neu anfordern statt untätig zu warten.
+            // War der festgesteckte Weg fliegend, steckt meist ein Gebäude im Weg (vnavmeshs Flug-
+            // Beeline findet dessen Ausgang nicht) - dann diesmal zu Fuß probieren (siehe
+            // BeginPathfind-Kommentar).
             if (stuckDetector.CheckStuck(playerPos))
             {
-                Plugin.Log.Info($"[AetherCurrentAutomation] UpdateMoving({currentTargetEntry.Name}): scheinbar steckengeblieben - Laufweg wird neu angefordert.");
+                var wasFlying = flightUpgrade.IsFlying;
+                Plugin.Log.Info($"[AetherCurrentAutomation] UpdateMoving({currentTargetEntry.Name}): scheinbar steckengeblieben{(wasFlying ? " (beim Fliegen, evtl. Gebäude im Weg)" : "")} - Laufweg wird neu angefordert.");
                 StopPath();
-                BeginPathfind();
+                BeginPathfind(forceGround: wasFlying);
                 return;
             }
 

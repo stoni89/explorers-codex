@@ -894,9 +894,9 @@ public sealed class SightseeingAutomation
         }
     }
 
-    private void BeginPathfind()
+    private void BeginPathfind(bool forceGround = false)
     {
-        if (!TryBeginPathfindAccepted())
+        if (!TryBeginPathfindAccepted(forceGround))
         {
             SkipCurrent(Loc.T("vnavmesh lehnt Laufweg ab", "vnavmesh rejected the path"));
             return;
@@ -949,7 +949,13 @@ public sealed class SightseeingAutomation
     }
 
     /// <summary>Wie BeginPathfind, gibt aber zusätzlich zurück, ob vnavmesh den Laufweg angenommen hat (statt bei Ablehnung SkipCurrent aufzurufen) - für Aufrufer, die bei Ablehnung selbst einen Fallback haben (siehe BeginNextApproachWaypoint).</summary>
-    private bool TryBeginPathfindAccepted()
+    /// <param name="forceGround">
+    /// Fliegen für diesen Versuch gar nicht erst probieren - für den Steckengeblieben-Retry (siehe
+    /// UpdateMoving): steckte der Charakter beim Fliegen fest, ist das oft ein Gebäude, gegen das
+    /// vnavmeshs Flug-Beeline läuft (Nutzer-Report) - ein Fußweg findet dort eher den Ausgang. Sobald
+    /// die verbleibende Strecke wieder groß genug ist, plant FlightPathUpgrade von selbst auf Fliegen um.
+    /// </param>
+    private bool TryBeginPathfindAccepted(bool forceGround = false)
     {
         // Bewusst KEIN erzwungenes Abmounten mehr hier, auch wenn currentLegAllowsFlying false ist -
         // der Charakter soll während des Anflugs (auch für Teilstücke, die nicht fliegend
@@ -959,7 +965,7 @@ public sealed class SightseeingAutomation
         var mounted = Plugin.Condition[ConditionFlag.Mounted];
         var accepted = false;
         var flyingAccepted = false;
-        if (currentLegAllowsFlying && mounted && Plugin.CanFly)
+        if (!forceGround && currentLegAllowsFlying && mounted && Plugin.CanFly)
             accepted = flyingAccepted = pathfindAndMoveCloseTo.InvokeFunc(currentTargetPosition, true, ArrivalTolerance);
 
         if (!accepted)
@@ -1018,11 +1024,15 @@ public sealed class SightseeingAutomation
             }
 
             // Steckengeblieben (z.B. gegen eine Wand) - Pfad neu anfordern statt untätig zu warten.
+            // War der festgesteckte Weg fliegend, steckt meist ein Gebäude im Weg (vnavmeshs Flug-
+            // Beeline findet dessen Ausgang nicht) - dann diesmal zu Fuß probieren (siehe
+            // TryBeginPathfindAccepted-Kommentar).
             if (stuckDetector.CheckStuck(playerPos))
             {
-                Plugin.Log.Info($"[SightseeingAutomation] UpdateMoving({currentTargetEntry.Name}): scheinbar steckengeblieben - Laufweg wird neu angefordert.");
+                var wasFlying = flightUpgrade.IsFlying;
+                Plugin.Log.Info($"[SightseeingAutomation] UpdateMoving({currentTargetEntry.Name}): scheinbar steckengeblieben{(wasFlying ? " (beim Fliegen, evtl. Gebäude im Weg)" : "")} - Laufweg wird neu angefordert.");
                 StopPath();
-                BeginPathfind();
+                BeginPathfind(forceGround: wasFlying);
                 return;
             }
 
