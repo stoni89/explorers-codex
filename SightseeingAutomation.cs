@@ -123,6 +123,7 @@ public sealed class SightseeingAutomation
     private bool hasSeenPathRunning;
     private DateTime lastRemountAttempt = DateTime.MinValue;
     private readonly NavigationStuckDetector stuckDetector = new();
+    private readonly FallDetector fallDetector = new(); // siehe Plugin.FallDetector - erkennt Abstürze beim Zufuß-Anflug (UpdateMoving)
     private readonly FlightPathUpgrade flightUpgrade = new(); // siehe Plugin.FlightPathUpgrade (Flugverbots-Bereiche)
     private bool hasSentEmote;
     private bool didFinalApproach;
@@ -905,6 +906,7 @@ public sealed class SightseeingAutomation
         stateEnteredAt = DateTime.UtcNow;
         hasSeenPathRunning = false;
         stuckDetector.Reset();
+        fallDetector.Reset();
         StatusText = Loc.T($"Laufe zu: {currentTargetEntry?.Name}...", $"Walking to: {currentTargetEntry?.Name}...");
     }
 
@@ -1024,6 +1026,28 @@ public sealed class SightseeingAutomation
                 return;
             }
 
+            // Von einer Klippe/einem Grat gefallen (nur beritten/fliegend legitimer schneller
+            // Höhenverlust, siehe FallDetector) - Laufweg neu anfordern statt von ganz unten sinnlos
+            // weiterzulaufen (Nutzeranforderung: "Wenn man runterfällt bitte erneut versuchen").
+            // currentPuzzle hat dafür bereits eine eigene, feinere Absturzerkennung (siehe
+            // UpdateJumpingPuzzle), deshalb hier nur außerhalb davon relevant.
+            if (currentPuzzle == null && !Plugin.Condition[ConditionFlag.Mounted])
+            {
+                if (fallDetector.CheckFell(playerPos.Y))
+                {
+                    Plugin.Log.Info($"[SightseeingAutomation] UpdateMoving({currentTargetEntry.Name}): Absturz erkannt - Laufweg wird neu angefordert.");
+                    StopPath();
+                    BeginPathfind();
+                    return;
+                }
+            }
+            else
+            {
+                // Beritten/fliegend (legitimer schneller Höhenverlust) oder im Jumping-Puzzle (eigene
+                // Absturzerkennung) - keinen veralteten Höhenwert für den nächsten Zufuß-Abschnitt stehen lassen.
+                fallDetector.Reset();
+            }
+
             if (DateTime.UtcNow - stateEnteredAt > StepMaxDuration)
                 SkipCurrent(Loc.T("Laufweg dauert zu lange", "Path is taking too long"));
 
@@ -1056,6 +1080,7 @@ public sealed class SightseeingAutomation
                         hasSeenPathRunning = false;
                         stateEnteredAt = DateTime.UtcNow;
                         stuckDetector.Reset();
+                        fallDetector.Reset();
                         StatusText = Loc.T(
                             $"Lande am Zwischenstopp: {currentTargetEntry.Name}...",
                             $"Landing at the waypoint: {currentTargetEntry.Name}...");
@@ -1077,6 +1102,7 @@ public sealed class SightseeingAutomation
                     hasSeenPathRunning = false;
                     stateEnteredAt = DateTime.UtcNow;
                     stuckDetector.Reset();
+                    fallDetector.Reset();
                     StatusText = Loc.T(
                         $"Laufe zum nächsten Zwischenstopp: {currentTargetEntry.Name}...",
                         $"Walking to the next waypoint: {currentTargetEntry.Name}...");
@@ -1103,6 +1129,7 @@ public sealed class SightseeingAutomation
                     hasSeenPathRunning = false;
                     stateEnteredAt = DateTime.UtcNow;
                     stuckDetector.Reset();
+                    fallDetector.Reset();
                     StatusText = Loc.T(
                         $"Laufe genau auf den Punkt: {currentTargetEntry.Name}...",
                         $"Walking precisely onto the point: {currentTargetEntry.Name}...");

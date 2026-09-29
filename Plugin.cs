@@ -2018,7 +2018,7 @@ public sealed class Plugin : IDalamudPlugin
         [2162695] = new Vector3(425.21655f, 15.025984f, 464.70297f),   // The Brewer's Beacon (Western La Noscea)
         [2162694] = new Vector3(597.14575f, 73.67687f, -112.00588f),   // Red Rooster Stead (Lower La Noscea)
         [2162710] = new Vector3(503.04245f, 106.69299f, -434.7053f),   // The Grey Fleet (Lower La Noscea)
-        [2162715] = new Vector3(67.52792f, 1.9575521f, 47.7629f),      // Camp Skull Valley (Western La Noscea)
+        [2162715] = new Vector3(67.531685f, 1.9575522f, 47.518333f),   // Camp Skull Valley (Western La Noscea)
         [2162719] = new Vector3(381.97714f, 5.188155f, 198.84981f),    // Jijiroon's Trading Post (Upper La Noscea)
         [2162718] = new Vector3(-428.29407f, 69.60198f, 28.178936f),   // Thalaos (Upper La Noscea)
     };
@@ -7826,5 +7826,50 @@ public sealed class NavigationStuckDetector
         lastPosition = currentPosition;
         lastCheckAt = DateTime.UtcNow;
         return stuck;
+    }
+}
+
+/// <summary>
+/// Erkennt einen plötzlichen Höhenverlust (z.B. von einer Klippe/einem schmalen Grat gefallen) beim
+/// Zufuß-Laufen zu einem Sightseeing-Punkt - NICHT beim Fliegen/Mounten (das legitim schnell absteigen
+/// kann, siehe CheckFell-Aufrufer). Für Punkte mit engem Klippen-Anflug ohne eigenes Jumping-Puzzle-
+/// Setup (siehe SightseeingAutomation.UpdateMoving), bei denen ein Absturz sonst unbemerkt zu einem
+/// sinnlosen Weiterlaufen von ganz unten geführt hätte (Nutzeranforderung).
+/// </summary>
+public sealed class FallDetector
+{
+    private static readonly TimeSpan CheckInterval = TimeSpan.FromSeconds(1);
+    private const float FallDropThreshold = 6f;
+
+    private float? lastY;
+    private DateTime lastCheckAt = DateTime.MinValue;
+
+    public void Reset()
+    {
+        lastY = null;
+        lastCheckAt = DateTime.MinValue;
+    }
+
+    /// <summary>
+    /// true, wenn die Höhe seit der letzten Prüfung (CheckInterval) um mehr als FallDropThreshold
+    /// gefallen ist. Startet nach jedem Reset()/true-Ergebnis wieder bei null, prüft also nur alle
+    /// paar Sekunden statt jeden Frame (gleiches Prinzip wie NavigationStuckDetector.CheckStuck).
+    /// </summary>
+    public bool CheckFell(float currentY)
+    {
+        if (lastCheckAt == DateTime.MinValue)
+        {
+            lastY = currentY;
+            lastCheckAt = DateTime.UtcNow;
+            return false;
+        }
+
+        if (DateTime.UtcNow - lastCheckAt < CheckInterval)
+            return false;
+
+        var fell = lastY.HasValue && lastY.Value - currentY > FallDropThreshold;
+        lastY = currentY;
+        lastCheckAt = DateTime.UtcNow;
+        return fell;
     }
 }
