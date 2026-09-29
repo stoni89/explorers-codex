@@ -234,21 +234,24 @@ public sealed class AetherCurrentAutomation
         Plugin.CombatPlugin.SetCombatMode(false);
 
         // Der Kampf kann den Charakter vom eigentlichen Ziel weggezogen haben (z.B. einem Angreifer
-        // hinterher, siehe Vector3.Distance-Anlauf oben) - dann erst zurück zur Ätherströmung laufen,
-        // bevor wieder nach dem interagierbaren Objekt gesucht wird (Nutzer-Report: "ist nach dem
-        // Kampf nicht zur Ätherströmung gelaufen um sie zu aktivieren"). Noch innerhalb der Such-
-        // reichweite (siehe UpdateInteracting/InteractObjectSearchRadius)? Dann direkt weitersuchen,
-        // ohne unnötig einen (evtl. von vnavmesh abgelehnten, weil schon-am-Ziel) Laufauftrag
-        // anzufordern, der die Ätherströmung sonst fälschlich als "unerreichbar" überspringen würde.
-        var playerPosAfterCombat = Plugin.ObjectTable.LocalPlayer?.Position ?? currentTargetPosition;
-        if (currentTargetEntry != null && Vector3.Distance(playerPosAfterCombat, currentTargetPosition) > InteractObjectSearchRadius)
+        // hinterher) - IMMER zurück zur Ätherströmung laufen, bevor wieder interagiert wird (Nutzer-
+        // Report: "wenn man recht nah dran ist... muss er trotzdem danach zu dem Aether Punkt
+        // laufen, sonst kann er ihn nicht aktivieren"). InteractObjectSearchRadius (20y, zum bloßen
+        // AUFFINDEN des Objekts) reicht dafür nicht als Kriterium - der echte Interact-Radius des
+        // Spiels ist viel enger. Statt BeginPathfind() (das bei Ablehnung überspringen würde) direkt
+        // per pathfindAndMoveCloseTo: lehnt vnavmesh ab, weil ohnehin schon nah genug dran, bleibt es
+        // einfach bei State.Interacting - kein Überspringen.
+        if (currentTargetEntry != null)
         {
             Plugin.Log.Info($"[AetherCurrentAutomation] Kampf vorbei - Kampf-Plugin wieder aus, laufe zurück zu: {currentTargetEntry.Name}.");
-            BeginPathfind();
-        }
-        else
-        {
-            Plugin.Log.Info($"[AetherCurrentAutomation] Kampf vorbei - Kampf-Plugin wieder aus, noch nah genug an: {currentTargetEntry?.Name}.");
+            didFinalApproach = false;
+            if (pathfindAndMoveCloseTo.InvokeFunc(currentTargetPosition, false, ArrivalTolerance))
+            {
+                state = State.MovingTo;
+                stateEnteredAt = DateTime.UtcNow;
+                hasSeenPathRunning = false;
+                stuckDetector.Reset();
+            }
         }
 
         return false;
