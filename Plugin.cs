@@ -2349,6 +2349,9 @@ public sealed class Plugin : IDalamudPlugin
     // (Loth ast Gnath past second door)".
     private static readonly Dictionary<uint, AetherCurrentJumpRoute> AetherCurrentJumpRoutes = new()
     {
+        [2818077] = new( // The Dravanian Forelands (Loth ast Gnath past second door)
+            new Vector3(400.26862f, -92.110725f, 684.3161f),
+            new Vector3(404.08856f, -90.33713f, 686.0732f)),
     };
 
     /// <summary>Siehe AetherCurrentJumpRoutes-Kommentar.</summary>
