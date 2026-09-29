@@ -263,11 +263,20 @@ public sealed class ChocobokeepAutomation
             return;
         }
 
-        // Genau derselbe Trick wie bei HuntingLogAutomation/AetheryteAutomation: die Karten-Flagge
-        // auf die (rohe) Zielposition setzen und vnavmesh nach einem begehbaren Punkt in deren Nähe
-        // fragen.
-        Plugin.OpenEntryMap(entry, showMapWindow: false);
-        var floorPoint = queryFlagToPoint.InvokeFunc();
+        // Chocobokeep-Einträge haben immer eine exakte, von Hand erfasste WorldPosition (siehe
+        // Plugin.ChocobokeepLocations) - DIREKT dorthin laufen statt über den Karten-Flaggen-Umweg
+        // (Weltposition -> Kartenkoordinate -> Flagge -> FlagToPoint): dessen Rückumrechnung kann an
+        // einer anderen, ungünstigeren Stelle landen als die echte Position selbst, was z.B. bei
+        // Falcon's Nest zu einem unnötigen Umweg über den Berg führte, statt direkt zur Position zu
+        // laufen (Nutzer-Report). Genau dasselbe Problem/dieselbe Lösung wie zuvor bei
+        // AetherCurrentAutomation.StartMovingTo.
+        var floorPoint = entry.WorldPosition;
+        if (floorPoint == null)
+        {
+            Plugin.OpenEntryMap(entry, showMapWindow: false);
+            floorPoint = queryFlagToPoint.InvokeFunc();
+        }
+
         if (floorPoint == null)
         {
             skippedIds.Add(entry.Id);
