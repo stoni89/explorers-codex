@@ -208,12 +208,18 @@ public sealed class AetherCurrentAutomation
             return;
         }
 
-        // Nur sortierbar für Einträge MIT roher Weltposition - reine Kartenkoordinaten-Einträge
-        // bleiben einfach in der gegebenen Reihenfolge (kommt praktisch aufs Gleiche raus, da ohnehin
-        // alle nacheinander abgelaufen werden).
+        // Die räumlich nächstgelegene noch nicht freigeschaltete Ätherströmung zuerst (Nutzeranforderung),
+        // statt stur der Zonen-Listenreihenfolge zu folgen - Ätherströmungen kommen (anders als Hunting-
+        // Log-Monster) meist nur als Kartenkoordinate (VendorMapX/Y) ohne rohe Weltposition, deshalb wie
+        // bei QuestAutomation.TryStartNext über Plugin.ResolveWorldPositionFromMapCoords zurückgerechnet.
+        // Einträge ohne auflösbare Position fallen ans Ende, statt die Sortierung abzubrechen.
         var playerPos = Plugin.ObjectTable.LocalPlayer?.Position ?? Vector3.Zero;
         var next = candidates
-            .OrderBy(e => e.WorldPosition.HasValue ? Vector3.Distance(playerPos, e.WorldPosition.Value) : float.MaxValue)
+            .OrderBy(e => e.WorldPosition is { } worldPos
+                ? Vector3.Distance(playerPos, worldPos)
+                : Plugin.ResolveWorldPositionFromMapCoords(e.MapId, e.VendorMapX, e.VendorMapY) is { } mapPos
+                    ? Vector3.Distance(playerPos, mapPos)
+                    : float.MaxValue)
             .ThenBy(e => e.Name)
             .First();
         StartMovingTo(next);

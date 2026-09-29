@@ -116,8 +116,14 @@ public class CompactOverlayWindow : Window
     /// Dalamuds WindowSystem VOR PreDraw/Draw/PostDraw geprüft, das Fenster erscheint also gar
     /// nicht erst statt nur mit falschem Inhalt.
     /// </summary>
+    /// <summary>
+    /// Zusätzlich (Nutzeranforderung): während MSQ-Solo-Duties (siehe Plugin.IsInMsqSoloDuty)
+    /// ausgeblendet, danach automatisch wieder eingeblendet - wird jeden Frame neu geprüft, kein
+    /// eigener An-/Aus-Zustand nötig.
+    /// </summary>
     public override bool DrawConditions() =>
-        Plugin.ClientState.IsLoggedIn && !Plugin.Condition[ConditionFlag.BetweenAreas] && !Plugin.Condition[ConditionFlag.BetweenAreas51];
+        Plugin.ClientState.IsLoggedIn && !Plugin.Condition[ConditionFlag.BetweenAreas] && !Plugin.Condition[ConditionFlag.BetweenAreas51]
+        && !Plugin.IsInMsqSoloDuty();
 
     // Dezentes Weiß-Grau statt der vorherigen lila Farbe - klein und unauffällig, zeigt aber
     // weiterhin an, wo sich das Fenster zum Skalieren greifen lässt.
@@ -467,7 +473,10 @@ public class CompactOverlayWindow : Window
         var hasActionableQuests = missingQuests.Any(q => !plugin.QuestAutomation.IsKnownUnsupported(q.Id));
         var hasActionableAetherytes = missingAetherytesCity.Count > 0;
         var hasActionableHuntingLog = missingHuntingLogInZone.Any(e => e.WorldPosition.HasValue);
-        var hasActionableAetherCurrents = missingAetherCurrentsInZone.Any(e => e.HasGoToTarget);
+        // Ohne die abgeschlossene Quest "Divine Intervention" (siehe Plugin.ComputeGrandCompanyOrTribeGateReason)
+        // sind ALLE Ätherströmungen gesperrt - der Automations-Knopf soll dann ausgegraut bleiben statt
+        // sinnlos loszulaufen (Nutzeranforderung).
+        var hasActionableAetherCurrents = missingAetherCurrentsInZone.Any(e => e.HasGoToTarget && !Plugin.IsAchievementOrRankGated(e));
         // hasVisibleSightseeing entscheidet nur, ob der Knopf überhaupt gezeichnet wird (siehe
         // DrawAutomationButtonIfNeeded) - hasActionableSightseeing (gerade durch Wetter/Uhrzeit/
         // Buch-Freischaltung eingeschränkt) entscheidet zusätzlich, ob er dabei ausgegraut ist. Im
@@ -1772,9 +1781,13 @@ public class CompactOverlayWindow : Window
                     : otherAutomationActive
                         ? OtherAutomationActiveTooltip
                     : isDisabled
-                        ? Loc.T(
-                            "Keine Ätherströmungen mit bekannter Position in dieser Zone.",
-                            "No aether currents with a known position in this zone.")
+                        ? Plugin.IsDivineInterventionMissing()
+                            ? Loc.T(
+                                "Benötigt die abgeschlossene Quest \"Divine Intervention\".",
+                                "Requires the completed quest \"Divine Intervention\".")
+                            : Loc.T(
+                                "Keine Ätherströmungen mit bekannter Position in dieser Zone.",
+                                "No aether currents with a known position in this zone.")
                     : automation.IsActive
                         ? Loc.T("Bricht die Laufbewegung sofort ab und stoppt die Automation.", "Immediately stops movement and the automation.")
                         : Loc.T(
@@ -2010,6 +2023,16 @@ public class CompactOverlayWindow : Window
             onStart();
     }
 
+    // Nutzeranforderung: im Overlay nur noch "Zone (Landmark)" statt "Aether Current - Zone
+    // (Landmark)" anzeigen - die Daten selbst (Data/aethercurrents.json, Suche, Tooltips etc.)
+    // behalten den vollen Namen, das ist rein eine Anzeige-Kürzung hier im Overlay.
+    private const string AetherCurrentNamePrefix = "Aether Current - ";
+
+    private static string GetOverlayDisplayName(CollectibleEntry entry) =>
+        entry.Type == CollectibleType.AetherCurrent && entry.Name.StartsWith(AetherCurrentNamePrefix, StringComparison.Ordinal)
+            ? entry.Name[AetherCurrentNamePrefix.Length..]
+            : entry.Name;
+
     private void DrawClickableName(CollectibleEntry entry, bool isNotYetPossible = false)
     {
         var affordable = plugin.CanAfford(entry);
@@ -2027,7 +2050,7 @@ public class CompactOverlayWindow : Window
         // vorne in der Zeile (siehe DrawGoToColumn).
         if (!entry.HasGoToTarget)
         {
-            OutlineText(entry.Name, isNotYetPossible ? NotYetPossibleColor : affordable ? AffordableColor : NormalColor);
+            OutlineText(GetOverlayDisplayName(entry), isNotYetPossible ? NotYetPossibleColor : affordable ? AffordableColor : NormalColor);
 
             // Ohne Kartenziel sonst nicht interaktiv - außer für das Rechtsklick-Menü (siehe unten).
             if (ImGui.IsItemHovered())
@@ -2037,7 +2060,7 @@ public class CompactOverlayWindow : Window
             return;
         }
 
-        OutlineText(entry.Name, isNotYetPossible ? NotYetPossibleColor : affordable ? AffordableColor : VendorLinkColor);
+        OutlineText(GetOverlayDisplayName(entry), isNotYetPossible ? NotYetPossibleColor : affordable ? AffordableColor : VendorLinkColor);
         if (ImGui.IsItemHovered())
         {
             ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);

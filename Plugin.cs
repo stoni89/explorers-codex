@@ -43,6 +43,7 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IChatGui ChatGui { get; private set; } = null!;
     [PluginService] internal static ICondition Condition { get; private set; } = null!;
     [PluginService] internal static IUnlockState UnlockState { get; private set; } = null!;
+    [PluginService] internal static IDutyState DutyState { get; private set; } = null!;
 
     private const string CommandName = "/exc";
 
@@ -2832,17 +2833,24 @@ public sealed class Plugin : IDalamudPlugin
 
     /// <summary>
     /// Ob alle ersten SightseeingFirstBookCount A-Realm-Reborn-Sichtungspunkte bereits aufgezeichnet
-    /// sind - live über PlayerState.IsAdventureComplete, für SightseeingNeedsFirstTwenty. Es gibt
-    /// kein eigenes "ist A Realm Reborn"-Feld auf CollectibleEntry - SightseeingWeatherMask != 0
-    /// identifiziert dieselbe Menge zuverlässig (siehe RealmRebornVistaWeathers-Kommentar: JEDER
-    /// A-Realm-Reborn-Punkt hat eine Wetter-Bedingung, KEIN späterer), kombiniert mit
-    /// "!SightseeingNeedsFirstTwenty" (nur bei A-Realm-Reborn-Nummer 1-20 gesetzt) ergibt das genau
-    /// die ersten 20.
+    /// sind - für SightseeingNeedsFirstTwenty. Es gibt kein eigenes "ist A Realm Reborn"-Feld auf
+    /// CollectibleEntry - SightseeingWeatherMask != 0 identifiziert dieselbe Menge zuverlässig (siehe
+    /// RealmRebornVistaWeathers-Kommentar: JEDER A-Realm-Reborn-Punkt hat eine Wetter-Bedingung, KEIN
+    /// späterer), kombiniert mit "!SightseeingNeedsFirstTwenty" (nur bei A-Realm-Reborn-Nummer 1-20
+    /// gesetzt) ergibt das genau die ersten 20.
+    ///
+    /// WICHTIG: nutzt bewusst denselben IsAdventureComplete(uint)-Helfer (Dalamuds IUnlockState-
+    /// Service) wie die grüne/rote Markierung der einzelnen Punkte selbst (siehe Zeile ~314) - NICHT
+    /// den rohen PlayerState.Instance()->IsAdventureComplete(...)-Aufruf, der hier vorher direkt
+    /// verwendet wurde. Nutzer-Report: nach Abschluss aller ersten 20 UND dem freischaltenden Gespräch
+    /// mit Millith Ironheart blieben Punkte ab 21 trotzdem als "Bedingung nicht erfüllt" markiert -
+    /// die beiden APIs lieferten hier unterschiedliche Ergebnisse, wodurch diese Prüfung fälschlich
+    /// weiterhin "unvollständig" meldete, obwohl die einzelnen Punkte selbst schon korrekt grün waren.
     /// </summary>
-    private static unsafe bool AreFirstSightseeingBookEntriesComplete()
+    private static bool AreFirstSightseeingBookEntriesComplete()
     {
         var firstBook = GetSightseeingEntries().Where(e => !e.SightseeingNeedsFirstTwenty && e.SightseeingWeatherMask != 0);
-        return firstBook.All(e => PlayerState.Instance()->IsAdventureComplete(e.Id));
+        return firstBook.All(e => IsAdventureComplete(e.Id));
     }
 
     private static Dictionary<uint, string>? questNameByIdCache;
@@ -4441,6 +4449,22 @@ public sealed class Plugin : IDalamudPlugin
             }
         }
 
+        // ALLE Ätherströmungen setzen die abgeschlossene Quest "Divine Intervention" voraus
+        // (Nutzeranforderung: ohne die Quest sind alle Ätherströmungen gesperrt, in jeder Zone
+        // gleichermaßen) - global statt per Eintrag in aethercurrents.json, gleiches Prinzip wie
+        // MountRequiredQuest oben, nur ohne Namens-Dictionary, da es für den ganzen Typ gilt.
+        if (entry.Type == CollectibleType.AetherCurrent)
+        {
+            const string requiredQuestForAetherCurrent = "Divine Intervention";
+            var requiredQuestId = ResolveQuestIdByName(requiredQuestForAetherCurrent);
+            if (requiredQuestId == null || !QuestManager.IsQuestComplete((ushort)requiredQuestId.Value))
+            {
+                return Loc.T(
+                    $"Benötigt die abgeschlossene Quest \"{requiredQuestForAetherCurrent}\".",
+                    $"Requires the completed quest \"{requiredQuestForAetherCurrent}\".");
+            }
+        }
+
         // Quests mit einer manuell erfassten Zusatz-Voraussetzung (siehe QuestRequiredMounts-
         // Kommentar) - live gegen den tatsächlichen Mount-Besitz geprüft.
         if (entry.Type == CollectibleType.Quest && QuestRequiredMounts.TryGetValue(entry.Name, out var requiredMounts))
@@ -4617,6 +4641,13 @@ public sealed class Plugin : IDalamudPlugin
 
     public static bool IsAchievementOrRankGated(CollectibleEntry entry) =>
         ComputeGrandCompanyOrTribeGateReason(entry) != null;
+
+    /// <summary>Ob die Quest "Divine Intervention" (Voraussetzung für ALLE Ätherströmungen, siehe ComputeGrandCompanyOrTribeGateReason) noch fehlt - für den genauen Tooltip am Auto-Ätherströmung-Knopf, wenn er deshalb ausgegraut ist.</summary>
+    public static bool IsDivineInterventionMissing()
+    {
+        var id = ResolveQuestIdByName("Divine Intervention");
+        return id == null || !QuestManager.IsQuestComplete((ushort)id.Value);
+    }
 
     // Stammeshändler, die mit GIL statt der stammeseigenen Währung verkaufen - dort lässt sich der
     // Stamm nicht über die Währung (siehe ResolveBeastTribe) bestimmen. Wert = Lumina-BeastTribe-RowId.
@@ -4959,13 +4990,17 @@ public sealed class Plugin : IDalamudPlugin
 
         // Klassengebundene Quests bewusst ausklammern - aber nicht nur Kategorie 1 ("All
         // Classes") akzeptieren, sondern jede Kategorie, deren Name mit "All" beginnt
-        // (z.B. Kategorie 130 "All classes and jobs (excluding limited jobs)"). Das
-        // deckt die meisten normalen Quests ab, die nur Limited Jobs wie Blue Mage ausschließen.
+        // (z.B. Kategorie 130 "All classes and jobs (excluding limited jobs)"). Ebenso
+        // Kategorien, die mit "Any" beginnen (z.B. 142 "Any Disciple of War or Magic
+        // (excluding limited jobs)") - das sind KEINE auf einen einzelnen Job beschränkten
+        // Quests, sondern nur reine Kampf-/Crafter-Gruppen-Einschränkungen (z.B. Primal-
+        // Quests wie "Drop Dead Shiva", die jeder Kampfjob annehmen kann, nur keine
+        // Sammler/Handwerker). Ohne "Any" fielen solche Quests fälschlich ganz raus.
         // WICHTIG: Der Name muss explizit auf Englisch abgefragt werden - row.ClassJobCategory0
         // liefert sonst den Namen in der Spielclient-Sprache (z.B. Deutsch "Alle Klassen"),
         // der nie mit "All" beginnt und dadurch ausnahmslos JEDE Quest ausgeschlossen hätte.
         var categoryName = GetEnglishClassJobCategoryName(row.ClassJobCategory0.RowId);
-        if (!categoryName.StartsWith("All", StringComparison.Ordinal))
+        if (!categoryName.StartsWith("All", StringComparison.Ordinal) && !categoryName.StartsWith("Any", StringComparison.Ordinal))
             return false;
         if (row.ClassJobLevel[0] > playerLevel)
             return false;
@@ -6178,6 +6213,19 @@ public sealed class Plugin : IDalamudPlugin
     /// </summary>
     public static bool IsInInstancedContent() =>
         Condition[ConditionFlag.BoundByDuty] || Condition[ConditionFlag.BoundByDuty56] || Condition[ConditionFlag.BoundByDuty95];
+
+    // ContentType "Quest Battles" (RowId 7) - die MSQ-Solo-Instanzen (z.B. Ultima-Weapon-artige
+    // Alleinkämpfe), im Gegensatz zu regulären Dungeons/Trials/Raids mit ihren eigenen ContentTypes.
+    private const uint QuestBattleContentTypeId = 7;
+
+    /// <summary>
+    /// Ob man sich GERADE JETZT in einer MSQ-Solo-Duty befindet (Nutzeranforderung: Overlay dort
+    /// ausblenden, danach wieder einblenden) - IDutyState.ContentFinderCondition liefert dafür die
+    /// gerade aktive Duty (RowRef, unabhängig vom aktuellen TerritoryType, das bei Solo-Duties oft
+    /// noch die Außenwelt-Zone zeigt), deren ContentType auf "Quest Battles" geprüft wird.
+    /// </summary>
+    public static bool IsInMsqSoloDuty() =>
+        IsInInstancedContent() && DutyState.ContentFinderCondition.ValueNullable?.ContentType.RowId == QuestBattleContentTypeId;
 
     public static bool IsChocoboCompanionSummoned() => GetChocoboSummonTimeLeft() > 0f;
 
