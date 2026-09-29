@@ -2297,6 +2297,24 @@ public sealed class Plugin : IDalamudPlugin
                 new SightseeingPuzzleStep(new Vector3(197.65483f, 283.54507f, 416.3392f), Jump: false, Fly: true),    // Punkt 3 (fliegend, Sightseeing-Punkt)
             },
             DismountAtStart: true),
+        [2162722] = new( // U'Ghamaro Mines (Outer La Noscea)
+            new Vector3(100.45776f, 57.340443f, -474.5701f),
+            new[]
+            {
+                new SightseeingPuzzleStep(new Vector3(97.69164f, 59.985504f, -475.45724f), Jump: true),                      // Punkt 1
+                new SightseeingPuzzleStep(new Vector3(96.900154f, 60.601845f, -475.57516f), Jump: false),                    // Punkt 2
+                new SightseeingPuzzleStep(new Vector3(96.45128f, 62.092f, -477.96954f), Jump: true),                         // Punkt 3 - ohne Anlauf
+                new SightseeingPuzzleStep(new Vector3(96.54945f, 62.090305f, -477.42578f), Jump: false),                     // Punkt 4
+                new SightseeingPuzzleStep(new Vector3(96.37351f, 62.092182f, -478.4005f), Jump: false, SprintBefore: true),  // Punkt 5 - Sprint, dann Anlauf
+                new SightseeingPuzzleStep(new Vector3(95.66097f, 63.449345f, -482.26147f), Jump: true, RunUp: true),         // Punkt 6 - bei Punkt 5 abspringen
+                new SightseeingPuzzleStep(new Vector3(96.159256f, 63.449345f, -482.43964f), Jump: false),                    // Punkt 7
+                new SightseeingPuzzleStep(new Vector3(96.25108f, 63.449345f, -482.53964f), Jump: false),                     // Punkt 8
+                new SightseeingPuzzleStep(new Vector3(92.56192f, 65.24594f, -485.55588f), Jump: true, RunUp: true),          // Punkt 9 - bei Punkt 8 abspringen
+                new SightseeingPuzzleStep(new Vector3(92.57982f, 65.57783f, -486.54486f), Jump: false),                      // Punkt 10
+                new SightseeingPuzzleStep(new Vector3(93.8758f, 66.83331f, -486.28745f), Jump: true),                        // Punkt 11
+                new SightseeingPuzzleStep(new Vector3(95.40166f, 68.67571f, -486.0416f), Jump: true),                        // Punkt 12
+                new SightseeingPuzzleStep(new Vector3(96.52743f, 70.19558f, -486.0492f), Jump: false),                       // Punkt 13 (Sightseeing-Punkt)
+            }),
         [2162715] = new( // Camp Skull Valley (Western La Noscea)
             new Vector3(62.28901f, 0.030244112f, 48.545948f),
             new[]
