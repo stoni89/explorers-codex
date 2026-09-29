@@ -215,6 +215,15 @@ public sealed class AetheryteAutomation
     private DateTime? districtTravelFinishedAt;
     private readonly HashSet<uint> skippedIds = new();
 
+    // Diagnose für den Nutzer-Report "interagiert, 1 Sekunde später läuft er gegen den Kristall und
+    // bricht ab" (trotz StopPath() vor dem Interact weiterhin aufgetreten) - loggt für kurze Zeit
+    // NACH dem Interact-Aufruf jeden Frame Position + relevante Condition-Flags, um zu sehen, WER die
+    // Bewegung nach dem Interagieren tatsächlich auslöst (Spiel-Client selbst? vnavmesh doch noch
+    // aktiv? eine andere Automation?), statt weiter ins Blaue zu raten.
+    private DateTime? postInteractDiagnosticStartedAt;
+    private Vector3? postInteractDiagnosticLastPos;
+    private static readonly TimeSpan PostInteractDiagnosticDuration = TimeSpan.FromSeconds(3);
+
     // Manueller Bezirks-Zugang (siehe Plugin.ManualDistrictEntryPoints/TryTravelToDistrict).
     private ManualEntryPhase manualEntryPhase;
     private DateTime manualEntryPhaseStartedAt;
@@ -1286,8 +1295,31 @@ public sealed class AetheryteAutomation
             Plugin.InteractWithGameObject(gameObject);
             hasInteractedThisCycle = true;
             stateEnteredAt = DateTime.UtcNow;
+            postInteractDiagnosticStartedAt = DateTime.UtcNow;
+            postInteractDiagnosticLastPos = Plugin.ObjectTable.LocalPlayer?.Position;
             Plugin.Log.Info($"[AetheryteAutomation] UpdateInteracting(#{currentTargetId}): interagiert mit BaseId={gameObject.BaseId} @ {gameObject.Position}, warte auf Freischaltung...");
             return;
+        }
+
+        // Siehe postInteractDiagnosticStartedAt-Kommentar - jeden Frame für kurze Zeit NACH dem
+        // Interact loggen, was mit der Position passiert und welche Condition-Flags aktiv sind.
+        if (postInteractDiagnosticStartedAt is { } diagStart)
+        {
+            if (DateTime.UtcNow - diagStart < PostInteractDiagnosticDuration)
+            {
+                var diagPos = Plugin.ObjectTable.LocalPlayer?.Position ?? Vector3.Zero;
+                var movedSinceLastFrame = postInteractDiagnosticLastPos.HasValue ? Vector3.Distance(postInteractDiagnosticLastPos.Value, diagPos) : 0f;
+                postInteractDiagnosticLastPos = diagPos;
+                Plugin.Log.Info($"[AetheryteAutomation] PostInteractDiag(#{currentTargetId}): pos={diagPos}, movedSinceLastFrame={movedSinceLastFrame:F4}, " +
+                                 $"distToObject={Vector3.Distance(diagPos, gameObject.Position):F3}, Mounted={Plugin.Condition[ConditionFlag.Mounted]}, " +
+                                 $"Casting={Plugin.Condition[ConditionFlag.Casting]}, OccupiedInEvent={Plugin.Condition[ConditionFlag.OccupiedInEvent]}, " +
+                                 $"InCombat={Plugin.Condition[ConditionFlag.InCombat]}, BetweenAreas={Plugin.Condition[ConditionFlag.BetweenAreas]}, " +
+                                 $"IsAnimationLocked={Plugin.IsAnimationLocked()}, pathIsRunning={pathIsRunning.InvokeFunc()}, unlocked={Plugin.IsAetheryteUnlocked(currentTargetId.Value)}");
+            }
+            else
+            {
+                postInteractDiagnosticStartedAt = null;
+            }
         }
 
         // Das Entdecken eines Aetheryten spielt einen kurzen Cast ab, bevor er wirklich
