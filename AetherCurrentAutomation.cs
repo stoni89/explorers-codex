@@ -26,6 +26,18 @@ public sealed class AetherCurrentAutomation
         Mounting,
         MovingTo,
         Interacting,
+        JumpRoute,
+    }
+
+    // Manche Ätherströmungen sind nur über einen kurzen Sprung erreichbar (z.B. "The Dravanian
+    // Forelands (Loth ast Gnath past second door)", siehe Plugin.AetherCurrentJumpRoutes) - State.
+    // MovingTo läuft dafür zuerst ganz normal zum Startpunkt (Route.Start), erst DANACH übernimmt
+    // dieser Zustand: abmounten, zum Absprungpunkt laufen+springen, dann normal zur echten Position
+    // (entry.WorldPosition) weiter über BeginFinalApproach.
+    private enum JumpPhase
+    {
+        Dismounting,
+        RunningToJump,
     }
 
     private static readonly TimeSpan MountWaitTimeout = TimeSpan.FromSeconds(6);
@@ -84,6 +96,10 @@ public sealed class AetherCurrentAutomation
     private readonly ICallGateSubscriber<bool> navmeshIsReady;
     private readonly ICallGateSubscriber<Vector3?> queryFlagToPoint;
 
+    // Rohe Wegpunkt-Bewegung (kein Pathfinding) für den Sprung selbst (siehe State.JumpRoute) - genau
+    // dieselbe IPC wie SightseeingAutomation für ihre Jumping Puzzles nutzt.
+    private readonly ICallGateSubscriber<List<Vector3>, bool, object> moveToPath;
+
     private State state = State.Idle;
     private CollectibleEntry? currentTargetEntry;
     private Vector3 currentTargetPosition;
@@ -103,6 +119,16 @@ public sealed class AetherCurrentAutomation
     // yards vorher ab und auf dem Punkt mountet er wieder auf"). Identisches Problem/dieselbe Lösung
     // wie in AetheryteAutomation/ChocobokeepAutomation/SightseeingAutomation.
     private bool hasIntentionallyDismounted;
+
+    // Siehe Plugin.AetherCurrentJumpRoutes/State.JumpRoute-Kommentar - null, solange das aktuelle
+    // Ziel keine hinterlegte Sprungroute hat oder noch nicht am Startpunkt angekommen ist.
+    private Plugin.AetherCurrentJumpRoute? activeJumpRoute;
+    private JumpPhase jumpPhase;
+    private DateTime? jumpDismountedAt;
+
+    // Kurze Wartezeit nach dem Abmounten (wie DismountSettleDelay in anderen Automationen) - ein
+    // Sprung-Versuch mitten in der Absteige-Animation greift nicht.
+    private static readonly TimeSpan JumpDismountSettleDelay = TimeSpan.FromSeconds(1);
 
     public bool IsActive { get; private set; }
 
@@ -129,6 +155,7 @@ public sealed class AetherCurrentAutomation
         pathStop = Plugin.PluginInterface.GetIpcSubscriber<object>("vnavmesh.Path.Stop");
         navmeshIsReady = Plugin.PluginInterface.GetIpcSubscriber<bool>("vnavmesh.Nav.IsReady");
         queryFlagToPoint = Plugin.PluginInterface.GetIpcSubscriber<Vector3?>("vnavmesh.Query.Mesh.FlagToPoint");
+        moveToPath = Plugin.PluginInterface.GetIpcSubscriber<List<Vector3>, bool, object>("vnavmesh.Path.MoveTo");
     }
 
     public bool IsVNavmeshAvailable()
@@ -166,6 +193,7 @@ public sealed class AetherCurrentAutomation
         isDefendingSelf = false;
         lastCombatEnsureAt = DateTime.MinValue;
         hasIntentionallyDismounted = false;
+        activeJumpRoute = null;
         StatusText = Loc.T("Automation gestartet...", "Automation started...");
     }
 
@@ -252,6 +280,27 @@ public sealed class AetherCurrentAutomation
         // einfach bei State.Interacting - kein Überspringen.
         if (currentTargetEntry != null)
         {
+            // Ätherströmungen mit Sprungroute (siehe Plugin.AetherCurrentJumpRoutes) lassen sich vom
+            // Kampf-Ort aus meist gar nicht direkt anlaufen (genau deshalb braucht es den Sprung) -
+            // dort komplett neu vom Startpunkt aus versuchen statt direkt zur Zielposition zu laufen
+            // (Nutzeranforderung: "danach vom Startpunkt es erneut versuchen").
+            if (Plugin.TryGetAetherCurrentJumpRoute(currentTargetEntry.Id, out var route))
+            {
+                Plugin.Log.Info($"[AetherCurrentAutomation] Kampf vorbei - Kampf-Plugin wieder aus, starte Sprungroute neu: {currentTargetEntry.Name}.");
+                activeJumpRoute = route;
+                didFinalApproach = false;
+                currentTargetPosition = route.Start;
+                if (pathfindAndMoveCloseTo.InvokeFunc(route.Start, false, ArrivalTolerance))
+                {
+                    state = State.MovingTo;
+                    stateEnteredAt = DateTime.UtcNow;
+                    hasSeenPathRunning = false;
+                    stuckDetector.Reset();
+                }
+
+                return false;
+            }
+
             Plugin.Log.Info($"[AetherCurrentAutomation] Kampf vorbei - Kampf-Plugin wieder aus, laufe zurück zu: {currentTargetEntry.Name}.");
             didFinalApproach = false;
             Plugin.TryDismount();
@@ -315,6 +364,10 @@ public sealed class AetherCurrentAutomation
 
                 case State.Interacting:
                     UpdateInteracting(aetherCurrentsInZone);
+                    break;
+
+                case State.JumpRoute:
+                    UpdateJumpRoute(aetherCurrentsInZone);
                     break;
             }
         }
@@ -418,6 +471,20 @@ public sealed class AetherCurrentAutomation
         didFinalApproach = false;
         hasIntentionallyDismounted = false;
 
+        // Sprungroute hinterlegt (siehe Plugin.AetherCurrentJumpRoutes)? Dann erst zum Startpunkt der
+        // Route laufen (ganz normal, siehe unten) - der Sprung selbst passiert erst nach Ankunft dort
+        // (siehe UpdateMoving/State.JumpRoute), die eigentliche Zielposition bleibt unverändert
+        // bekannt (entry.WorldPosition).
+        if (Plugin.TryGetAetherCurrentJumpRoute(entry.Id, out var jumpRoute))
+        {
+            activeJumpRoute = jumpRoute;
+            currentTargetPosition = jumpRoute.Start;
+        }
+        else
+        {
+            activeJumpRoute = null;
+        }
+
         if (Plugin.TryRequestAetheryteMount())
         {
             state = State.Mounting;
@@ -500,6 +567,95 @@ public sealed class AetherCurrentAutomation
         return accepted;
     }
 
+    /// <summary>Startpunkt einer Sprungroute erreicht - siehe JumpPhase/UpdateJumpRoute.</summary>
+    private void BeginJumpRoute()
+    {
+        Plugin.TryDismount();
+        hasIntentionallyDismounted = true;
+        jumpDismountedAt = null;
+        jumpPhase = JumpPhase.Dismounting;
+        state = State.JumpRoute;
+        stateEnteredAt = DateTime.UtcNow;
+        StatusText = Loc.T($"Springe zur Ätherströmung: {currentTargetEntry?.Name}...", $"Jumping to the aether current: {currentTargetEntry?.Name}...");
+    }
+
+    /// <summary>
+    /// Abmounten, dann einmal (ohne Anlauf-Kette, kein Sprint) zum Absprungpunkt der Route laufen und
+    /// dabei abspringen - viel einfacher als SightseeingAutomation.UpdateJumpingPuzzle, da hier nur
+    /// EIN Sprung nötig ist, kein Mehrschritt-Parcours. Nach der Landung geht es normal über
+    /// BeginFinalApproach zur echten Position weiter (siehe Plugin.AetherCurrentJumpRoutes-Kommentar).
+    /// </summary>
+    private void UpdateJumpRoute(IReadOnlyList<CollectibleEntry> entries)
+    {
+        if (currentTargetEntry == null || activeJumpRoute is not { } route)
+        {
+            state = State.Idle;
+            return;
+        }
+
+        if (!StillNeeded(entries, currentTargetEntry.Id))
+        {
+            FinishCurrent();
+            return;
+        }
+
+        switch (jumpPhase)
+        {
+            case JumpPhase.Dismounting:
+            {
+                if (Plugin.Condition[ConditionFlag.Mounted])
+                {
+                    Plugin.TryDismount();
+                    return;
+                }
+
+                // Condition[Mounted] wird schon VOR dem Ende der sichtbaren Absteige-Animation false -
+                // ein Sprung mitten in dieser Animation greift nicht (identisches Problem/dieselbe
+                // Lösung wie DismountSettleDelay in anderen Automationen).
+                jumpDismountedAt ??= DateTime.UtcNow;
+                if (DateTime.UtcNow - jumpDismountedAt.Value < JumpDismountSettleDelay)
+                    return;
+
+                moveToPath.InvokeAction(new List<Vector3> { route.JumpTarget }, false);
+                Plugin.TryJump();
+                jumpPhase = JumpPhase.RunningToJump;
+                stateEnteredAt = DateTime.UtcNow;
+                return;
+            }
+
+            case JumpPhase.RunningToJump:
+            {
+                if (pathIsRunning.InvokeFunc())
+                {
+                    if (DateTime.UtcNow - stateEnteredAt > StepMaxDuration)
+                        SkipCurrent(Loc.T("Sprung zur Ätherströmung dauert zu lange", "Jump to the aether current is taking too long"));
+                    return;
+                }
+
+                // Gelandet - Route abgeschlossen, normal zur echten Position weiter (BeginFinalApproach
+                // übernimmt auch das Abmounten erneut, schadet aber nicht, falls schon unten).
+                activeJumpRoute = null;
+                didFinalApproach = true;
+                if (currentTargetEntry.WorldPosition is { } exactPosition && BeginFinalApproach(exactPosition))
+                {
+                    state = State.MovingTo;
+                    hasSeenPathRunning = false;
+                    stateEnteredAt = DateTime.UtcNow;
+                    stuckDetector.Reset();
+                    StatusText = Loc.T(
+                        $"Laufe genau auf den Punkt: {currentTargetEntry.Name}...",
+                        $"Walking precisely onto the point: {currentTargetEntry.Name}...");
+                    return;
+                }
+
+                state = State.Interacting;
+                stateEnteredAt = DateTime.UtcNow;
+                StatusText = Loc.T($"Interagiere: {currentTargetEntry.Name}...", $"Interacting: {currentTargetEntry.Name}...");
+                return;
+            }
+        }
+    }
+
     private void UpdateMoving(IReadOnlyList<CollectibleEntry> entries)
     {
         if (currentTargetEntry == null)
@@ -557,6 +713,14 @@ public sealed class AetherCurrentAutomation
 
         if (hasSeenPathRunning)
         {
+            // Gerade am Startpunkt einer Sprungroute angekommen (siehe StartMovingTo/
+            // Plugin.AetherCurrentJumpRoutes) - jetzt abmounten+springen, statt normal weiterzumachen.
+            if (activeJumpRoute != null)
+            {
+                BeginJumpRoute();
+                return;
+            }
+
             // Zweiter, engerer Laufauftrag direkt zur bekannten WorldPosition, falls hinterlegt (siehe
             // FinalApproachTolerance-Kommentar) - nur einmal pro Ziel, danach normal weiter zu Interacting.
             if (!didFinalApproach)

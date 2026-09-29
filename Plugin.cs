@@ -2337,6 +2337,24 @@ public sealed class Plugin : IDalamudPlugin
     public static bool TryGetSightseeingJumpingPuzzle(uint adventureId, out SightseeingJumpingPuzzle puzzle) =>
         SightseeingJumpingPuzzles.TryGetValue(adventureId, out puzzle!);
 
+    // Start = wird ganz normal (Mount/vnavmesh) angesteuert, erst DORT abgemountet. JumpTarget =
+    // Absprungziel des einzelnen (Anlauf-)Sprungs von Start aus - danach läuft die Automation normal
+    // über BeginFinalApproach zur echten, bereits bekannten Position (entry.WorldPosition) weiter.
+    // Viel einfacher als SightseeingJumpingPuzzle (nur EIN Sprung, kein Mehrschritt-Parcours), daher
+    // ein eigener, schlankerer Record statt SightseeingPuzzleStep wiederzuverwenden.
+    public readonly record struct AetherCurrentJumpRoute(Vector3 Start, Vector3 JumpTarget);
+
+    // Von Hand hinterlegte Ätherströmungen, die nur über einen kurzen Sprung erreichbar sind (Key =
+    // AetherCurrent-RowId, siehe AetherCurrentAutomation-Kommentar) - z.B. "The Dravanian Forelands
+    // (Loth ast Gnath past second door)".
+    private static readonly Dictionary<uint, AetherCurrentJumpRoute> AetherCurrentJumpRoutes = new()
+    {
+    };
+
+    /// <summary>Siehe AetherCurrentJumpRoutes-Kommentar.</summary>
+    public static bool TryGetAetherCurrentJumpRoute(uint aetherCurrentId, out AetherCurrentJumpRoute route) =>
+        AetherCurrentJumpRoutes.TryGetValue(aetherCurrentId, out route);
+
     private const uint JumpGeneralActionId = 2;
 
     /// <summary>Springt (wie die Leertaste) - Allgemeine Aktion "Springen".</summary>
