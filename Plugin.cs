@@ -5125,6 +5125,37 @@ public sealed class Plugin : IDalamudPlugin
         return !string.IsNullOrEmpty(row.Name.ToString());
     }
 
+    private static HashSet<uint>? questIdsGrantingAetherCurrentCache;
+
+    /// <summary>
+    /// Ob der Abschluss dieser Quest automatisch eine Ätherströmung freischaltet (Lumina
+    /// "AetherCurrent".Quest - siehe DumpAetherCurrentDebugInfoForZone-Kommentar: solche
+    /// Strömungen haben keine begehbare Position, sie schalten sich beim Questabschluss von selbst
+    /// frei) - für die "(Aether Current)"-Markierung hinter dem Questnamen im Overlay
+    /// (Nutzeranforderung), damit sofort klar ist, welche Quests nebenbei eine sonst mühsam zu Fuß
+    /// erreichbare Strömung mitbringen. Einmalig aus dem kompletten AetherCurrent-Sheet aufgebaut.
+    /// </summary>
+    public static bool QuestGrantsAetherCurrent(uint questId)
+    {
+        if (questIdsGrantingAetherCurrentCache == null)
+        {
+            var set = new HashSet<uint>();
+            var sheet = DataManager.GetExcelSheet<Lumina.Excel.Sheets.AetherCurrent>();
+            if (sheet != null)
+            {
+                foreach (var row in sheet)
+                {
+                    if (row.Quest.RowId != 0)
+                        set.Add(row.Quest.RowId);
+                }
+            }
+
+            questIdsGrantingAetherCurrentCache = set;
+        }
+
+        return questIdsGrantingAetherCurrentCache.Contains(questId);
+    }
+
     /// <summary>
     /// Einmaliger Debug-Dump für eine einzelne Quest (per Namens-Teilstring gesucht) - loggt jede
     /// Bedingung aus IsQuestCurrentlyAcceptable einzeln, um zu klären, warum eine erwartete Quest

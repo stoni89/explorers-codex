@@ -1034,6 +1034,15 @@ public class CompactOverlayWindow : Window
         ImGui.SameLine();
         DrawClickableName(entry, isNotYetPossible);
 
+        // Quests, die beim Abschluss automatisch eine Ätherströmung mitbringen (siehe Plugin.
+        // QuestGrantsAetherCurrent) - dieselbe Farbe wie der Auto-Ätherströmung-Knopf, damit der
+        // Zusammenhang optisch sofort klar ist (Nutzeranforderung).
+        if (entry.Type == CollectibleType.Quest && Plugin.QuestGrantsAetherCurrent(entry.Id))
+        {
+            ImGui.SameLine(0f, 4f);
+            OutlineText("(Aether Current)", TypeColors[CollectibleType.AetherCurrent]);
+        }
+
         if (!string.IsNullOrEmpty(entry.Currency))
         {
             ImGui.SameLine();
