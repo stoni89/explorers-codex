@@ -2025,8 +2025,12 @@ public sealed class Plugin : IDalamudPlugin
 
     // Je Zwischenstopp: Position + ob dieses Teilstück fliegend angeflogen werden darf (false =
     // erzwungen zu Fuß/abgemountet, z.B. für einen Durchgang wie eine Tür, durch die man nicht
-    // hindurchfliegen kann) - siehe SightseeingApproachWaypoints-Kommentar.
-    public readonly record struct SightseeingApproachWaypoint(Vector3 Position, bool AllowFlying = true);
+    // hindurchfliegen kann) - siehe SightseeingApproachWaypoints-Kommentar. AllowFlyingAfter steuert
+    // stattdessen den Schritt DANACH (nächster Zwischenstopp oder der finale, enge Schritt zur echten
+    // Position, siehe SightseeingAutomation.BeginFinalApproach) - false erzwingt dort ein Abmounten
+    // und einen zu Fuß zurückgelegten Rest, z.B. wenn der letzte Meter zum Punkt fliegend zu ungenau
+    // anzusteuern ist (siehe Camp Skull Valley).
+    public readonly record struct SightseeingApproachWaypoint(Vector3 Position, bool AllowFlying = true, bool AllowFlyingAfter = true);
 
     // Von Hand nachgetragene ZWISCHENSTOPPS (der Reihe nach abzulaufen) vor der eigentlichen
     // Zielposition (Key = Adventure-RowId) - für Punkte, bei denen selbst der über die Karten-
@@ -2035,12 +2039,13 @@ public sealed class Plugin : IDalamudPlugin
     // NICHT fliegenden Anflugweg braucht, statt direkt den geraden/groben Weg zu nehmen. Sind welche
     // hinterlegt, läuft die Automation ZUERST der Reihe nach dorthin (jeweils mit der normalen,
     // großzügigen Toleranz, fliegend nur wenn AllowFlying) und erst vom letzten Zwischenstopp aus den
-    // finalen, engen (wieder fliegend erlaubten) Schritt zur echten Position (siehe
-    // SightseeingApproachOverrides/BeginFinalApproach) - der Umweg über die Karten-Flagge entfällt
-    // dann komplett.
+    // finalen, engen (wieder fliegend erlaubten, außer AllowFlyingAfter=false) Schritt zur echten
+    // Position (siehe SightseeingApproachOverrides/BeginFinalApproach) - der Umweg über die
+    // Karten-Flagge entfällt dann komplett.
     private static readonly Dictionary<uint, SightseeingApproachWaypoint[]> SightseeingApproachWaypoints = new()
     {
         [2162688] = new[] { new SightseeingApproachWaypoint(new Vector3(-82.96662f, 41.993416f, -170.93227f)) }, // Barracuda Piers (Limsa Lominsa Upper Decks)
+        [2162715] = new[] { new SightseeingApproachWaypoint(new Vector3(67.40774f, 3.7560055f, 47.88653f), AllowFlyingAfter: false) }, // Camp Skull Valley (Western La Noscea)
     };
 
     /// <summary>Siehe SightseeingApproachWaypoints-Kommentar.</summary>

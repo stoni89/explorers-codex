@@ -923,6 +923,15 @@ public sealed class SightseeingAutomation
 
         currentTargetPosition = target;
 
+        // Letzter Zwischenstopp verlangt ein Abmounten davor (siehe Plugin.SightseeingApproachWaypoint.
+        // AllowFlyingAfter) - Fliegen hier gar nicht erst versuchen, sondern wie bei
+        // TryRequestWalkOutPath abmounten und direkt den (nicht-fliegenden) Laufweg anfordern.
+        if (!currentLegAllowsFlying)
+        {
+            Plugin.TryDismount();
+            return pathfindAndMoveCloseTo.InvokeFunc(target, false, FinalApproachTolerance);
+        }
+
         var mounted = Plugin.Condition[ConditionFlag.Mounted];
         var accepted = false;
         if (mounted && Plugin.CanFly)
@@ -1122,6 +1131,14 @@ public sealed class SightseeingAutomation
                         return;
                     interWaypointPauseStartedAt = null;
                 }
+
+                // Der gerade erreichte Zwischenstopp verlangt ein Abmounten VOR dem letzten Schritt
+                // (siehe Plugin.SightseeingApproachWaypoint.AllowFlyingAfter) - BeginFinalApproach
+                // fliegt dann nicht mehr, sondern läuft den Rest zu Fuß.
+                if (pendingApproachWaypoints is { } arrivedWaypoints
+                    && pendingApproachWaypointIndex < arrivedWaypoints.Count
+                    && !arrivedWaypoints[pendingApproachWaypointIndex].AllowFlyingAfter)
+                    currentLegAllowsFlying = false;
 
                 didFinalApproach = true;
                 if (BeginFinalApproach())
