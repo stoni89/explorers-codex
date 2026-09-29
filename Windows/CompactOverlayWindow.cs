@@ -1258,7 +1258,7 @@ public class CompactOverlayWindow : Window
                 ? EmptyRetainerCounts
                 : Plugin.GetRetainerItemCounts(sample.CurrencyItemId);
             var retainerTotal = retainerCounts.Count == 0 ? 0u : (uint)retainerCounts.Values.Sum(v => (long)v);
-            var retainerSuffix = retainerTotal > 0 ? $" ({retainerTotal})" : string.Empty;
+            var retainerSuffix = retainerTotal > 0 ? $" ({retainerTotal.ToString("N0", CultureInfo.InvariantCulture)})" : string.Empty;
 
             var itemWidth = ImGui.CalcTextSize(text + retainerSuffix).X + (hasIcon ? iconSize + itemSpacing : 0f);
 
