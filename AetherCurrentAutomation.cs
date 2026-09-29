@@ -231,7 +231,8 @@ public sealed class AetherCurrentAutomation
             return false;
 
         isDefendingSelf = false;
-        Plugin.Log.Info($"[AetherCurrentAutomation] Kampf vorbei - aktiviere jetzt: {currentTargetEntry?.Name}.");
+        Plugin.CombatPlugin.SetCombatMode(false);
+        Plugin.Log.Info($"[AetherCurrentAutomation] Kampf vorbei - Kampf-Plugin wieder aus, aktiviere jetzt: {currentTargetEntry?.Name}.");
         return false;
     }
 
