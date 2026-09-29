@@ -2025,6 +2025,7 @@ public sealed class Plugin : IDalamudPlugin
         [2162715] = new Vector3(67.4166f, 1.9575522f, 47.885967f),     // Camp Skull Valley (Western La Noscea)
         [2162719] = new Vector3(381.97714f, 5.188155f, 198.84981f),    // Jijiroon's Trading Post (Upper La Noscea)
         [2162718] = new Vector3(-428.3639f, 69.71088f, 28.31156f),     // Thalaos (Upper La Noscea)
+        [2162738] = new Vector3(-636.69324f, 65.58413f, -812.0154f),   // Castrum Marinum (Lower La Noscea)
     };
 
     // Je Zwischenstopp: Position + ob dieses Teilstück fliegend angeflogen werden darf (false =
