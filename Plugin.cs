@@ -2298,10 +2298,10 @@ public sealed class Plugin : IDalamudPlugin
             },
             DismountAtStart: true),
         [2162722] = new( // U'Ghamaro Mines (Outer La Noscea)
-            new Vector3(100.45776f, 57.340443f, -474.5701f),
+            new Vector3(98.35974f, 57.215237f, -471.80798f),
             new[]
             {
-                new SightseeingPuzzleStep(new Vector3(97.69164f, 59.985504f, -475.45724f), Jump: true),                      // Punkt 1
+                new SightseeingPuzzleStep(new Vector3(97.226295f, 59.743057f, -474.94293f), Jump: true),                     // Punkt 1
                 new SightseeingPuzzleStep(new Vector3(96.900154f, 60.601845f, -475.57516f), Jump: false),                    // Punkt 2
                 new SightseeingPuzzleStep(new Vector3(96.45128f, 62.092f, -477.96954f), Jump: true),                         // Punkt 3 - ohne Anlauf
                 new SightseeingPuzzleStep(new Vector3(96.54945f, 62.090305f, -477.42578f), Jump: false),                     // Punkt 4
@@ -2314,7 +2314,8 @@ public sealed class Plugin : IDalamudPlugin
                 new SightseeingPuzzleStep(new Vector3(93.8758f, 66.83331f, -486.28745f), Jump: true),                        // Punkt 11
                 new SightseeingPuzzleStep(new Vector3(95.40166f, 68.67571f, -486.0416f), Jump: true),                        // Punkt 12
                 new SightseeingPuzzleStep(new Vector3(96.52743f, 70.19558f, -486.0492f), Jump: false),                       // Punkt 13 (Sightseeing-Punkt)
-            }),
+            },
+            DismountAtStart: true),
         [2162715] = new( // Camp Skull Valley (Western La Noscea)
             new Vector3(62.28901f, 0.030244112f, 48.545948f),
             new[]
