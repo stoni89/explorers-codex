@@ -6214,18 +6214,38 @@ public sealed class Plugin : IDalamudPlugin
     public static bool IsInInstancedContent() =>
         Condition[ConditionFlag.BoundByDuty] || Condition[ConditionFlag.BoundByDuty56] || Condition[ConditionFlag.BoundByDuty95];
 
-    // ContentType "Quest Battles" (RowId 7) - die MSQ-Solo-Instanzen (z.B. Ultima-Weapon-artige
-    // Alleinkämpfe), im Gegensatz zu regulären Dungeons/Trials/Raids mit ihren eigenen ContentTypes.
-    private const uint QuestBattleContentTypeId = 7;
+    // Für IsInMsqSoloDuty - wie GetEnglishClassJobCategoryName: ContentType-Namen sprachunabhängig
+    // auf Englisch abfragen (row.Name in Client-Sprache würde nie mit "Quest Battles" übereinstimmen).
+    private static Lumina.Excel.ExcelSheet<ContentType>? contentTypeSheetEnglish;
+
+    private static string GetEnglishContentTypeName(uint contentTypeId)
+    {
+        contentTypeSheetEnglish ??= DataManager.GetExcelSheet<ContentType>(Dalamud.Game.ClientLanguage.English);
+        return contentTypeSheetEnglish?.GetRowOrDefault(contentTypeId)?.Name.ToString() ?? string.Empty;
+    }
 
     /// <summary>
     /// Ob man sich GERADE JETZT in einer MSQ-Solo-Duty befindet (Nutzeranforderung: Overlay dort
-    /// ausblenden, danach wieder einblenden) - IDutyState.ContentFinderCondition liefert dafür die
-    /// gerade aktive Duty (RowRef, unabhängig vom aktuellen TerritoryType, das bei Solo-Duties oft
-    /// noch die Außenwelt-Zone zeigt), deren ContentType auf "Quest Battles" geprüft wird.
+    /// ausblenden, danach wieder einblenden). Bewusst über TerritoryType.ContentFinderCondition der
+    /// AKTUELLEN Zone statt IDutyState.ContentFinderCondition - Quest Battles laufen nicht über die
+    /// normale Duty-Finder-Warteschlange, IDutyState blieb dabei laut Nutzer-Report (Beispiel "Divine
+    /// Intervention") leer/das Overlay verschwand nicht. Die Instanz-Zone selbst kennt ihre CFC aber
+    /// immer direkt über die Lumina-Zonendaten, unabhängig davon, wie man reingekommen ist. ContentType
+    /// wird per Namenstext ("Quest Battles", englisch) statt Raten der RowId geprüft (Konvention wie
+    /// GetEnglishClassJobCategoryName).
     /// </summary>
-    public static bool IsInMsqSoloDuty() =>
-        IsInInstancedContent() && DutyState.ContentFinderCondition.ValueNullable?.ContentType.RowId == QuestBattleContentTypeId;
+    public static bool IsInMsqSoloDuty()
+    {
+        if (!IsInInstancedContent())
+            return false;
+
+        var territorySheet = DataManager.GetExcelSheet<TerritoryType>();
+        if (territorySheet == null || !territorySheet.TryGetRow(ClientState.TerritoryType, out var territory))
+            return false;
+
+        var contentTypeId = territory.ContentFinderCondition.ValueNullable?.ContentType.RowId;
+        return contentTypeId != null && GetEnglishContentTypeName(contentTypeId.Value).Equals("Quest Battles", StringComparison.OrdinalIgnoreCase);
+    }
 
     public static bool IsChocoboCompanionSummoned() => GetChocoboSummonTimeLeft() > 0f;
 
