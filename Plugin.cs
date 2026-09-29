@@ -3627,13 +3627,21 @@ public sealed class Plugin : IDalamudPlugin
 
     private uint? liveEntriesZoneId;
     private List<CollectibleEntry> liveEntriesCache = new();
-    private DateTime liveEntriesComputedAt = DateTime.MinValue;
+    private int liveEntriesAcceptedQuestCount = -1;
 
-    // Neu freigeschaltete Quests (z.B. durch die MSQ, ohne die Zone zu verlassen) tauchten sonst erst
-    // nach einem Zonenwechsel im Overlay auf, weil GetLiveZoneEntries pro Zone unbegrenzt gecacht war
-    // (Nutzer-Report: MSQ in derselben Zone gemacht, Overlay hat sich nicht aktualisiert). Statt bei
-    // jedem Frame neu durchs komplette Quest-Sheet zu gehen, reicht ein regelmäßiges Neuberechnen.
-    private static readonly TimeSpan LiveEntriesRefreshInterval = TimeSpan.FromSeconds(20);
+    /// <summary>
+    /// QuestManager.NumAcceptedQuests - günstiger Zähler der aktuell angenommenen Quests, ändert sich
+    /// bei JEDER abgegebenen (Abnahme) oder neu angenommenen (Zunahme, auch automatisch durch die
+    /// MSQ) Quest. Statt einer festen Zeitspanne (siehe GetLiveZoneEntries/GetAllTrackedQuestEntries)
+    /// wird die Quest-Liste jetzt GENAU dann neu berechnet, wenn sich dieser Zähler seit dem letzten
+    /// Aufruf geändert hat (Nutzeranforderung: "nach jeder abgegebenen Quest" statt alle 20 Sekunden) -
+    /// kein teures Scannen des kompletten Quest-Sheets bei unveränderten Werten.
+    /// </summary>
+    private static unsafe int GetNumAcceptedQuests()
+    {
+        var manager = QuestManager.Instance();
+        return manager != null ? manager->NumAcceptedQuests : -1;
+    }
 
     // Immer auf Englisch geladen (unabhängig von der Spielclient-Sprache) - wird nur für den
     // sprachunabhängigen "startet mit All"-Check bei der Quest-Klassenfilterung gebraucht,
@@ -3785,7 +3793,8 @@ public sealed class Plugin : IDalamudPlugin
     /// </summary>
     public List<CollectibleEntry> GetLiveZoneEntries(uint territoryId)
     {
-        if (liveEntriesZoneId == territoryId && DateTime.UtcNow - liveEntriesComputedAt < LiveEntriesRefreshInterval)
+        var acceptedQuestCount = GetNumAcceptedQuests();
+        if (liveEntriesZoneId == territoryId && acceptedQuestCount == liveEntriesAcceptedQuestCount)
             return liveEntriesCache;
 
         // Direkt nach einem Zonenwechsel/Login ist der lokale Spieler (insbesondere Level) manchmal
@@ -3812,7 +3821,7 @@ public sealed class Plugin : IDalamudPlugin
 
         liveEntriesZoneId = territoryId;
         liveEntriesCache = result;
-        liveEntriesComputedAt = DateTime.UtcNow;
+        liveEntriesAcceptedQuestCount = acceptedQuestCount;
         return result;
     }
 
@@ -5167,21 +5176,22 @@ public sealed class Plugin : IDalamudPlugin
     }
 
     private static List<CollectibleEntry>? globalQuestEntriesCache;
-    private static DateTime globalQuestEntriesComputedAt = DateTime.MinValue;
+    private static int globalQuestEntriesAcceptedQuestCount = -1;
 
     /// <summary>
     /// Alle Quests, die der Charakter aktuell (unabhängig von der Zone) annehmen könnte oder
     /// bereits abgeschlossen hat - für die globale Statistik (siehe MainWindow.DrawStatisticsPage)
     /// und die Datenbank-Seite (siehe MainWindow.DrawDatabasePage). Anders als ComputeLiveZoneEntries
     /// wird hier NICHT nach Vergabeort gefiltert, sondern einmal über das komplette Quest-Sheet
-    /// gegangen. Wird wie GetLiveZoneEntries regelmäßig neu berechnet (nicht jeden Frame, siehe
-    /// LiveEntriesRefreshInterval) statt nur einmal pro Plugin-Sitzung - sonst tauchten neu erreichte
-    /// Story-/Level-Fortschritte, die weitere Quests freischalten, erst nach einem Plugin-Neuladen auf
-    /// (Nutzer-Report: MSQ in derselben Zone gemacht, Liste hat sich nicht aktualisiert).
+    /// gegangen. Wird wie GetLiveZoneEntries neu berechnet, sobald sich GetNumAcceptedQuests ändert
+    /// (Quest abgegeben oder neu angenommen) statt nur einmal pro Plugin-Sitzung - sonst tauchten neu
+    /// erreichte Story-/Level-Fortschritte, die weitere Quests freischalten, erst nach einem Plugin-
+    /// Neuladen auf (Nutzer-Report: MSQ in derselben Zone gemacht, Liste hat sich nicht aktualisiert).
     /// </summary>
     public unsafe List<CollectibleEntry> GetAllTrackedQuestEntries()
     {
-        if (globalQuestEntriesCache != null && DateTime.UtcNow - globalQuestEntriesComputedAt < LiveEntriesRefreshInterval)
+        var acceptedQuestCount = GetNumAcceptedQuests();
+        if (globalQuestEntriesCache != null && acceptedQuestCount == globalQuestEntriesAcceptedQuestCount)
             return globalQuestEntriesCache;
 
         var result = new List<CollectibleEntry>();
@@ -5214,7 +5224,7 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         globalQuestEntriesCache = result;
-        globalQuestEntriesComputedAt = DateTime.UtcNow;
+        globalQuestEntriesAcceptedQuestCount = acceptedQuestCount;
         return result;
     }
 
