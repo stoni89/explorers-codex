@@ -2114,7 +2114,12 @@ public sealed class Plugin : IDalamudPlugin
     // Absprungpunkt (Ziel des vorherigen Schritts) aufmounten, dann fliegend zu Target navigieren,
     // dort wieder abmounten, bevor der nächste Schritt beginnt - für Spalten/Abgründe, die kein
     // Sprung überbrücken kann. Schließt sich mit Jump/RunUp gegenseitig aus (wird bei Fly ignoriert).
-    public readonly record struct SightseeingPuzzleStep(Vector3 Target, bool Jump, bool RunUp = false, bool SprintBefore = false, bool Exact = false, bool CancelSprintBefore = false, bool Fly = false);
+    // JumpFromStandstill = bei Jump=true, RunUp=false: ohne die übliche kurze PuzzleJumpDelay-
+    // Verzögerung springen (siehe SightseeingAutomation.PuzzleJumpDelay) - normalerweise beginnt die
+    // Laufbewegung zum Ziel schon etwas VOR dem Sprung, was bei sehr kurzen Sprüngen leicht Anlauf
+    // gibt und über das Ziel hinausträgt (Nutzer-Report: "sonst fliegt man darüber"). Damit wird
+    // stattdessen sofort abgesprungen, quasi aus dem Stand.
+    public readonly record struct SightseeingPuzzleStep(Vector3 Target, bool Jump, bool RunUp = false, bool SprintBefore = false, bool Exact = false, bool CancelSprintBefore = false, bool Fly = false, bool JumpFromStandstill = false);
 
     // ExactStand = genaue Position der Sightseeing-Kugel, falls sie nicht exakt der Landepunkt des
     // letzten Schritts ist - dorthin wird nach der Landung noch genau gelaufen.
@@ -2303,7 +2308,7 @@ public sealed class Plugin : IDalamudPlugin
             {
                 new SightseeingPuzzleStep(new Vector3(97.226295f, 59.743057f, -474.94293f), Jump: true),                     // Punkt 1
                 new SightseeingPuzzleStep(new Vector3(96.900154f, 60.601845f, -475.57516f), Jump: false),                    // Punkt 2
-                new SightseeingPuzzleStep(new Vector3(96.45128f, 62.092f, -477.96954f), Jump: true),                         // Punkt 3 - ohne Anlauf
+                new SightseeingPuzzleStep(new Vector3(96.45128f, 62.092f, -477.96954f), Jump: true, JumpFromStandstill: true), // Punkt 3 - aus dem Stand, sonst fliegt man darüber
                 new SightseeingPuzzleStep(new Vector3(96.54945f, 62.090305f, -477.42578f), Jump: false),                     // Punkt 4
                 new SightseeingPuzzleStep(new Vector3(96.37351f, 62.092182f, -478.4005f), Jump: false, SprintBefore: true),  // Punkt 5 - Sprint, dann Anlauf
                 new SightseeingPuzzleStep(new Vector3(95.66097f, 63.449345f, -482.26147f), Jump: true, RunUp: true),         // Punkt 6 - bei Punkt 5 abspringen

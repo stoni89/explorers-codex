@@ -2016,7 +2016,7 @@ public sealed class SightseeingAutomation
                 }
 
                 var step = currentPuzzle.Steps[puzzleStepIndex];
-                if (step.Jump && !step.RunUp && !puzzleJumpSent && sinceStart >= PuzzleJumpDelay)
+                if (step.Jump && !step.RunUp && !puzzleJumpSent && (step.JumpFromStandstill || sinceStart >= PuzzleJumpDelay))
                 {
                     puzzleJumpSent = true;
                     Plugin.TryJump();
