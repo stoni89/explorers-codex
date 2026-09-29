@@ -2050,7 +2050,11 @@ public class CompactOverlayWindow : Window
         // vorne in der Zeile (siehe DrawGoToColumn).
         if (!entry.HasGoToTarget)
         {
-            OutlineText(GetOverlayDisplayName(entry), isNotYetPossible ? NotYetPossibleColor : affordable ? AffordableColor : NormalColor);
+            // Achievements haben zwar kein Kartenziel, aber (wie Einträge mit Verlinkung unten,
+            // siehe VendorLinkColor) trotzdem einen Linksklick-Effekt - deshalb dieselbe Schriftfarbe,
+            // damit man ihnen die Verlinkung genauso ansieht (Nutzeranforderung).
+            var isLinked = entry.Type == CollectibleType.Achievement;
+            OutlineText(GetOverlayDisplayName(entry), isNotYetPossible ? NotYetPossibleColor : affordable ? AffordableColor : isLinked ? VendorLinkColor : NormalColor);
 
             // Ohne Kartenziel sonst nicht interaktiv - außer für das Rechtsklick-Menü (siehe unten)
             // und, nur bei Achievements, den Linksklick unten (Nutzeranforderung).
