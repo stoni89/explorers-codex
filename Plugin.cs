@@ -2298,7 +2298,7 @@ public sealed class Plugin : IDalamudPlugin
             new[]
             {
                 new SightseeingPuzzleStep(new Vector3(64.00007f, 0.4575119f, 50.961147f), Jump: false),               // Punkt 1
-                new SightseeingPuzzleStep(new Vector3(64.90911f, 0.18966413f, 50.14056f), Jump: false, SprintBefore: true), // Absprungpunkt - Sprint, dann Anlauf
+                new SightseeingPuzzleStep(new Vector3(64.65887f, 0.21221948f, 50.28869f), Jump: false, SprintBefore: true), // Absprungpunkt - Sprint, dann Anlauf
                 new SightseeingPuzzleStep(new Vector3(67.4166f, 1.9575522f, 47.885967f), Jump: true, RunUp: true),    // Sightseeing-Punkt - mit Anlauf ab Absprungpunkt
             },
             DismountAtStart: true),
