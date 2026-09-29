@@ -3627,6 +3627,13 @@ public sealed class Plugin : IDalamudPlugin
 
     private uint? liveEntriesZoneId;
     private List<CollectibleEntry> liveEntriesCache = new();
+    private DateTime liveEntriesComputedAt = DateTime.MinValue;
+
+    // Neu freigeschaltete Quests (z.B. durch die MSQ, ohne die Zone zu verlassen) tauchten sonst erst
+    // nach einem Zonenwechsel im Overlay auf, weil GetLiveZoneEntries pro Zone unbegrenzt gecacht war
+    // (Nutzer-Report: MSQ in derselben Zone gemacht, Overlay hat sich nicht aktualisiert). Statt bei
+    // jedem Frame neu durchs komplette Quest-Sheet zu gehen, reicht ein regelmäßiges Neuberechnen.
+    private static readonly TimeSpan LiveEntriesRefreshInterval = TimeSpan.FromSeconds(20);
 
     // Immer auf Englisch geladen (unabhängig von der Spielclient-Sprache) - wird nur für den
     // sprachunabhängigen "startet mit All"-Check bei der Quest-Klassenfilterung gebraucht,
@@ -3778,7 +3785,7 @@ public sealed class Plugin : IDalamudPlugin
     /// </summary>
     public List<CollectibleEntry> GetLiveZoneEntries(uint territoryId)
     {
-        if (liveEntriesZoneId == territoryId)
+        if (liveEntriesZoneId == territoryId && DateTime.UtcNow - liveEntriesComputedAt < LiveEntriesRefreshInterval)
             return liveEntriesCache;
 
         // Direkt nach einem Zonenwechsel/Login ist der lokale Spieler (insbesondere Level) manchmal
@@ -3805,6 +3812,7 @@ public sealed class Plugin : IDalamudPlugin
 
         liveEntriesZoneId = territoryId;
         liveEntriesCache = result;
+        liveEntriesComputedAt = DateTime.UtcNow;
         return result;
     }
 
@@ -5159,19 +5167,21 @@ public sealed class Plugin : IDalamudPlugin
     }
 
     private static List<CollectibleEntry>? globalQuestEntriesCache;
+    private static DateTime globalQuestEntriesComputedAt = DateTime.MinValue;
 
     /// <summary>
     /// Alle Quests, die der Charakter aktuell (unabhängig von der Zone) annehmen könnte oder
     /// bereits abgeschlossen hat - für die globale Statistik (siehe MainWindow.DrawStatisticsPage)
     /// und die Datenbank-Seite (siehe MainWindow.DrawDatabasePage). Anders als ComputeLiveZoneEntries
     /// wird hier NICHT nach Vergabeort gefiltert, sondern einmal über das komplette Quest-Sheet
-    /// gegangen. Wird wie frameKitEntriesCache nur einmal pro Plugin-Sitzung berechnet (nicht jeden
-    /// Frame) - neu erreichte Story-/Level-Fortschritte, die weitere Quests freischalten, tauchen
-    /// erst nach einem Plugin-Neuladen auf.
+    /// gegangen. Wird wie GetLiveZoneEntries regelmäßig neu berechnet (nicht jeden Frame, siehe
+    /// LiveEntriesRefreshInterval) statt nur einmal pro Plugin-Sitzung - sonst tauchten neu erreichte
+    /// Story-/Level-Fortschritte, die weitere Quests freischalten, erst nach einem Plugin-Neuladen auf
+    /// (Nutzer-Report: MSQ in derselben Zone gemacht, Liste hat sich nicht aktualisiert).
     /// </summary>
     public unsafe List<CollectibleEntry> GetAllTrackedQuestEntries()
     {
-        if (globalQuestEntriesCache != null)
+        if (globalQuestEntriesCache != null && DateTime.UtcNow - globalQuestEntriesComputedAt < LiveEntriesRefreshInterval)
             return globalQuestEntriesCache;
 
         var result = new List<CollectibleEntry>();
@@ -5204,6 +5214,7 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         globalQuestEntriesCache = result;
+        globalQuestEntriesComputedAt = DateTime.UtcNow;
         return result;
     }
 
