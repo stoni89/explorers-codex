@@ -1443,6 +1443,17 @@ public class MainWindow : Window
                 config.SimulateSightseeingAutomation = simulateSightseeing;
                 config.Save();
             }
+
+            ImGui.Spacing();
+            ImGui.Separator();
+            ImGui.Spacing();
+
+            var simulateAetherCurrent = config.SimulateAetherCurrentAutomation;
+            if (ModernUi.ToggleRow(Loc.T("Auto Ätherströmung simulieren", "Simulate Auto Aether Current"), ref simulateAetherCurrent))
+            {
+                config.SimulateAetherCurrentAutomation = simulateAetherCurrent;
+                config.Save();
+            }
             ModernUi.EndCard();
 
             ModernUi.GroupLabel(Loc.T("Debug-Dumps (ins Log schreiben)", "Debug dumps (write to log)"));

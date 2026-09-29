@@ -384,7 +384,7 @@ public class CompactOverlayWindow : Window
         // Wie Hunting Log bewusst NICHT stadtweit - Ätherströmungen kommen aus aethercurrents.json
         // mit exakter Zonen-Zuordnung, kein Bezirkswechsel nötig.
         var missingAetherCurrentsInZone = allForZone
-            .Where(e => e.Type == CollectibleType.AetherCurrent && !plugin.IsOwned(e))
+            .Where(e => e.Type == CollectibleType.AetherCurrent && (config.SimulateAetherCurrentAutomation || !plugin.IsOwned(e)))
             .ToList();
         if (!exitingNoFlyArea)
             plugin.AetherCurrentAutomation.Update(missingAetherCurrentsInZone);

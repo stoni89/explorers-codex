@@ -171,6 +171,7 @@ public class Configuration : IPluginConfiguration
     // nicht auf die normale "fehlt noch"-Anzeige im Overlay.
     public bool SimulateAetheryteAutomation { get; set; } = false;
     public bool SimulateChocobokeepAutomation { get; set; } = false;
+    public bool SimulateAetherCurrentAutomation { get; set; } = false;
 
     // Wie oben, aber zusätzlich zu bereits aufgezeichneten Punkten auch solche, die gerade durch
     // falsches Wetter/falsche Uhrzeit oder eine noch nicht erfüllte Buch-Freischaltung als "Bedingung
