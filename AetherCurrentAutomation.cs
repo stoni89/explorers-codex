@@ -363,6 +363,15 @@ public sealed class AetherCurrentAutomation
 
     private void StartMovingTo(CollectibleEntry entry)
     {
+        // VOR dem Versuchszähler prüfen (Nutzer-Report: Automationsstart während eines laufenden
+        // vnavmesh-Meshbaus überspringt das Ziel sofort als "zu oft versucht") - siehe
+        // ChocobokeepAutomation.StartMovingTo-Kommentar (identisches Problem/dieselbe Lösung).
+        if (!navmeshIsReady.InvokeFunc())
+        {
+            StatusText = Loc.T("Warte auf vnavmesh-Navmesh für diese Zone...", "Waiting for vnavmesh's navmesh for this zone...");
+            return;
+        }
+
         var attempts = attemptCounts.GetValueOrDefault(entry.Id, 0) + 1;
         attemptCounts[entry.Id] = attempts;
         if (attempts > MaxAttemptsPerTarget)
@@ -370,12 +379,6 @@ public sealed class AetherCurrentAutomation
             skippedIds.Add(entry.Id);
             StatusText = Loc.T($"Übersprungen (zu oft versucht): {entry.Name}", $"Skipped (too many attempts): {entry.Name}");
             state = State.Idle;
-            return;
-        }
-
-        if (!navmeshIsReady.InvokeFunc())
-        {
-            StatusText = Loc.T("Warte auf vnavmesh-Navmesh für diese Zone...", "Waiting for vnavmesh's navmesh for this zone...");
             return;
         }
 

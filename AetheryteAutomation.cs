@@ -514,20 +514,22 @@ public sealed class AetheryteAutomation
 
     private void StartMovingTo(CollectibleEntry next, Vector3 targetPosition)
     {
+        // VOR dem Versuchszähler prüfen (Nutzer-Report: Automationsstart während eines laufenden
+        // vnavmesh-Meshbaus überspringt das Ziel sofort als "zu oft versucht") - siehe
+        // ChocobokeepAutomation.StartMovingTo-Kommentar (identisches Problem/dieselbe Lösung).
+        var navReady = navmeshIsReady.InvokeFunc();
+        if (!navReady)
+        {
+            StatusText = Loc.T("Warte auf vnavmesh-Navmesh für diese Zone...", "Waiting for vnavmesh's navmesh for this zone...");
+            return;
+        }
+
         var attempts = attemptCounts.GetValueOrDefault(next.Id, 0) + 1;
         attemptCounts[next.Id] = attempts;
         if (attempts > MaxAttemptsPerAetheryte)
         {
             skippedIds.Add(next.Id);
             StatusText = Loc.T($"Übersprungen (zu oft versucht): {next.Name}", $"Skipped (too many attempts): {next.Name}");
-            return;
-        }
-
-        var navReady = navmeshIsReady.InvokeFunc();
-        Plugin.Log.Info($"[AetheryteAutomation] StartMovingTo({next.Name}): navmeshIsReady={navReady}");
-        if (!navReady)
-        {
-            StatusText = Loc.T("Warte auf vnavmesh-Navmesh für diese Zone...", "Waiting for vnavmesh's navmesh for this zone...");
             return;
         }
 

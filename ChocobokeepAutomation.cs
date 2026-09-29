@@ -247,6 +247,19 @@ public sealed class ChocobokeepAutomation
 
     private void StartMovingTo(CollectibleEntry entry)
     {
+        // VOR dem Versuchszähler prüfen (Nutzer-Report: Automationsstart während eines laufenden
+        // vnavmesh-Meshbaus überspringt das Ziel sofort als "zu oft versucht") - TryStartNext ruft
+        // diese Methode jeden Frame erneut auf, solange State.Idle bleibt; stand die Mesh-Wartezeit
+        // VOR dem Zähler, zählte jeder dieser Frames als eigener Fehlversuch und erschöpfte
+        // MaxAttemptsPerTarget oft schon nach wenigen Frames, lange bevor das Mesh überhaupt bereit
+        // war. Jetzt zählt reines Warten nicht als Versuch - die Automation bleibt einfach im
+        // Wartezustand (mit Statusanzeige), bis vnavmesh tatsächlich bereit ist.
+        if (!navmeshIsReady.InvokeFunc())
+        {
+            StatusText = Loc.T("Warte auf vnavmesh-Navmesh für diese Zone...", "Waiting for vnavmesh's navmesh for this zone...");
+            return;
+        }
+
         var attempts = attemptCounts.GetValueOrDefault(entry.Id, 0) + 1;
         attemptCounts[entry.Id] = attempts;
         if (attempts > MaxAttemptsPerTarget)
@@ -254,12 +267,6 @@ public sealed class ChocobokeepAutomation
             skippedIds.Add(entry.Id);
             StatusText = Loc.T($"Übersprungen (zu oft versucht): {entry.Name}", $"Skipped (too many attempts): {entry.Name}");
             state = State.Idle;
-            return;
-        }
-
-        if (!navmeshIsReady.InvokeFunc())
-        {
-            StatusText = Loc.T("Warte auf vnavmesh-Navmesh für diese Zone...", "Waiting for vnavmesh's navmesh for this zone...");
             return;
         }
 
