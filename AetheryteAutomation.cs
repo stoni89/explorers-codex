@@ -1030,8 +1030,13 @@ public sealed class AetheryteAutomation
             // seit Sekunden gar nicht mehr verändert. Pfad neu anfordern statt untätig zu warten.
             // War der festgesteckte Weg fliegend, steckt meist ein Gebäude im Weg (vnavmeshs Flug-
             // Beeline findet dessen Ausgang nicht) - dann diesmal zu Fuß probieren (siehe
-            // BeginPathfind-Kommentar).
-            if (stuckDetector.CheckStuck(movingPlayerPos))
+            // BeginPathfind-Kommentar). NICHT während eines Casts/einer Animationssperre neu
+            // anfordern (Nutzer-Report: "rennt mitten im Cast gegen den Kristall") - der Charakter
+            // steht dann bewusst still (z.B. gerade attunierend/interagierend, siehe
+            // UpdateInteracting), kein echtes Steckenbleiben. Ein neuer Laufauftrag würde ihn sonst
+            // buchstäblich mitten in den laufenden Cast hinein in den (kollidierenden) Kristall-Sockel
+            // schieben und ihn dadurch abbrechen.
+            if (!Plugin.Condition[ConditionFlag.Casting] && !Plugin.IsAnimationLocked() && stuckDetector.CheckStuck(movingPlayerPos))
             {
                 var wasFlying = flightUpgrade.IsFlying;
                 Plugin.Log.Info($"[AetheryteAutomation] UpdateMoving(#{currentTargetId}): scheinbar steckengeblieben{(wasFlying ? " (beim Fliegen, evtl. Gebäude im Weg)" : "")} - Laufweg wird neu angefordert.");
