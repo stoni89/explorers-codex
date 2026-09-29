@@ -35,6 +35,14 @@ public sealed class AetherCurrentAutomation
     // AetheryteAutomation.InteractDistance, um trotz ungenauer Community-Koordinaten trotzdem noch
     // in den (unbekannten, vermutlich mehrere Yalm großen) Entdeckungsradius zu kommen.
     private const float ArrivalTolerance = 6f;
+
+    // Zweiter, viel engerer Laufauftrag direkt zur bekannten WorldPosition (siehe BeginFinalApproach) -
+    // NACH dem groben Anflug (ArrivalTolerance), NUR wenn eine exakte Weltposition hinterlegt ist
+    // (z.B. per Hand nachgetragen wie "Overlooking The Convictory", siehe aethercurrents.json), sonst
+    // bliebe der Charakter bis zu ArrivalTolerance-Yalm neben dem tatsächlichen Punkt stehen
+    // (Nutzeranforderung: "exakt auf die Position laufen"). Gleiche Toleranz wie SightseeingAutomation.
+    private const float FinalApproachTolerance = 0.1f;
+
     private const float SprintDisableDistance = 8f;
     private static readonly TimeSpan StepMaxDuration = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan PathStartGracePeriod = TimeSpan.FromSeconds(5);
@@ -75,6 +83,7 @@ public sealed class AetherCurrentAutomation
     private readonly FlightPathUpgrade flightUpgrade = new(); // siehe Plugin.FlightPathUpgrade (Flugverbots-Bereiche)
     private bool hasInteractedThisCycle;
     private DateTime? interactObjectNotFoundSince;
+    private bool didFinalApproach;
 
     public bool IsActive { get; private set; }
 
@@ -261,6 +270,7 @@ public sealed class AetherCurrentAutomation
         currentTargetPosition = floorPoint.Value;
         hasInteractedThisCycle = false;
         interactObjectNotFoundSince = null;
+        didFinalApproach = false;
 
         if (Plugin.TryRequestAetheryteMount())
         {
@@ -324,6 +334,26 @@ public sealed class AetherCurrentAutomation
             BeginPathfind();
     }
 
+    /// <summary>
+    /// Wie BeginPathfind, aber mit FinalApproachTolerance direkt zur bekannten WorldPosition - siehe
+    /// deren Kommentar. Gibt zurück, ob vnavmesh den Laufweg angenommen hat (false z.B. wenn der
+    /// Charakter bereits nah genug dran ist, dann direkt weiter zu Interacting statt hier hängen zu bleiben).
+    /// </summary>
+    private bool BeginFinalApproach(Vector3 target)
+    {
+        currentTargetPosition = target;
+
+        var mounted = Plugin.Condition[ConditionFlag.Mounted];
+        var accepted = false;
+        if (mounted && Plugin.CanFly)
+            accepted = pathfindAndMoveCloseTo.InvokeFunc(target, true, FinalApproachTolerance);
+
+        if (!accepted)
+            accepted = pathfindAndMoveCloseTo.InvokeFunc(target, false, FinalApproachTolerance);
+
+        return accepted;
+    }
+
     private void UpdateMoving(IReadOnlyList<CollectibleEntry> entries)
     {
         if (currentTargetEntry == null)
@@ -379,6 +409,26 @@ public sealed class AetherCurrentAutomation
 
         if (hasSeenPathRunning)
         {
+            // Zweiter, engerer Laufauftrag direkt zur bekannten WorldPosition, falls hinterlegt (siehe
+            // FinalApproachTolerance-Kommentar) - nur einmal pro Ziel, danach normal weiter zu Interacting.
+            if (!didFinalApproach)
+            {
+                didFinalApproach = true;
+                if (currentTargetEntry.WorldPosition is { } exactPosition && BeginFinalApproach(exactPosition))
+                {
+                    hasSeenPathRunning = false;
+                    stateEnteredAt = DateTime.UtcNow;
+                    stuckDetector.Reset();
+                    StatusText = Loc.T(
+                        $"Laufe genau auf den Punkt: {currentTargetEntry.Name}...",
+                        $"Walking precisely onto the point: {currentTargetEntry.Name}...");
+                    return;
+                }
+
+                // Keine WorldPosition hinterlegt, oder vnavmesh lehnt ab (z.B. schon nah genug dran) -
+                // direkt weiter wie bisher.
+            }
+
             state = State.Interacting;
             stateEnteredAt = DateTime.UtcNow;
             StatusText = Loc.T($"Interagiere: {currentTargetEntry.Name}...", $"Interacting: {currentTargetEntry.Name}...");
