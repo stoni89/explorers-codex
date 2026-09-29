@@ -5672,6 +5672,7 @@ public sealed class Plugin : IDalamudPlugin
         [234] = new Vector3(-30.803701f, 38.0566f, -343.41434f),       // Solution Nine: Resolution
         [235] = new Vector3(-159.09541f, 6.4373016e-06f, 23.499605f),  // Solution Nine: Nexus Arcade
         [236] = new Vector3(-376.37665f, 14.030001f, 137.58334f),      // Solution Nine: Residential Sector
+        [77] = new Vector3(-302.19894f, -21.131083f, 35.627785f),      // The Dravanian Forelands: Anyx Trine
     };
 
     /// <summary>
