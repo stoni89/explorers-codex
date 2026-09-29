@@ -175,16 +175,23 @@ public sealed class AetherCurrentAutomation
     }
 
     /// <summary>
-    /// Wird man unterwegs oder an der Ätherströmung angegriffen, wird der normale Zustandsautomat
-    /// angehalten, der Laufweg gestoppt, der Angreifer anvisiert (bei Bedarf hingelaufen) und das
-    /// Kampf-Plugin (RotationSolver/WrathCombo/BossMod, siehe Plugin.CombatPlugin) eingeschaltet, bis
-    /// kein Gegner mehr lebt - danach geht es im vorherigen Zustand weiter, ERST DANN wird die
-    /// Ätherströmung aktiviert (Nutzeranforderung: "alle Gegner töten, falls man im Kampf ist, sonst
-    /// nicht"). Identisches Vorgehen wie HuntingLogAutomation.UpdateDefendingSelf. Gibt true zurück,
+    /// NUR am Ziel (State.Interacting, siehe Nutzeranforderung "erst wenn man am Ziel angekommen ist")
+    /// - wird man dort angegriffen, wird der normale Zustandsautomat angehalten, der Angreifer
+    /// anvisiert (bei Bedarf hingelaufen) und das Kampf-Plugin (RotationSolver/WrathCombo/BossMod,
+    /// siehe Plugin.CombatPlugin) eingeschaltet, bis kein Gegner mehr lebt - danach wird erst die
+    /// Ätherströmung aktiviert. Während des Hinlaufens (MovingTo/Mounting) greift diese Gegenwehr
+    /// bewusst NICHT, da sie sonst auch fremde, nur zufällig in der Nähe kämpfende Gegner einbeziehen
+    /// würde. Ähnliches Vorgehen wie HuntingLogAutomation.UpdateDefendingSelf. Gibt true zurück,
     /// solange verteidigt wird (Aufrufer überspringt dann den Zustandsautomaten für diesen Frame).
     /// </summary>
-    private bool UpdateDefendingSelf(IReadOnlyList<CollectibleEntry> entries)
+    private bool UpdateDefendingSelf()
     {
+        if (state != State.Interacting)
+        {
+            isDefendingSelf = false;
+            return false;
+        }
+
         if (Plugin.Condition[ConditionFlag.InCombat])
         {
             var playerPos = Plugin.ObjectTable.LocalPlayer?.Position ?? currentTargetPosition;
@@ -224,17 +231,7 @@ public sealed class AetherCurrentAutomation
             return false;
 
         isDefendingSelf = false;
-        StopPath();
-        Plugin.Log.Info($"[AetherCurrentAutomation] Kampf vorbei - setze Zustand {state} fort ({currentTargetEntry?.Name}).");
-
-        // Unterbrochene Reise zum Ziel neu starten (Laufweg wurde für die Gegenwehr gestoppt) - ohne
-        // dass die Unterbrechung als Fehlversuch zählt (siehe MaxAttemptsPerTarget).
-        if (state is State.MovingTo or State.Mounting && currentTargetEntry is { } entry && StillNeeded(entries, entry.Id))
-        {
-            attemptCounts[entry.Id] = Math.Max(0, attemptCounts.GetValueOrDefault(entry.Id, 0) - 1);
-            StartMovingTo(entry);
-        }
-
+        Plugin.Log.Info($"[AetherCurrentAutomation] Kampf vorbei - aktiviere jetzt: {currentTargetEntry?.Name}.");
         return false;
     }
 
@@ -264,7 +261,7 @@ public sealed class AetherCurrentAutomation
         if (!IsActive)
             return;
 
-        if (UpdateDefendingSelf(aetherCurrentsInZone))
+        if (UpdateDefendingSelf())
             return;
 
         try
