@@ -215,6 +215,13 @@ public sealed class AetheryteAutomation
     private DateTime? districtTravelFinishedAt;
     private readonly HashSet<uint> skippedIds = new();
 
+    // Wie lange Path.IsRunning ununterbrochen false bleiben muss, bevor vor dem Interagieren
+    // tatsächlich als "steht still" gilt - siehe UpdateInteracting-Kommentar (ein einzelner
+    // StopPath()-Aufruf reichte laut Diagnose-Log nicht, der Laufauftrag lief nach wenigen Frames
+    // von selbst weiter).
+    private static readonly TimeSpan InteractPathSettleDuration = TimeSpan.FromMilliseconds(500);
+    private DateTime? interactPathSettleConfirmedSince;
+
     // Diagnose für den Nutzer-Report "interagiert, 1 Sekunde später läuft er gegen den Kristall und
     // bricht ab" (trotz StopPath() vor dem Interact weiterhin aufgetreten) - loggt für kurze Zeit
     // NACH dem Interact-Aufruf jeden Frame Position + relevante Condition-Flags, um zu sehen, WER die
@@ -1086,6 +1093,7 @@ public sealed class AetheryteAutomation
                 stateEnteredAt = DateTime.UtcNow;
                 hasInteractedThisCycle = false;
                 interactObjectNotFoundSince = null;
+                interactPathSettleConfirmedSince = null;
                 StatusText = Loc.T("Interagiere...", "Interacting...");
             }
             else
@@ -1274,15 +1282,25 @@ public sealed class AetheryteAutomation
 
         if (!hasInteractedThisCycle)
         {
-            // vnavmesh explizit anhalten, BEVOR überhaupt Ziel gesetzt/interagiert wird - "Path.
-            // IsRunning" wird false, sobald die Toleranz erreicht ist, der Charakter kann aber noch
-            // kurz nachrutschen/nachlaufen (Restbewegung), während vnavmesh selbst schon als "fertig"
-            // gilt. Genau das erklärte den Nutzer-Report "interagiert... 1 Sekunde später läuft er
-            // einfach gegen den Kristall und bricht ab": das Entdecken eines Aetheryten spielt einen
-            // kurzen Cast ab, der bei Bewegung abbricht - eine solche Restbewegung reichte offenbar,
-            // um genau das auszulösen. Ein expliziter Stopp hier verhindert das unabhängig davon, ob
-            // die Restbewegung von vnavmesh selbst oder vom Spiel-Client kommt.
+            // Per Diagnose-Log bestätigt: ein einzelner StopPath()-Aufruf reicht NICHT - der zuvor
+            // als "steckengeblieben" abgebrochene enge Laufauftrag lief nach 4-5 Frames von selbst
+            // wieder weiter (Path.IsRunning wechselte eigenständig zurück auf true) und schob den
+            // Charakter noch während des Interagierens in den Kristall, was den kurzen Entdecken-Cast
+            // abbrach (Nutzer-Report: "interagiert... 1 Sekunde später läuft er gegen den Kristall und
+            // bricht ab"). Deshalb jetzt: JEDEN Frame erneut stoppen UND eine kurze Zeit lang
+            // bestätigt bekommen, dass wirklich nichts mehr läuft, bevor überhaupt Ziel gesetzt/
+            // interagiert wird - läuft es währenddessen doch wieder an, fängt die Bestätigung neu an.
             StopPath();
+
+            if (pathIsRunning.InvokeFunc())
+            {
+                interactPathSettleConfirmedSince = null;
+                return;
+            }
+
+            interactPathSettleConfirmedSince ??= DateTime.UtcNow;
+            if (DateTime.UtcNow - interactPathSettleConfirmedSince.Value < InteractPathSettleDuration)
+                return;
 
             // Interact braucht das Objekt als aktuelles Ziel - das muss erst einen Frame lang
             // angewendet worden sein, bevor der eigentliche Interact-Aufruf greift.
