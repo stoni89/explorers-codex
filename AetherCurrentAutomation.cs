@@ -245,6 +245,7 @@ public sealed class AetherCurrentAutomation
         {
             Plugin.Log.Info($"[AetherCurrentAutomation] Kampf vorbei - Kampf-Plugin wieder aus, laufe zurück zu: {currentTargetEntry.Name}.");
             didFinalApproach = false;
+            Plugin.TryDismount();
             if (pathfindAndMoveCloseTo.InvokeFunc(currentTargetPosition, false, ArrivalTolerance))
             {
                 state = State.MovingTo;
@@ -469,18 +470,17 @@ public sealed class AetherCurrentAutomation
     /// Wie BeginPathfind, aber mit FinalApproachTolerance direkt zur bekannten WorldPosition - siehe
     /// deren Kommentar. Gibt zurück, ob vnavmesh den Laufweg angenommen hat (false z.B. wenn der
     /// Charakter bereits nah genug dran ist, dann direkt weiter zu Interacting statt hier hängen zu bleiben).
+    /// Bewusst NIE fliegend: die enge FinalApproachTolerance (0.1y) lässt sich fliegend oft gar nicht
+    /// erreichen (der Charakter schwebt nur knapp daneben, ohne je "anzukommen") - dadurch blieb die
+    /// Automation nach dem Verteidigen (siehe UpdateDefendingSelf, das währenddessen wieder aufsitzen
+    /// lässt) sichtbar auf dem Punkt stehen, ohne je zu interagieren (Nutzer-Report).
     /// </summary>
     private bool BeginFinalApproach(Vector3 target)
     {
         currentTargetPosition = target;
 
-        var mounted = Plugin.Condition[ConditionFlag.Mounted];
-        var accepted = false;
-        if (mounted && Plugin.CanFly)
-            accepted = pathfindAndMoveCloseTo.InvokeFunc(target, true, FinalApproachTolerance);
-
-        if (!accepted)
-            accepted = pathfindAndMoveCloseTo.InvokeFunc(target, false, FinalApproachTolerance);
+        Plugin.TryDismount();
+        var accepted = pathfindAndMoveCloseTo.InvokeFunc(target, false, FinalApproachTolerance);
 
         return accepted;
     }
