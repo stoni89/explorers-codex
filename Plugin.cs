@@ -2024,7 +2024,7 @@ public sealed class Plugin : IDalamudPlugin
         [2162710] = new Vector3(503.04245f, 106.69299f, -434.7053f),   // The Grey Fleet (Lower La Noscea)
         [2162715] = new Vector3(67.4166f, 1.9575522f, 47.885967f),     // Camp Skull Valley (Western La Noscea)
         [2162719] = new Vector3(381.97714f, 5.188155f, 198.84981f),    // Jijiroon's Trading Post (Upper La Noscea)
-        [2162718] = new Vector3(-428.29407f, 69.60198f, 28.178936f),   // Thalaos (Upper La Noscea)
+        [2162718] = new Vector3(-428.636f, 69.90528f, 28.53052f),      // Thalaos (Upper La Noscea)
     };
 
     // Je Zwischenstopp: Position + ob dieses Teilstück fliegend angeflogen werden darf (false =
