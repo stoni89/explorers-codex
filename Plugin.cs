@@ -2018,19 +2018,15 @@ public sealed class Plugin : IDalamudPlugin
         [2162695] = new Vector3(425.21655f, 15.025984f, 464.70297f),   // The Brewer's Beacon (Western La Noscea)
         [2162694] = new Vector3(597.14575f, 73.67687f, -112.00588f),   // Red Rooster Stead (Lower La Noscea)
         [2162710] = new Vector3(503.04245f, 106.69299f, -434.7053f),   // The Grey Fleet (Lower La Noscea)
-        [2162715] = new Vector3(67.531685f, 1.9575522f, 47.518333f),   // Camp Skull Valley (Western La Noscea)
+        [2162715] = new Vector3(67.4166f, 1.9575522f, 47.885967f),     // Camp Skull Valley (Western La Noscea)
         [2162719] = new Vector3(381.97714f, 5.188155f, 198.84981f),    // Jijiroon's Trading Post (Upper La Noscea)
         [2162718] = new Vector3(-428.29407f, 69.60198f, 28.178936f),   // Thalaos (Upper La Noscea)
     };
 
     // Je Zwischenstopp: Position + ob dieses Teilstück fliegend angeflogen werden darf (false =
     // erzwungen zu Fuß/abgemountet, z.B. für einen Durchgang wie eine Tür, durch die man nicht
-    // hindurchfliegen kann) - siehe SightseeingApproachWaypoints-Kommentar. AllowFlyingAfter steuert
-    // stattdessen den Schritt DANACH (nächster Zwischenstopp oder der finale, enge Schritt zur echten
-    // Position, siehe SightseeingAutomation.BeginFinalApproach) - false erzwingt dort ein Abmounten
-    // und einen zu Fuß zurückgelegten Rest, z.B. wenn der letzte Meter zum Punkt fliegend zu ungenau
-    // anzusteuern ist (siehe Camp Skull Valley).
-    public readonly record struct SightseeingApproachWaypoint(Vector3 Position, bool AllowFlying = true, bool AllowFlyingAfter = true);
+    // hindurchfliegen kann) - siehe SightseeingApproachWaypoints-Kommentar.
+    public readonly record struct SightseeingApproachWaypoint(Vector3 Position, bool AllowFlying = true);
 
     // Von Hand nachgetragene ZWISCHENSTOPPS (der Reihe nach abzulaufen) vor der eigentlichen
     // Zielposition (Key = Adventure-RowId) - für Punkte, bei denen selbst der über die Karten-
@@ -2039,13 +2035,12 @@ public sealed class Plugin : IDalamudPlugin
     // NICHT fliegenden Anflugweg braucht, statt direkt den geraden/groben Weg zu nehmen. Sind welche
     // hinterlegt, läuft die Automation ZUERST der Reihe nach dorthin (jeweils mit der normalen,
     // großzügigen Toleranz, fliegend nur wenn AllowFlying) und erst vom letzten Zwischenstopp aus den
-    // finalen, engen (wieder fliegend erlaubten, außer AllowFlyingAfter=false) Schritt zur echten
-    // Position (siehe SightseeingApproachOverrides/BeginFinalApproach) - der Umweg über die
-    // Karten-Flagge entfällt dann komplett.
+    // finalen, engen (wieder fliegend erlaubten) Schritt zur echten Position (siehe
+    // SightseeingApproachOverrides/BeginFinalApproach) - der Umweg über die Karten-Flagge entfällt
+    // dann komplett.
     private static readonly Dictionary<uint, SightseeingApproachWaypoint[]> SightseeingApproachWaypoints = new()
     {
         [2162688] = new[] { new SightseeingApproachWaypoint(new Vector3(-82.96662f, 41.993416f, -170.93227f)) }, // Barracuda Piers (Limsa Lominsa Upper Decks)
-        [2162715] = new[] { new SightseeingApproachWaypoint(new Vector3(67.40774f, 3.7560055f, 47.88653f), AllowFlyingAfter: false) }, // Camp Skull Valley (Western La Noscea)
     };
 
     /// <summary>Siehe SightseeingApproachWaypoints-Kommentar.</summary>
@@ -2296,6 +2291,15 @@ public sealed class Plugin : IDalamudPlugin
             {
                 new SightseeingPuzzleStep(new Vector3(195.98488f, 234.7984f, 414.46854f), Jump: false),               // Punkt 2 (hier aufmounten)
                 new SightseeingPuzzleStep(new Vector3(197.65483f, 283.54507f, 416.3392f), Jump: false, Fly: true),    // Punkt 3 (fliegend, Sightseeing-Punkt)
+            },
+            DismountAtStart: true),
+        [2162715] = new( // Camp Skull Valley (Western La Noscea)
+            new Vector3(62.28901f, 0.030244112f, 48.545948f),
+            new[]
+            {
+                new SightseeingPuzzleStep(new Vector3(64.00007f, 0.4575119f, 50.961147f), Jump: false),               // Punkt 1
+                new SightseeingPuzzleStep(new Vector3(64.90911f, 0.18966413f, 50.14056f), Jump: false, SprintBefore: true), // Absprungpunkt - Sprint, dann Anlauf
+                new SightseeingPuzzleStep(new Vector3(67.4166f, 1.9575522f, 47.885967f), Jump: true, RunUp: true),    // Sightseeing-Punkt - mit Anlauf ab Absprungpunkt
             },
             DismountAtStart: true),
     };
