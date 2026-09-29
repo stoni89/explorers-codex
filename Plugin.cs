@@ -2337,12 +2337,13 @@ public sealed class Plugin : IDalamudPlugin
     public static bool TryGetSightseeingJumpingPuzzle(uint adventureId, out SightseeingJumpingPuzzle puzzle) =>
         SightseeingJumpingPuzzles.TryGetValue(adventureId, out puzzle!);
 
-    // Start = wird ganz normal (Mount/vnavmesh) angesteuert, erst DORT abgemountet. JumpTarget =
-    // Absprungziel des einzelnen (Anlauf-)Sprungs von Start aus - danach läuft die Automation normal
-    // über BeginFinalApproach zur echten, bereits bekannten Position (entry.WorldPosition) weiter.
-    // Viel einfacher als SightseeingJumpingPuzzle (nur EIN Sprung, kein Mehrschritt-Parcours), daher
-    // ein eigener, schlankerer Record statt SightseeingPuzzleStep wiederzuverwenden.
-    public readonly record struct AetherCurrentJumpRoute(Vector3 Start, Vector3 JumpTarget);
+    // Start = wird ganz normal (Mount/vnavmesh) angesteuert, erst DORT abgemountet. RunUp = danach zu
+    // Fuß (kein Sprung) dorthin, um von dort mit Anlauf abzuspringen - Absprung/Landung bei
+    // JumpTarget. Erst danach läuft die Automation normal über BeginFinalApproach zur echten, bereits
+    // bekannten Position (entry.WorldPosition) weiter. Viel einfacher als SightseeingJumpingPuzzle
+    // (nur EIN Sprung, kein Mehrschritt-Parcours), daher ein eigener, schlankerer Record statt
+    // SightseeingPuzzleStep wiederzuverwenden.
+    public readonly record struct AetherCurrentJumpRoute(Vector3 Start, Vector3 RunUpPoint, Vector3 JumpTarget);
 
     // Von Hand hinterlegte Ätherströmungen, die nur über einen kurzen Sprung erreichbar sind (Key =
     // AetherCurrent-RowId, siehe AetherCurrentAutomation-Kommentar) - z.B. "The Dravanian Forelands
@@ -2350,8 +2351,9 @@ public sealed class Plugin : IDalamudPlugin
     private static readonly Dictionary<uint, AetherCurrentJumpRoute> AetherCurrentJumpRoutes = new()
     {
         [2818077] = new( // The Dravanian Forelands (Loth ast Gnath past second door)
-            new Vector3(400.26862f, -92.110725f, 684.3161f),
-            new Vector3(404.08856f, -90.33713f, 686.0732f)),
+            new Vector3(399.45297f, -92.03338f, 683.3449f),
+            new Vector3(401.5101f, -92.208374f, 684.6267f),
+            new Vector3(403.9884f, -90.32586f, 686.1742f)),
     };
 
     /// <summary>Siehe AetherCurrentJumpRoutes-Kommentar.</summary>

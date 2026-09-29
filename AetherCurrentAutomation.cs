@@ -37,6 +37,7 @@ public sealed class AetherCurrentAutomation
     private enum JumpPhase
     {
         Dismounting,
+        WalkingToRunUp,
         RunningToJump,
     }
 
@@ -99,6 +100,9 @@ public sealed class AetherCurrentAutomation
     // Rohe Wegpunkt-Bewegung (kein Pathfinding) für den Sprung selbst (siehe State.JumpRoute) - genau
     // dieselbe IPC wie SightseeingAutomation für ihre Jumping Puzzles nutzt.
     private readonly ICallGateSubscriber<List<Vector3>, bool, object> moveToPath;
+    private readonly ICallGateSubscriber<float> pathGetTolerance;
+    private readonly ICallGateSubscriber<float, object> pathSetTolerance;
+    private float? savedPathTolerance;
 
     private State state = State.Idle;
     private CollectibleEntry? currentTargetEntry;
@@ -156,6 +160,8 @@ public sealed class AetherCurrentAutomation
         navmeshIsReady = Plugin.PluginInterface.GetIpcSubscriber<bool>("vnavmesh.Nav.IsReady");
         queryFlagToPoint = Plugin.PluginInterface.GetIpcSubscriber<Vector3?>("vnavmesh.Query.Mesh.FlagToPoint");
         moveToPath = Plugin.PluginInterface.GetIpcSubscriber<List<Vector3>, bool, object>("vnavmesh.Path.MoveTo");
+        pathGetTolerance = Plugin.PluginInterface.GetIpcSubscriber<float>("vnavmesh.Path.GetTolerance");
+        pathSetTolerance = Plugin.PluginInterface.GetIpcSubscriber<float, object>("vnavmesh.Path.SetTolerance");
     }
 
     public bool IsVNavmeshAvailable()
@@ -204,6 +210,10 @@ public sealed class AetherCurrentAutomation
         currentTargetEntry = null;
         StopPath();
         Plugin.ClearNavigationTarget();
+
+        // Mitten in einer Sprungroute gestoppt - enge vnavmesh-Toleranz nicht dauerhaft gesetzt lassen.
+        RestorePathTolerance();
+        activeJumpRoute = null;
     }
 
     public void MarkUnavailable()
@@ -568,6 +578,12 @@ public sealed class AetherCurrentAutomation
     }
 
     /// <summary>Startpunkt einer Sprungroute erreicht - siehe JumpPhase/UpdateJumpRoute.</summary>
+    // Enge vnavmesh-Wegpunkt-Toleranz für die Sprungroute (Nutzeranforderung: "genaue Positionen
+    // nutzen, ohne große Toleranz") - Absprung-/Landepunkte liegen auf schmalen Vorsprüngen, die
+    // normale (großzügigere) vnavmesh-Standardtoleranz würde dort schon viel zu früh "angekommen"
+    // meldet. Gleicher Wert wie SightseeingAutomation.PuzzleFinalPreciseTolerance.
+    private const float JumpRoutePreciseTolerance = 0.05f;
+
     private void BeginJumpRoute()
     {
         Plugin.TryDismount();
@@ -580,8 +596,8 @@ public sealed class AetherCurrentAutomation
     }
 
     /// <summary>
-    /// Abmounten, dann einmal (ohne Anlauf-Kette, kein Sprint) zum Absprungpunkt der Route laufen und
-    /// dabei abspringen - viel einfacher als SightseeingAutomation.UpdateJumpingPuzzle, da hier nur
+    /// Abmounten, dann zu Fuß zum Anlaufpunkt der Route, von dort mit Anlauf zum Absprung-/
+    /// Landepunkt springen - viel einfacher als SightseeingAutomation.UpdateJumpingPuzzle, da hier nur
     /// EIN Sprung nötig ist, kein Mehrschritt-Parcours. Nach der Landung geht es normal über
     /// BeginFinalApproach zur echten Position weiter (siehe Plugin.AetherCurrentJumpRoutes-Kommentar).
     /// </summary>
@@ -610,11 +626,27 @@ public sealed class AetherCurrentAutomation
                 }
 
                 // Condition[Mounted] wird schon VOR dem Ende der sichtbaren Absteige-Animation false -
-                // ein Sprung mitten in dieser Animation greift nicht (identisches Problem/dieselbe
+                // ein Laufauftrag mitten in dieser Animation greift nicht (identisches Problem/dieselbe
                 // Lösung wie DismountSettleDelay in anderen Automationen).
                 jumpDismountedAt ??= DateTime.UtcNow;
                 if (DateTime.UtcNow - jumpDismountedAt.Value < JumpDismountSettleDelay)
                     return;
+
+                SetExactPathTolerance(true);
+                moveToPath.InvokeAction(new List<Vector3> { route.RunUpPoint }, false);
+                jumpPhase = JumpPhase.WalkingToRunUp;
+                stateEnteredAt = DateTime.UtcNow;
+                return;
+            }
+
+            case JumpPhase.WalkingToRunUp:
+            {
+                if (pathIsRunning.InvokeFunc())
+                {
+                    if (DateTime.UtcNow - stateEnteredAt > StepMaxDuration)
+                        SkipCurrent(Loc.T("Anlauf zur Ätherströmung dauert zu lange", "Run-up to the aether current is taking too long"));
+                    return;
+                }
 
                 moveToPath.InvokeAction(new List<Vector3> { route.JumpTarget }, false);
                 Plugin.TryJump();
@@ -632,8 +664,10 @@ public sealed class AetherCurrentAutomation
                     return;
                 }
 
-                // Gelandet - Route abgeschlossen, normal zur echten Position weiter (BeginFinalApproach
-                // übernimmt auch das Abmounten erneut, schadet aber nicht, falls schon unten).
+                // Gelandet - Route abgeschlossen, wieder normale Toleranz, normal zur echten Position
+                // weiter (BeginFinalApproach übernimmt auch das Abmounten erneut, schadet aber nicht,
+                // falls schon unten).
+                RestorePathTolerance();
                 activeJumpRoute = null;
                 didFinalApproach = true;
                 if (currentTargetEntry.WorldPosition is { } exactPosition && BeginFinalApproach(exactPosition))
@@ -653,6 +687,43 @@ public sealed class AetherCurrentAutomation
                 StatusText = Loc.T($"Interagiere: {currentTargetEntry.Name}...", $"Interacting: {currentTargetEntry.Name}...");
                 return;
             }
+        }
+    }
+
+    // Für die Sprungroute: enge vnavmesh-Wegpunkt-Toleranz, sonst wieder die ursprüngliche - gleiches
+    // Prinzip wie SightseeingAutomation.SetExactPathTolerance/RestorePathTolerance.
+    private void SetExactPathTolerance(bool exact)
+    {
+        if (!exact)
+        {
+            RestorePathTolerance();
+            return;
+        }
+
+        try
+        {
+            savedPathTolerance ??= pathGetTolerance.InvokeFunc();
+            pathSetTolerance.InvokeAction(JumpRoutePreciseTolerance);
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Warning(ex, "[AetherCurrentAutomation] vnavmesh-Toleranz konnte nicht gesetzt werden.");
+        }
+    }
+
+    private void RestorePathTolerance()
+    {
+        if (savedPathTolerance is not { } tolerance)
+            return;
+
+        savedPathTolerance = null;
+        try
+        {
+            pathSetTolerance.InvokeAction(tolerance);
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Warning(ex, "[AetherCurrentAutomation] vnavmesh-Toleranz konnte nicht zurückgesetzt werden.");
         }
     }
 
