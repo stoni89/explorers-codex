@@ -96,6 +96,14 @@ public sealed class AetherCurrentAutomation
     private DateTime? interactObjectNotFoundSince;
     private bool didFinalApproach;
 
+    // Verhindert, dass Plugin.TryRemountAfterForcedDismount (gedacht für unfreiwilliges Absteigen
+    // beim Schwimmen) den Charakter wieder aufsitzen lässt, nachdem WIR ihn absichtlich für den
+    // engen Final Approach abgestiegen haben (siehe BeginFinalApproach) - sonst versucht er auf dem
+    // letzten Stück wieder aufzumounten, statt zu Fuß exakt anzukommen (Nutzer-Report: "mountet paar
+    // yards vorher ab und auf dem Punkt mountet er wieder auf"). Identisches Problem/dieselbe Lösung
+    // wie in AetheryteAutomation/ChocobokeepAutomation/SightseeingAutomation.
+    private bool hasIntentionallyDismounted;
+
     public bool IsActive { get; private set; }
 
     private static readonly TimeSpan StatusLingerDuration = TimeSpan.FromSeconds(8);
@@ -157,6 +165,7 @@ public sealed class AetherCurrentAutomation
         attemptCounts.Clear();
         isDefendingSelf = false;
         lastCombatEnsureAt = DateTime.MinValue;
+        hasIntentionallyDismounted = false;
         StatusText = Loc.T("Automation gestartet...", "Automation started...");
     }
 
@@ -246,6 +255,7 @@ public sealed class AetherCurrentAutomation
             Plugin.Log.Info($"[AetherCurrentAutomation] Kampf vorbei - Kampf-Plugin wieder aus, laufe zurück zu: {currentTargetEntry.Name}.");
             didFinalApproach = false;
             Plugin.TryDismount();
+            hasIntentionallyDismounted = true;
             if (pathfindAndMoveCloseTo.InvokeFunc(currentTargetPosition, false, ArrivalTolerance))
             {
                 state = State.MovingTo;
@@ -403,6 +413,7 @@ public sealed class AetherCurrentAutomation
         hasInteractedThisCycle = false;
         interactObjectNotFoundSince = null;
         didFinalApproach = false;
+        hasIntentionallyDismounted = false;
 
         if (Plugin.TryRequestAetheryteMount())
         {
@@ -480,6 +491,7 @@ public sealed class AetherCurrentAutomation
         currentTargetPosition = target;
 
         Plugin.TryDismount();
+        hasIntentionallyDismounted = true;
         var accepted = pathfindAndMoveCloseTo.InvokeFunc(target, false, FinalApproachTolerance);
 
         return accepted;
@@ -508,8 +520,10 @@ public sealed class AetherCurrentAutomation
                 Plugin.TryUseSprint();
 
             // Falls unterwegs durch Schwimmen zwangsweise abgestiegen wurde - sobald wieder Land
-            // erreicht ist, erneut aufsitzen.
-            Plugin.TryRemountAfterForcedDismount(ref lastRemountAttempt);
+            // erreicht ist, erneut aufsitzen. NICHT, nachdem wir selbst absichtlich für den Final
+            // Approach abgestiegen sind (siehe hasIntentionallyDismounted).
+            if (!hasIntentionallyDismounted)
+                Plugin.TryRemountAfterForcedDismount(ref lastRemountAttempt);
 
             // Aus einem Flugverbots-Bereich heraus (siehe FlightPathUpgrade) - jetzt fliegend weiter.
             if (flightUpgrade.ShouldReplanFlying(playerPos, currentTargetPosition))
