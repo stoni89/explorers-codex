@@ -2940,7 +2940,11 @@ public sealed class Plugin : IDalamudPlugin
         return questNameByIdCache.TryGetValue(questId, out var questName) ? questName : null;
     }
 
-    private readonly record struct ChocobokeepLocation(uint ChocoboTaxiStandId, uint TerritoryId, Vector3 Position);
+    // ObjectName: der Name, den der Chocobokeep-Automation-Interaktionspartner im ObjectTable trägt -
+    // standardmäßig "Chocobokeep", aber nicht überall (Nutzer-Report: Anyx Trine nutzt stattdessen
+    // ein Objekt namens "Summoning Stone") - siehe ChocobokeepObjectNameOverrides/
+    // ChocobokeepAutomation.FindNearestChocobokeepObject.
+    private readonly record struct ChocobokeepLocation(uint ChocoboTaxiStandId, uint TerritoryId, Vector3 Position, string ObjectName = "Chocobokeep");
 
     /// <summary>
     /// Von Hand erfasste Chocobokeep-Standorte (Reitstand-RowId + Zone + rohe Weltposition) - anders
@@ -2991,7 +2995,7 @@ public sealed class Plugin : IDalamudPlugin
         new(1179685, 397, new(483.1342f, 217.9514f, 751.0815f)),
         new(1179686, 397, new(-266.2535f, 127.1339f, 16.17947f)),
         new(1179687, 398, new(549.8383f, -51.27571f, 68.96717f)),
-        new(1179688, 398, new(-208.71968f, -35.408485f, 164.7894f)),
+        new(1179688, 398, new(-208.71968f, -35.408485f, 164.7894f), "Summoning Stone"),
         new(1179689, 399, new(-50.2f, 100.7f, -203f)),
         new(1179690, 400, new(265.156f, -42.55743f, 565.6061f)),
         new(1179691, 400, new(-50.4167f, -8.866f, 146.5618f)),
@@ -3472,6 +3476,14 @@ public sealed class Plugin : IDalamudPlugin
         chocobokeepEntriesCache = result;
         return result;
     }
+
+    /// <summary>
+    /// Name des Interaktionspartners im ObjectTable für einen Chocobokeep-Standort (siehe
+    /// ChocobokeepLocation.ObjectName) - standardmäßig "Chocobokeep", aber nicht überall (z.B. Anyx
+    /// Trine: "Summoning Stone") - für ChocobokeepAutomation.FindNearestChocobokeepObject.
+    /// </summary>
+    public static string GetChocobokeepObjectName(uint chocoboTaxiStandId) =>
+        ChocobokeepLocations.FirstOrDefault(l => l.ChocoboTaxiStandId == chocoboTaxiStandId).ObjectName ?? "Chocobokeep";
 
     /// <summary>
     /// Einmaliger Debug-Dump zur Kalibrierung von GetChocobokeepEntries - listet jeden Standort
