@@ -280,10 +280,15 @@ public static class ModernUi
         var rowScreenMin = ImGui.GetCursorScreenPos();
         var totalAvail = ImGui.GetContentRegionAvail().X - CardMargin;
 
-        ImGui.SetCursorPos(rowStart + new Vector2(0f, (rowHeight - textHeight) * 0.5f));
-        ImGui.TextUnformatted(label);
-        var labelMax = ImGui.GetItemRectMax();
-        var labelMinY = ImGui.GetItemRectMin().Y;
+        // Per Draw-List statt SetCursorPos()+TextUnformitted() (Nutzer-Report/Screenshot: Beschriftung
+        // sitzt bei der JEWEILS ERSTEN Zeile pro Karte über der Mitte, bei allen weiteren Zeilen aber
+        // korrekt zentriert) - siehe ToggleRow-Kommentar: TextUnformitted addiert beim Zeichnen
+        // intern noch einen "Zeilen-Basislinien-Offset", der von der GroupLabel-Überschrift direkt
+        // davor nachhängen kann. AddText umgeht das komplett.
+        var labelPos = rowScreenMin + new Vector2(0f, (rowHeight - textHeight) * 0.5f);
+        ImGui.GetWindowDrawList().AddText(labelPos, ImGui.GetColorU32(ImGuiCol.Text), label);
+        var labelMax = labelPos + ImGui.CalcTextSize(label);
+        var labelMinY = labelPos.Y;
 
         var widgetX = totalAvail > controlWidth ? rowStart.X + totalAvail - controlWidth : rowStart.X;
         ImGui.SetCursorPos(new Vector2(widgetX, rowStart.Y));
@@ -351,10 +356,13 @@ public static class ModernUi
         // Kartenrand, unabhängig davon, wie breit das Label ist.
         var totalAvail = ImGui.GetContentRegionAvail().X - CardMargin;
 
-        ImGui.SetCursorPos(rowStart + new Vector2(0f, (rowHeight - textHeight) * 0.5f));
-        ImGui.TextUnformatted(label);
-        var labelMax = ImGui.GetItemRectMax();
-        var labelMinY = ImGui.GetItemRectMin().Y;
+        // Per Draw-List statt SetCursorPos()+TextUnformitted() - siehe LabelRow-Kommentar: umgeht
+        // TextUnformitteds internen Zeilen-Basislinien-Offset, der sonst bei der ersten Zeile pro
+        // Karte (direkt nach der größer skalierten GroupLabel-Überschrift) nachhängen kann.
+        var labelPos = rowScreenMin + new Vector2(0f, (rowHeight - textHeight) * 0.5f);
+        ImGui.GetWindowDrawList().AddText(labelPos, ImGui.GetColorU32(ImGuiCol.Text), label);
+        var labelMax = labelPos + ImGui.CalcTextSize(label);
+        var labelMinY = labelPos.Y;
 
         var toggleX = totalAvail > toggleWidth ? rowStart.X + totalAvail - toggleWidth : rowStart.X;
         ImGui.SetCursorPos(new Vector2(toggleX, rowStart.Y + (rowHeight - toggleHeight) * 0.5f));
