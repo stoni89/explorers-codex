@@ -2940,7 +2940,11 @@ public sealed class Plugin : IDalamudPlugin
         return questNameByIdCache.TryGetValue(questId, out var questName) ? questName : null;
     }
 
-    private readonly record struct ChocobokeepLocation(uint ChocoboTaxiStandId, uint TerritoryId, Vector3 Position);
+    // ObjectName: der Name, den der Chocobokeep-Automation-Interaktionspartner im ObjectTable trägt -
+    // standardmäßig "Chocobokeep", aber nicht überall (Nutzer-Report: Anyx Trine nutzt stattdessen
+    // ein Objekt namens "Summoning Stone") - siehe ChocobokeepObjectNameOverrides/
+    // ChocobokeepAutomation.FindNearestChocobokeepObject.
+    private readonly record struct ChocobokeepLocation(uint ChocoboTaxiStandId, uint TerritoryId, Vector3 Position, string ObjectName = "Chocobokeep");
 
     /// <summary>
     /// Von Hand erfasste Chocobokeep-Standorte (Reitstand-RowId + Zone + rohe Weltposition) - anders
@@ -2991,7 +2995,7 @@ public sealed class Plugin : IDalamudPlugin
         new(1179685, 397, new(483.1342f, 217.9514f, 751.0815f)),
         new(1179686, 397, new(-266.2535f, 127.1339f, 16.17947f)),
         new(1179687, 398, new(549.8383f, -51.27571f, 68.96717f)),
-        new(1179688, 398, new(-209.3486f, -35.4085f, 162.9337f)),
+        new(1179688, 398, new(-208.86838f, -35.408485f, 164.08452f), "Summoning Stone"),
         new(1179689, 399, new(-50.2f, 100.7f, -203f)),
         new(1179690, 400, new(265.156f, -42.55743f, 565.6061f)),
         new(1179691, 400, new(-50.4167f, -8.866f, 146.5618f)),
@@ -3472,6 +3476,14 @@ public sealed class Plugin : IDalamudPlugin
         chocobokeepEntriesCache = result;
         return result;
     }
+
+    /// <summary>
+    /// Name des Interaktionspartners im ObjectTable für einen Chocobokeep-Standort (siehe
+    /// ChocobokeepLocation.ObjectName) - standardmäßig "Chocobokeep", aber nicht überall (z.B. Anyx
+    /// Trine: "Summoning Stone") - für ChocobokeepAutomation.FindNearestChocobokeepObject.
+    /// </summary>
+    public static string GetChocobokeepObjectName(uint chocoboTaxiStandId) =>
+        ChocobokeepLocations.FirstOrDefault(l => l.ChocoboTaxiStandId == chocoboTaxiStandId).ObjectName ?? "Chocobokeep";
 
     /// <summary>
     /// Einmaliger Debug-Dump zur Kalibrierung von GetChocobokeepEntries - listet jeden Standort
@@ -5895,16 +5907,20 @@ public sealed class Plugin : IDalamudPlugin
 
     /// <summary>
     /// Liefert für jedes sichtbare, echte native Spielfenster (z.B. Währungs-, Inventar- oder
-    /// Charakterfenster - erkannt über AtkUnitBase.WindowNode != null, das nur bei tatsächlich
-    /// beweglichen Fenstern mit Titelleiste gesetzt ist, nicht bei fest verankerten HUD-Elementen
-    /// wie Aktionsleisten), das den übergebenen Bildschirmbereich überlappt, das jeweilige
-    /// Überlappungsrechteck (auf min/max dieses Bereichs begrenzt). Dalamud/ImGui zeichnet
-    /// grundsätzlich IMMER nach (also über) dem nativen Spiel-UI in einem einzigen Rendering-
-    /// Durchgang - es gibt keine echte Z-Order zwischen beiden. CompactOverlayWindow nutzt die
-    /// zurückgegebenen Rechtecke deshalb, um dort gezielt (a) per ImGuiP.SetWindowHitTestHole
-    /// Mausklicks ans native Fenster durchzureichen und (b) nur die betroffenen Inhaltszeilen
-    /// unsichtbar zu machen, statt (wie früher) das gesamte Overlay bei jeder noch so kleinen
-    /// Überlappung komplett auszublenden.
+    /// Charakterfenster, aber auch randlose interaktive Auswahllisten ohne Titelleiste wie die
+    /// Item-Liste beim Beastmaster-/Stammes-Tausch, Nutzer-Report: solche Listen waren bisher NICHT
+    /// klickbar, wenn das Overlay darüber lag), das den übergebenen Bildschirmbereich überlappt, das
+    /// jeweilige Überlappungsrechteck (auf min/max dieses Bereichs begrenzt). Erkannt über
+    /// AtkUnitBase.WindowNode != null (klassische bewegliche Fenster MIT Titelleiste) ODER
+    /// !DisableFocusability (auch randlose, aber echte interaktive Popups/Listen) - fest verankerte
+    /// HUD-Elemente wie Aktionsleisten haben WEDER ein WindowNode NOCH Focusability, fallen also
+    /// weiterhin raus (sonst würde praktisch der gesamte Hotbar-Bereich dauerhaft durchlöchert).
+    /// Dalamud/ImGui zeichnet grundsätzlich IMMER nach (also über) dem nativen Spiel-UI in einem
+    /// einzigen Rendering-Durchgang - es gibt keine echte Z-Order zwischen beiden.
+    /// CompactOverlayWindow nutzt die zurückgegebenen Rechtecke deshalb, um dort gezielt (a) per
+    /// ImGuiP.SetWindowHitTestHole Mausklicks ans native Fenster durchzureichen und (b) nur die
+    /// betroffenen Inhaltszeilen unsichtbar zu machen, statt (wie früher) das gesamte Overlay bei
+    /// jeder noch so kleinen Überlappung komplett auszublenden.
     /// </summary>
     public static unsafe List<(Vector2 Min, Vector2 Max)> GetOverlappingNativeWindowRects(Vector2 min, Vector2 max)
     {
@@ -5917,7 +5933,9 @@ public sealed class Plugin : IDalamudPlugin
         for (var i = 0; i < list.Count; i++)
         {
             var unit = list.Entries[i].Value;
-            if (unit == null || !unit->IsVisible || unit->WindowNode == null)
+            if (unit == null || !unit->IsVisible)
+                continue;
+            if (unit->WindowNode == null && unit->DisableFocusability)
                 continue;
 
             var unitMin = new Vector2(unit->X, unit->Y);

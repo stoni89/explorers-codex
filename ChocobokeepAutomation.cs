@@ -440,12 +440,19 @@ public sealed class ChocobokeepAutomation
         // currentTargetPosition, den vnavmesh-aufgelösten Bodenpunkt) - in mehrstöckigen Zonen kann
         // FlagToPoint einen Punkt auf einer anderen Ebene/Plattform liefern (hier z.B. 25y zu hoch),
         // während der NPC selbst fast exakt an der manuell erfassten Koordinate steht.
-        var gameObject = FindNearestChocobokeepObject(currentTargetEntry.WorldPosition!.Value, 15f);
+        var gameObject = FindNearestChocobokeepObject(
+            currentTargetEntry.WorldPosition!.Value, 15f, Plugin.GetChocobokeepObjectName(currentTargetEntry.Id));
         if (gameObject == null)
         {
             interactObjectNotFoundSince ??= DateTime.UtcNow;
             if (DateTime.UtcNow - interactObjectNotFoundSince.Value < InteractObjectGracePeriod)
                 return;
+
+            // Diagnose für den Fall, dass der hinterlegte Objektname (Plugin.GetChocobokeepObjectName)
+            // trotzdem nicht passt - listet alles EventNpc/EventObj in der Nähe, damit der echte Name
+            // ohne weiteres Rätselraten aus dem Log übernommen werden kann (identisches Vorgehen wie
+            // schon bei anderen Automationen in diesem Plugin).
+            LogNearbyObjectsForDiagnostics(currentTargetEntry.WorldPosition!.Value, 15f);
 
             SkipCurrent(Loc.T("Objekt trotz Ankunft nicht gefunden", "object not found despite arriving"));
             return;
@@ -580,16 +587,19 @@ public sealed class ChocobokeepAutomation
             SkipCurrent(Loc.T("Freischalten hat nicht geklappt", "unlocking did not go through"));
     }
 
-    private static Dalamud.Game.ClientState.Objects.Types.IGameObject? FindNearestChocobokeepObject(Vector3 nearPosition, float maxDistance)
+    private static Dalamud.Game.ClientState.Objects.Types.IGameObject? FindNearestChocobokeepObject(Vector3 nearPosition, float maxDistance, string objectName)
     {
         Dalamud.Game.ClientState.Objects.Types.IGameObject? nearest = null;
         var bestDistance = maxDistance;
 
         foreach (var obj in Plugin.ObjectTable)
         {
-            if (obj.ObjectKind != ObjectKind.EventNpc)
+            // Nicht mehr auf EventNpc beschränkt (Nutzer-Report: Anyx Trines "Summoning Stone" wurde
+            // trotz korrektem Namen nie gefunden) - ein Chocobokeep-Ersatzobjekt wie ein Beschwörungs-
+            // stein ist vermutlich ein EventObj (statisches interagierbares Objekt) statt ein EventNpc.
+            if (obj.ObjectKind != ObjectKind.EventNpc && obj.ObjectKind != ObjectKind.EventObj)
                 continue;
-            if (!string.Equals(obj.Name.TextValue, "Chocobokeep", StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(obj.Name.TextValue, objectName, StringComparison.OrdinalIgnoreCase))
                 continue;
 
             var distance = Vector3.Distance(obj.Position, nearPosition);
@@ -601,6 +611,19 @@ public sealed class ChocobokeepAutomation
         }
 
         return nearest;
+    }
+
+    private static void LogNearbyObjectsForDiagnostics(Vector3 nearPosition, float maxDistance)
+    {
+        foreach (var obj in Plugin.ObjectTable)
+        {
+            if (obj.ObjectKind != ObjectKind.EventNpc && obj.ObjectKind != ObjectKind.EventObj)
+                continue;
+
+            var distance = Vector3.Distance(obj.Position, nearPosition);
+            if (distance <= maxDistance)
+                Plugin.Log.Info($"[ChocobokeepAutomation] Diagnose: '{obj.Name.TextValue}' ({obj.ObjectKind}) @ {obj.Position} (Distanz={distance:F1}).");
+        }
     }
 
     private void SkipCurrent(string reason)
