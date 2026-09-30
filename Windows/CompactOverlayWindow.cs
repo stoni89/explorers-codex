@@ -306,20 +306,24 @@ public class CompactOverlayWindow : Window
             .ToList();
 
         // Manche Triple-Triad-Karten stehen doppelt in CollectionData.GetAllEntries() - einmal
-        // generisch (aus triadcards.json, ohne Fundort) UND einmal pro NPC-Gegner (siehe
-        // Plugin.GetTripleTriadNpcEntries, MIT Fundort/Position) - Nutzer-Report: z.B. "Coeurlregina"
-        // wurde im Overlay zweimal angezeigt. Die generische Variante ohne Laufziel bringt keinen
-        // Mehrwert mehr, sobald es für dieselbe Karte mindestens einen NPC-Gegner MIT Laufziel gibt -
-        // die wird dann ausgeblendet. Zwei verschiedene NPC-Gegner für dieselbe Karte bleiben dagegen
+        // generisch (aus triadcards.json, oft MIT eigenem, von Hand gepflegtem Vendor/Fundort) UND
+        // einmal live aus Lumina berechnet pro NPC-Gegner (siehe Plugin.GetTripleTriadNpcEntries,
+        // erkennbar an EventNpcId != 0) - Nutzer-Report: z.B. "Coeurlregina" wurde im Overlay
+        // zweimal angezeigt, EIN Eintrag prominent mit NPC-Namen, der andere ohne, aber mit NPC-Namen
+        // im Tooltip (dessen eigener Vendor-Name aus der JSON-Datei). Ein Abgleich allein über
+        // HasGoToTarget reicht nicht, da auch die JSON-Variante oft schon Vendor+Koordinaten trägt.
+        // Die generische JSON-Variante wird daher ausgeblendet, sobald für dieselbe Karte mindestens
+        // ein live berechneter NPC-Gegner (EventNpcId != 0) existiert - der ist aktueller/zuverlässiger.
+        // Zwei verschiedene NPC-Gegner für dieselbe Karte (beide mit EventNpcId != 0) bleiben dagegen
         // beide sichtbar (jeder ein eigenes, tatsächlich nutzbares Ziel) - anders als
         // Plugin.GetGlobalEntries (Datenbank-Seite/ToDo-Liste), das komplett auf einen Eintrag pro
         // Karte dedupliziert.
-        var tripleTriadIdsWithGoTo = allForZone
-            .Where(e => e.Type == CollectibleType.TripleTriadCard && e.HasGoToTarget)
+        var tripleTriadIdsWithLiveNpc = allForZone
+            .Where(e => e.Type == CollectibleType.TripleTriadCard && e.EventNpcId != 0)
             .Select(e => e.Id)
             .ToHashSet();
         allForZone = allForZone
-            .Where(e => e.Type != CollectibleType.TripleTriadCard || e.HasGoToTarget || !tripleTriadIdsWithGoTo.Contains(e.Id))
+            .Where(e => e.Type != CollectibleType.TripleTriadCard || e.EventNpcId != 0 || !tripleTriadIdsWithLiveNpc.Contains(e.Id))
             .ToList();
 
         var afterTypeFilter = allForZone
