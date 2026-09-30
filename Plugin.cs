@@ -5907,16 +5907,20 @@ public sealed class Plugin : IDalamudPlugin
 
     /// <summary>
     /// Liefert für jedes sichtbare, echte native Spielfenster (z.B. Währungs-, Inventar- oder
-    /// Charakterfenster - erkannt über AtkUnitBase.WindowNode != null, das nur bei tatsächlich
-    /// beweglichen Fenstern mit Titelleiste gesetzt ist, nicht bei fest verankerten HUD-Elementen
-    /// wie Aktionsleisten), das den übergebenen Bildschirmbereich überlappt, das jeweilige
-    /// Überlappungsrechteck (auf min/max dieses Bereichs begrenzt). Dalamud/ImGui zeichnet
-    /// grundsätzlich IMMER nach (also über) dem nativen Spiel-UI in einem einzigen Rendering-
-    /// Durchgang - es gibt keine echte Z-Order zwischen beiden. CompactOverlayWindow nutzt die
-    /// zurückgegebenen Rechtecke deshalb, um dort gezielt (a) per ImGuiP.SetWindowHitTestHole
-    /// Mausklicks ans native Fenster durchzureichen und (b) nur die betroffenen Inhaltszeilen
-    /// unsichtbar zu machen, statt (wie früher) das gesamte Overlay bei jeder noch so kleinen
-    /// Überlappung komplett auszublenden.
+    /// Charakterfenster, aber auch randlose interaktive Auswahllisten ohne Titelleiste wie die
+    /// Item-Liste beim Beastmaster-/Stammes-Tausch, Nutzer-Report: solche Listen waren bisher NICHT
+    /// klickbar, wenn das Overlay darüber lag), das den übergebenen Bildschirmbereich überlappt, das
+    /// jeweilige Überlappungsrechteck (auf min/max dieses Bereichs begrenzt). Erkannt über
+    /// AtkUnitBase.WindowNode != null (klassische bewegliche Fenster MIT Titelleiste) ODER
+    /// !DisableFocusability (auch randlose, aber echte interaktive Popups/Listen) - fest verankerte
+    /// HUD-Elemente wie Aktionsleisten haben WEDER ein WindowNode NOCH Focusability, fallen also
+    /// weiterhin raus (sonst würde praktisch der gesamte Hotbar-Bereich dauerhaft durchlöchert).
+    /// Dalamud/ImGui zeichnet grundsätzlich IMMER nach (also über) dem nativen Spiel-UI in einem
+    /// einzigen Rendering-Durchgang - es gibt keine echte Z-Order zwischen beiden.
+    /// CompactOverlayWindow nutzt die zurückgegebenen Rechtecke deshalb, um dort gezielt (a) per
+    /// ImGuiP.SetWindowHitTestHole Mausklicks ans native Fenster durchzureichen und (b) nur die
+    /// betroffenen Inhaltszeilen unsichtbar zu machen, statt (wie früher) das gesamte Overlay bei
+    /// jeder noch so kleinen Überlappung komplett auszublenden.
     /// </summary>
     public static unsafe List<(Vector2 Min, Vector2 Max)> GetOverlappingNativeWindowRects(Vector2 min, Vector2 max)
     {
@@ -5929,7 +5933,9 @@ public sealed class Plugin : IDalamudPlugin
         for (var i = 0; i < list.Count; i++)
         {
             var unit = list.Entries[i].Value;
-            if (unit == null || !unit->IsVisible || unit->WindowNode == null)
+            if (unit == null || !unit->IsVisible)
+                continue;
+            if (unit->WindowNode == null && unit->DisableFocusability)
                 continue;
 
             var unitMin = new Vector2(unit->X, unit->Y);
