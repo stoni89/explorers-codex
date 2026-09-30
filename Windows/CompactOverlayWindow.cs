@@ -305,6 +305,23 @@ public class CompactOverlayWindow : Window
             .Where(e => config.ShowAllItems || e.Type == CollectibleType.HuntingLog || !Plugin.IsAchievementOrRankGated(e))
             .ToList();
 
+        // Manche Triple-Triad-Karten stehen doppelt in CollectionData.GetAllEntries() - einmal
+        // generisch (aus triadcards.json, ohne Fundort) UND einmal pro NPC-Gegner (siehe
+        // Plugin.GetTripleTriadNpcEntries, MIT Fundort/Position) - Nutzer-Report: z.B. "Coeurlregina"
+        // wurde im Overlay zweimal angezeigt. Die generische Variante ohne Laufziel bringt keinen
+        // Mehrwert mehr, sobald es für dieselbe Karte mindestens einen NPC-Gegner MIT Laufziel gibt -
+        // die wird dann ausgeblendet. Zwei verschiedene NPC-Gegner für dieselbe Karte bleiben dagegen
+        // beide sichtbar (jeder ein eigenes, tatsächlich nutzbares Ziel) - anders als
+        // Plugin.GetGlobalEntries (Datenbank-Seite/ToDo-Liste), das komplett auf einen Eintrag pro
+        // Karte dedupliziert.
+        var tripleTriadIdsWithGoTo = allForZone
+            .Where(e => e.Type == CollectibleType.TripleTriadCard && e.HasGoToTarget)
+            .Select(e => e.Id)
+            .ToHashSet();
+        allForZone = allForZone
+            .Where(e => e.Type != CollectibleType.TripleTriadCard || e.HasGoToTarget || !tripleTriadIdsWithGoTo.Contains(e.Id))
+            .ToList();
+
         var afterTypeFilter = allForZone
             .Where(e => config.ShowType.GetValueOrDefault(e.Type, true))
             .ToList();
