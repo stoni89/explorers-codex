@@ -27,6 +27,7 @@ public sealed class AetherCurrentAutomation
         MovingTo,
         Interacting,
         JumpRoute,
+        ReturningToStart,
     }
 
     // Manche Ätherströmungen sind nur über einen kurzen Sprung erreichbar (z.B. "The Dravanian
@@ -130,6 +131,15 @@ public sealed class AetherCurrentAutomation
     private JumpPhase jumpPhase;
     private DateTime? jumpDismountedAt;
 
+    // Bleibt (anders als activeJumpRoute, das schon nach der Landung wieder null wird) für die
+    // GESAMTE Dauer des aktuellen Ziels gesetzt, sobald eine Sprungroute hinterlegt ist - nach
+    // erfolgreicher Freischaltung läuft State.ReturningToStart damit noch einmal zurück zum
+    // Startpunkt der Route, BEVOR es zum nächsten Ziel weitergeht (Nutzeranforderung: "nachdem der
+    // Aether Current aktiviert wurde erstmal wieder zurück auf den Startpunkt"; die Landestelle
+    // selbst ist oft ein schmaler Vorsprung, von dem aus man nicht sinnvoll weiterlaufen/-fliegen
+    // kann).
+    private Vector3? jumpRouteStartPoint;
+
     // Kurze Wartezeit nach dem Abmounten (wie DismountSettleDelay in anderen Automationen) - ein
     // Sprung-Versuch mitten in der Absteige-Animation greift nicht.
     private static readonly TimeSpan JumpDismountSettleDelay = TimeSpan.FromSeconds(1);
@@ -200,6 +210,7 @@ public sealed class AetherCurrentAutomation
         lastCombatEnsureAt = DateTime.MinValue;
         hasIntentionallyDismounted = false;
         activeJumpRoute = null;
+        jumpRouteStartPoint = null;
         StatusText = Loc.T("Automation gestartet...", "Automation started...");
     }
 
@@ -214,6 +225,7 @@ public sealed class AetherCurrentAutomation
         // Mitten in einer Sprungroute gestoppt - enge vnavmesh-Toleranz nicht dauerhaft gesetzt lassen.
         RestorePathTolerance();
         activeJumpRoute = null;
+        jumpRouteStartPoint = null;
     }
 
     public void MarkUnavailable()
@@ -298,6 +310,7 @@ public sealed class AetherCurrentAutomation
             {
                 Plugin.Log.Info($"[AetherCurrentAutomation] Kampf vorbei - Kampf-Plugin wieder aus, starte Sprungroute neu: {currentTargetEntry.Name}.");
                 activeJumpRoute = route;
+                jumpRouteStartPoint = route.Start;
                 didFinalApproach = false;
                 currentTargetPosition = route.Start;
                 if (pathfindAndMoveCloseTo.InvokeFunc(route.Start, false, ArrivalTolerance))
@@ -378,6 +391,10 @@ public sealed class AetherCurrentAutomation
 
                 case State.JumpRoute:
                     UpdateJumpRoute(aetherCurrentsInZone);
+                    break;
+
+                case State.ReturningToStart:
+                    UpdateReturningToStart();
                     break;
             }
         }
@@ -488,11 +505,13 @@ public sealed class AetherCurrentAutomation
         if (Plugin.TryGetAetherCurrentJumpRoute(entry.Id, out var jumpRoute))
         {
             activeJumpRoute = jumpRoute;
+            jumpRouteStartPoint = jumpRoute.Start;
             currentTargetPosition = jumpRoute.Start;
         }
         else
         {
             activeJumpRoute = null;
+            jumpRouteStartPoint = null;
         }
 
         if (Plugin.TryRequestAetheryteMount())
@@ -873,6 +892,13 @@ public sealed class AetherCurrentAutomation
         if (Plugin.IsAetherCurrentUnlocked(currentTargetEntry.Id))
         {
             Plugin.Log.Info($"[AetherCurrentAutomation] UpdateInteracting({currentTargetEntry.Name}): freigeschaltet.");
+
+            if (jumpRouteStartPoint is { } startPoint)
+            {
+                BeginReturnToStart(startPoint);
+                return;
+            }
+
             FinishCurrent();
             return;
         }
@@ -907,7 +933,49 @@ public sealed class AetherCurrentAutomation
         Plugin.Log.Info($"[AetherCurrentAutomation] FinishCurrent({currentTargetEntry?.Name}): freigeschaltet.");
         attemptCounts.Remove(currentTargetEntry!.Id);
         currentTargetEntry = null;
+        jumpRouteStartPoint = null;
         state = State.Idle;
+    }
+
+    /// <summary>
+    /// Siehe jumpRouteStartPoint-Kommentar: nach erfolgreicher Freischaltung einer Ätherströmung mit
+    /// Sprungroute erst wieder zum Startpunkt zurücklaufen, statt direkt (von der oft schmalen
+    /// Landestelle aus) zum nächsten Ziel weiterzumachen.
+    /// </summary>
+    private void BeginReturnToStart(Vector3 startPoint)
+    {
+        SetExactPathTolerance(false);
+        if (!pathfindAndMoveCloseTo.InvokeFunc(startPoint, false, ArrivalTolerance))
+        {
+            // vnavmesh lehnt ab (z.B. schon am Startpunkt) - kein Problem, einfach direkt fertig.
+            FinishCurrent();
+            return;
+        }
+
+        state = State.ReturningToStart;
+        stateEnteredAt = DateTime.UtcNow;
+        hasSeenPathRunning = false;
+        stuckDetector.Reset();
+        StatusText = Loc.T(
+            $"Zurück zum Startpunkt nach: {currentTargetEntry?.Name}...",
+            $"Returning to the start point after: {currentTargetEntry?.Name}...");
+    }
+
+    private void UpdateReturningToStart()
+    {
+        if (pathIsRunning.InvokeFunc())
+        {
+            if (DateTime.UtcNow - stateEnteredAt > StepMaxDuration)
+            {
+                Plugin.Log.Warning($"[AetherCurrentAutomation] UpdateReturningToStart({currentTargetEntry?.Name}): Rückweg dauert zu lange, breche trotzdem ab und mache weiter.");
+                StopPath();
+                FinishCurrent();
+            }
+
+            return;
+        }
+
+        FinishCurrent();
     }
 
     private void SkipCurrent(string reason)
