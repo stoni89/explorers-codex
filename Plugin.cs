@@ -6030,7 +6030,8 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         var (min, max) = bounds.Value;
-        Log.Info($"[OverlayOverlapDebug] Overlay-Fenster: {min} - {max}.");
+        Log.Info($"[OverlayOverlapDebug] Overlay-Fenster: {min} - {max}. " +
+            $"HasOverlappingDraggableNativeWindow={HasOverlappingDraggableNativeWindow(min, max)} (bestimmt, ob NoInputs für den Frame gesetzt wird).");
 
         var unitManager = RaptureAtkUnitManager.Instance();
         if (unitManager != null)
