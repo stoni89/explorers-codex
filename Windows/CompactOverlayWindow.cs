@@ -521,7 +521,13 @@ public class CompactOverlayWindow : Window
             .Where(e => (!Plugin.IsSightseeingUnsupportedByAutomation(e.Id)
                          || (config.SimulateSightseeingAutomation && Plugin.TryGetSightseeingJumpingPuzzle(e.Id, out _)))
                         && !Plugin.IsSightseeingBlockedByFlying(e))
-            .Where(e => config.SimulateSightseeingAutomation || (!plugin.IsOwned(e) && !Plugin.IsAchievementOrRankGated(e)))
+            // Bewusst NICHT IsAchievementOrRankGated (das lehnt sich an ComputeGrandCompanyOrTribeGateReason
+            // an, welches für Sightseeing-Punkte AUCH Wetter/Uhrzeit als "Gate-Grund" zählt und damit einen
+            // nur deswegen gerade blockierten Punkt hier fälschlich komplett ausgeschlossen hätte, noch
+            // bevor hasActionableSightseeing unten ihn überhaupt sehen konnte - IsSightseeingBookAccessible
+            // prüft exakt dieselben ÜBERGEORDNETEN Voraussetzungen (Log/Fliegen/erste 20/Gate-Quest) OHNE
+            // Wetter/Uhrzeit.
+            .Where(e => config.SimulateSightseeingAutomation || (!plugin.IsOwned(e) && Plugin.IsSightseeingBookAccessible(e)))
             .ToList();
         // Punkte, die NUR wegen Wetter/Uhrzeit gerade nicht gehen (siehe
         // Plugin.IsSightseeingOnlyTemporarilyUnavailable) - solange davon noch welche übrig sind, wartet
