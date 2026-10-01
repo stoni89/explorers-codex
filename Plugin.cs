@@ -5926,8 +5926,13 @@ public sealed class Plugin : IDalamudPlugin
     ///
     /// Andere Plugin-Fenster: ALLE Plugins in Dalamud teilen sich denselben ImGui-Kontext
     /// (ImGui.GetCurrentContext().Windows enthält jedes aktive Top-Level-Fenster, auch von anderen
-    /// Plugins) - unser eigenes Overlay-Fenster wird dabei per Namensabgleich ausgeschlossen. Da
-    /// CompactOverlayWindow sich selbst JEDEN Frame per BringWindowToDisplayBack ganz nach hinten
+    /// Plugins) - unser eigenes Overlay-Fenster wird dabei über excludeWindowHandle (Zeigervergleich,
+    /// siehe CompactOverlayWindow.ownWindowHandle) ausgeschlossen, NICHT per Namensabgleich (der war
+    /// unzuverlässig - Dalamuds Window-Basisklasse hängt an die in Begin() übergebene ID intern noch
+    /// weitere Zeichen an, wodurch ein reiner Präfix-/Namensvergleich nie traf und das Overlay sich
+    /// selbst als "anderes Fenster" erkannt und komplett durchlöchert/versteckt hat, Nutzer-Report:
+    /// "Overlay wird immer ausgeblendet und erscheint nie"). Da CompactOverlayWindow sich selbst
+    /// JEDEN Frame per BringWindowToDisplayBack ganz nach hinten
     /// schiebt (siehe dortiger Kommentar), kann hier ohne echte Z-Order-Prüfung angenommen werden,
     /// dass jedes andere sichtbare, überlappende Top-Level-ImGui-Fenster "davor" liegt.
     ///
@@ -5936,7 +5941,7 @@ public sealed class Plugin : IDalamudPlugin
     /// die betroffenen Inhaltszeilen unsichtbar zu machen, statt (wie früher) das gesamte Overlay bei
     /// jeder noch so kleinen Überlappung komplett auszublenden.
     /// </summary>
-    public static unsafe List<(Vector2 Min, Vector2 Max)> GetOverlappingNativeWindowRects(Vector2 min, Vector2 max)
+    public static unsafe List<(Vector2 Min, Vector2 Max)> GetOverlappingNativeWindowRects(Vector2 min, Vector2 max, nint excludeWindowHandle = 0)
     {
         var result = new List<(Vector2 Min, Vector2 Max)>();
         var unitManager = RaptureAtkUnitManager.Instance();
@@ -5970,9 +5975,7 @@ public sealed class Plugin : IDalamudPlugin
                     continue; // nur Top-Level-Fenster, keine Kind-/Popup-Teilfenster einzeln zählen.
                 if (window.Size.X <= 0f || window.Size.Y <= 0f)
                     continue;
-
-                var name = System.Runtime.InteropServices.Marshal.PtrToStringUTF8((nint)window.Name);
-                if (name != null && name.StartsWith("##TheExplorersCodexCompact", StringComparison.Ordinal))
+                if (excludeWindowHandle != 0 && (nint)window.Handle == excludeWindowHandle)
                     continue; // unser eigenes Overlay-Fenster selbst nicht als "darüberliegend" zählen.
 
                 AddOverlap(result, window.Pos, window.Pos + window.Size, min, max);

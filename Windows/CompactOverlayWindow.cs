@@ -69,6 +69,14 @@ public class CompactOverlayWindow : Window
     // irgendwo ein natives Fenster überlappt.
     private List<(Vector2 Min, Vector2 Max)> nativeOverlapRects = new();
 
+    // Eigener ImGuiWindow-Zeiger (siehe Draw, dort gesetzt) - für den Selbstausschluss in
+    // Plugin.GetOverlappingNativeWindowRects: ein Namensabgleich war unzuverlässig (Dalamuds Window-
+    // Basisklasse hängt an die in Begin() übergebene ID intern noch weitere Zeichen an, siehe Nutzer-
+    // Report "Overlay wird immer ausgeblendet" - der Namensvergleich traf dadurch nie, das Overlay
+    // hat sich selbst als "anderes Fenster" erkannt und sich dadurch komplett durchlöchert/versteckt).
+    // Ein Zeigervergleich ist dagegen unabhängig vom genauen internen Namensformat.
+    private nint ownWindowHandle;
+
     // Eingeklappt = nur die Kopfzeile (Titel + Schloss-/Einklapp-/Schließen-Knopf) sichtbar, der
     // Rest (Zonenname, Währungen, Sammelobjekt-Liste) wird ausgeblendet - identisches Prinzip wie
     // beim Optionsfenster (siehe MainWindow.collapsed), hier aber die Zielhöhe NICHT fest verdrahtet,
@@ -151,7 +159,7 @@ public class CompactOverlayWindow : Window
         // Frame Verzögerung ist dafür unmerklich, da sich die Fensterposition normalerweise nicht
         // jeden Frame ändert.
         nativeOverlapRects = lastWindowMin.HasValue && lastWindowMax.HasValue
-            ? Plugin.GetOverlappingNativeWindowRects(lastWindowMin.Value, lastWindowMax.Value)
+            ? Plugin.GetOverlappingNativeWindowRects(lastWindowMin.Value, lastWindowMax.Value, ownWindowHandle)
             : new List<(Vector2 Min, Vector2 Max)>();
 
         // Gesperrt = nur die Position fixiert, nicht die Größe - das Fenster bleibt also auch im
@@ -224,9 +232,10 @@ public class CompactOverlayWindow : Window
         ImGui.PopStyleVar(4);
     }
 
-    public override void Draw()
+    public override unsafe void Draw()
     {
         var window = ImGuiP.GetCurrentWindow();
+        ownWindowHandle = (nint)window.Handle;
 
         // Erzwingt JEDEN Frame aufs Neue, dass dieses Fenster ganz hinten im Anzeige-Stapel sitzt -
         // NoBringToFrontOnFocus (siehe BaseFlags) verhindert nur, dass es bei eigener Interaktion
