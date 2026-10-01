@@ -5973,6 +5973,39 @@ public sealed class Plugin : IDalamudPlugin
         return result;
     }
 
+    /// <summary>
+    /// Ob ein ECHTES natives Fenster (AtkUnitBase.WindowNode != null, also eines mit eigener
+    /// Titelleiste/Ziehgriff wie Inventar, Charakterfenster oder die Crucible-/Beastmaster-Tafel) den
+    /// übergebenen Bereich überlappt - für CompactOverlayWindow.PreDraw: ein per
+    /// ImGuiP.SetWindowHitTestHole gestanztes Loch reicht für normale Klicks (Knöpfe etc.), aber NICHT
+    /// zuverlässig zum VERSCHIEBEN eines solchen Fensters per Ziehen an seiner Titelleiste (Nutzer-
+    /// Report: "Das Fenster vom Beastmaster ist nicht verschiebbar, weil es auf dem Overlay liegt").
+    /// Liegt so ein Fenster über dem Overlay, wird dieses stattdessen für den Frame komplett auf
+    /// NoInputs geschaltet (siehe PreDraw) - bewusst nur für ECHTE Fenster mit Titelleiste, nicht für
+    /// randlose Popups/Listen (die werden i.d.R. nicht per Ziehen verschoben, ein Loch reicht dort).
+    /// </summary>
+    public static unsafe bool HasOverlappingDraggableNativeWindow(Vector2 min, Vector2 max)
+    {
+        var unitManager = RaptureAtkUnitManager.Instance();
+        if (unitManager == null)
+            return false;
+
+        var list = unitManager->AllLoadedUnitsList;
+        for (var i = 0; i < list.Count; i++)
+        {
+            var unit = list.Entries[i].Value;
+            if (unit == null || !unit->IsVisible || unit->WindowNode == null)
+                continue;
+
+            var unitMin = new Vector2(unit->X, unit->Y);
+            var unitMax = unitMin + new Vector2(unit->GetScaledWidth(true), unit->GetScaledHeight(true));
+            if (unitMin.X < max.X && unitMax.X > min.X && unitMin.Y < max.Y && unitMax.Y > min.Y)
+                return true;
+        }
+
+        return false;
+    }
+
     private static void AddOverlap(List<(Vector2 Min, Vector2 Max)> result, Vector2 rectMin, Vector2 rectMax, Vector2 min, Vector2 max)
     {
         var overlapMin = new Vector2(System.Math.Max(rectMin.X, min.X), System.Math.Max(rectMin.Y, min.Y));
