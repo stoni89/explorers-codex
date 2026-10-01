@@ -175,19 +175,12 @@ public class CompactOverlayWindow : Window
         if (collapsed)
             flags |= ImGuiWindowFlags.NoResize;
 
-        // Ein gestanztes Loch (siehe unten) reicht für normale Klicks auf ein überlappendes natives
-        // Fenster, aber NICHT zuverlässig zum VERSCHIEBEN eines solchen per Ziehen an seiner
-        // Titelleiste (Nutzer-Report: "Das Fenster vom Beastmaster ist nicht verschiebbar"). Ein
-        // erster Versuch hat dafür JEDES sichtbare native Fenster mit Titelleiste als "blockierend"
-        // gezählt - das löste staendig aus (z.B. ein irgendwo offen herumstehendes Charakterfenster),
-        // wodurch sogar die EIGENEN Overlay-Knöpfe nicht mehr klickbar waren (Nutzer-Report). Jetzt
-        // bewusst nur das AKTUELL FOKUSSIERTE native Fenster (RaptureAtkUnitManager.FocusedAddon, see
-        // Plugin.HasOverlappingDraggableNativeWindow) - das ändert sich nur GENAU dann, wenn der
-        // Spieler tatsächlich in ein natives Fenster klickt/zieht, nicht dauerhaft.
-        if (lastWindowMin.HasValue && lastWindowMax.HasValue
-            && Plugin.HasOverlappingDraggableNativeWindow(lastWindowMin.Value, lastWindowMax.Value))
-            flags |= ImGuiWindowFlags.NoInputs;
-
+        // Die NoInputs-Eskalation (siehe Draw) wird NICHT mehr über diese Flags-Eigenschaft gesetzt -
+        // mehrere Versuche darüber (siehe Git-Historie) haben trotz korrekt erkannter Überlappung
+        // nichts bewirkt (Nutzer-Report: Ziehen/Klicken ging weiterhin nicht, nur komplettes
+        // Einklappen des Fensters half). Vermutlich reicht Dalamuds Window.Flags-Eigenschaft (nur VOR
+        // Begin() wirksam) dafür nicht zuverlässig aus - stattdessen jetzt direkt am rohen ImGui-
+        // Fenster nach Begin() gesetzt, siehe Draw().
         Flags = flags;
 
         // Siehe MainWindow.PreDraw (identisches Problem/Lösung): ImGuis Stil-Standard WindowMinSize
@@ -289,6 +282,16 @@ public class CompactOverlayWindow : Window
 
             ImGuiP.SetWindowHitTestHole(window, holeMin, holeMax - holeMin);
         }
+
+        // Direkt am rohen ImGui-Fenster NACH Begin() gesetzt, nicht über die Dalamud-Window.Flags-
+        // Eigenschaft (siehe PreDraw-Kommentar) - mehrere Versuche darüber haben trotz korrekt
+        // erkannter Überlappung nichts bewirkt (Nutzer-Report: Ziehen/Klicken am nativen Fenster ging
+        // weiterhin nicht, nur komplettes Einklappen unseres Fensters half - das bestätigte zumindest,
+        // dass UNSER Fenster tatsächlich die Ursache war, nicht ein anderes Plugin). Mit den JETZT
+        // aktuellen (nicht erst nächsten Frame bekannten) Fenstergrenzen geprüft, nicht den Werten vom
+        // letzten Frame.
+        if (Plugin.HasOverlappingDraggableNativeWindow(lastWindowMin.Value, lastWindowMax.Value))
+            window.Flags |= ImGuiWindowFlags.NoInputs;
 
         DrawContent();
     }
