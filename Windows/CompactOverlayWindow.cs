@@ -291,10 +291,27 @@ public class CompactOverlayWindow : Window
         // aktuellen (nicht erst nächsten Frame bekannten) Fenstergrenzen geprüft, nicht den Werten vom
         // letzten Frame.
         if (Plugin.HasOverlappingDraggableNativeWindow(lastWindowMin.Value, lastWindowMax.Value))
+        {
+            var flagsBefore = window.Flags;
             window.Flags |= ImGuiWindowFlags.NoInputs;
+
+            // Passive Diagnose (max. 1x/Sekunde) - loggt automatisch genau in dem Moment, in dem die
+            // Erkennung auslöst, OHNE dass extra der Debug-Knopf gedrückt werden müsste (der selbst
+            // die Maus vom nativen Fenster wegzieht und die Prüfung dadurch verfälscht). Bestätigt
+            // schwarz auf weiß, ob die NoInputs-Zuweisung tatsächlich ankommt (Nutzer-Report:
+            // "Geht nicht" trotz mehrerer Ansätze).
+            if (DateTime.UtcNow - lastNoInputsDebugLogAt > TimeSpan.FromSeconds(1))
+            {
+                lastNoInputsDebugLogAt = DateTime.UtcNow;
+                Plugin.Log.Info($"[OverlayNoInputsDebug] Ausgelöst - FlagsVorher={flagsBefore}, FlagsNachher={window.Flags}, " +
+                    $"MousePos={ImGui.GetIO().MousePos}, EigeneFensterGrenzen={lastWindowMin}-{lastWindowMax}.");
+            }
+        }
 
         DrawContent();
     }
+
+    private DateTime lastNoInputsDebugLogAt = DateTime.MinValue;
 
     private void DrawContent()
     {
