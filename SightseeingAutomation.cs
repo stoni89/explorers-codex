@@ -527,7 +527,12 @@ public sealed class SightseeingAutomation
 
     private void TryStartNext(IReadOnlyList<CollectibleEntry> entries, IReadOnlyList<CollectibleEntry> pendingInZone)
     {
-        var available = entries.Where(e => e.WorldPosition.HasValue).ToList();
+        // Nur WIRKLICH gerade erledigbare Punkte als Kandidaten - ein nur wegen Wetter/Uhrzeit
+        // gesperrter Punkt (siehe IsSightseeingOnlyTemporarilyUnavailable) zählt hier bewusst NICHT
+        // als verfügbar (Nutzeranforderung: "soll erst losgehen, wenn der Timer auf 0 ist"), sondern
+        // fällt stattdessen in den pendingInZone-Zweig unten ("Warte auf Wetter/Uhrzeit..."), bis er
+        // von selbst aktiv wird.
+        var available = entries.Where(e => e.WorldPosition.HasValue && !Plugin.IsSightseeingOnlyTemporarilyUnavailable(e)).ToList();
         var candidates = available.Where(e => !skippedIds.Contains(e.Id)).ToList();
         if (candidates.Count == 0)
         {
