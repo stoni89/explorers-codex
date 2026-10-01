@@ -487,9 +487,12 @@ public class CompactOverlayWindow : Window
             plugin.HuntingLogAutomation.Update(missingHuntingLogInZone);
 
         // Wie Hunting Log bewusst NICHT stadtweit - Ätherströmungen kommen aus aethercurrents.json
-        // mit exakter Zonen-Zuordnung, kein Bezirkswechsel nötig.
+        // mit exakter Zonen-Zuordnung, kein Bezirkswechsel nötig. !IsAchievementOrRankGated schließt
+        // Strömungen mit noch fehlender Voraussetzungs-Quest (z.B. CollectibleEntry.RequiredQuest)
+        // aus - Nutzer-Report: "wählt ihn aus, interagiert aber nicht" bei "Matoya's Cave vicinity",
+        // das native Objekt lässt sich ohne die Quest offenbar gar nicht anvisieren/interagieren.
         var missingAetherCurrentsInZone = allForZone
-            .Where(e => e.Type == CollectibleType.AetherCurrent && (config.SimulateAetherCurrentAutomation || !plugin.IsOwned(e)))
+            .Where(e => e.Type == CollectibleType.AetherCurrent && (config.SimulateAetherCurrentAutomation || !plugin.IsOwned(e)) && !Plugin.IsAchievementOrRankGated(e))
             .ToList();
         if (!exitingNoFlyArea)
             plugin.AetherCurrentAutomation.Update(missingAetherCurrentsInZone);
