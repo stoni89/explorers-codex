@@ -5974,36 +5974,34 @@ public sealed class Plugin : IDalamudPlugin
     }
 
     /// <summary>
-    /// Ob ein ECHTES natives Fenster (AtkUnitBase.WindowNode != null, also eines mit eigener
-    /// Titelleiste/Ziehgriff wie Inventar, Charakterfenster oder die Crucible-/Beastmaster-Tafel) den
-    /// übergebenen Bereich überlappt - für CompactOverlayWindow.PreDraw: ein per
+    /// Ob das AKTUELL FOKUSSIERTE native Fenster (RaptureAtkUnitManager.FocusedAddon - es gibt immer
+    /// nur EIN fokussiertes natives Fenster, genau das, mit dem der Spieler gerade tatsächlich
+    /// interagiert) den übergebenen Bereich überlappt - für CompactOverlayWindow.PreDraw: ein per
     /// ImGuiP.SetWindowHitTestHole gestanztes Loch reicht für normale Klicks (Knöpfe etc.), aber NICHT
-    /// zuverlässig zum VERSCHIEBEN eines solchen Fensters per Ziehen an seiner Titelleiste (Nutzer-
-    /// Report: "Das Fenster vom Beastmaster ist nicht verschiebbar, weil es auf dem Overlay liegt").
-    /// Liegt so ein Fenster über dem Overlay, wird dieses stattdessen für den Frame komplett auf
-    /// NoInputs geschaltet (siehe PreDraw) - bewusst nur für ECHTE Fenster mit Titelleiste, nicht für
-    /// randlose Popups/Listen (die werden i.d.R. nicht per Ziehen verschoben, ein Loch reicht dort).
+    /// zuverlässig zum VERSCHIEBEN eines Fensters per Ziehen an seiner Titelleiste (Nutzer-Report:
+    /// "Das Fenster vom Beastmaster ist nicht verschiebbar, weil es auf dem Overlay liegt"). Liegt das
+    /// fokussierte Fenster über dem Overlay, wird dieses stattdessen für den Frame komplett auf
+    /// NoInputs geschaltet (siehe PreDraw).
+    ///
+    /// BEWUSST auf "fokussiert" statt "irgendein sichtbares Fenster mit Titelleiste" eingeschränkt -
+    /// Letzteres war die vorherige (verworfene) Fassung: die hat JEDES offen herumstehende native
+    /// Fenster gezählt, auch wenn der Spieler es gerade gar nicht benutzt (z.B. ein irgendwo
+    /// geöffnetes Charakterfenster) - dadurch blieb NoInputs quasi dauerhaft aktiv und sogar die
+    /// EIGENEN Overlay-Knöpfe (Schloss, Einklappen) waren nicht mehr klickbar, selbst ohne jede
+    /// tatsächliche Überlappung sichtbar auf dem Bildschirm (Nutzer-Report). FocusedAddon ändert sich
+    /// dagegen GENAU dann, wenn der Spieler tatsächlich in ein anderes natives Fenster klickt/zieht -
+    /// also exakt der gesuchte Moment, kein Dauerzustand.
     /// </summary>
     public static unsafe bool HasOverlappingDraggableNativeWindow(Vector2 min, Vector2 max)
     {
         var unitManager = RaptureAtkUnitManager.Instance();
-        if (unitManager == null)
+        var unit = unitManager != null ? unitManager->FocusedAddon : null;
+        if (unit == null || !unit->IsVisible || unit->WindowNode == null)
             return false;
 
-        var list = unitManager->AllLoadedUnitsList;
-        for (var i = 0; i < list.Count; i++)
-        {
-            var unit = list.Entries[i].Value;
-            if (unit == null || !unit->IsVisible || unit->WindowNode == null)
-                continue;
-
-            var unitMin = new Vector2(unit->X, unit->Y);
-            var unitMax = unitMin + new Vector2(unit->GetScaledWidth(true), unit->GetScaledHeight(true));
-            if (unitMin.X < max.X && unitMax.X > min.X && unitMin.Y < max.Y && unitMax.Y > min.Y)
-                return true;
-        }
-
-        return false;
+        var unitMin = new Vector2(unit->X, unit->Y);
+        var unitMax = unitMin + new Vector2(unit->GetScaledWidth(true), unit->GetScaledHeight(true));
+        return unitMin.X < max.X && unitMax.X > min.X && unitMin.Y < max.Y && unitMax.Y > min.Y;
     }
 
     private static void AddOverlap(List<(Vector2 Min, Vector2 Max)> result, Vector2 rectMin, Vector2 rectMax, Vector2 min, Vector2 max)
@@ -6030,7 +6028,11 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         var (min, max) = bounds.Value;
-        Log.Info($"[OverlayOverlapDebug] Overlay-Fenster: {min} - {max}. " +
+        var unitManagerForFocus = RaptureAtkUnitManager.Instance();
+        var focusedName = unitManagerForFocus != null && unitManagerForFocus->FocusedAddon != null
+            ? unitManagerForFocus->FocusedAddon->NameString
+            : "keins";
+        Log.Info($"[OverlayOverlapDebug] Overlay-Fenster: {min} - {max}. Fokussiertes natives Fenster: '{focusedName}'. " +
             $"HasOverlappingDraggableNativeWindow={HasOverlappingDraggableNativeWindow(min, max)} (bestimmt, ob NoInputs für den Frame gesetzt wird).");
 
         var unitManager = RaptureAtkUnitManager.Instance();
