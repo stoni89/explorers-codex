@@ -1154,22 +1154,27 @@ public sealed class Plugin : IDalamudPlugin
                 {
                     if (!kitIdToItemRowId.TryGetValue(entry.FrameKitUnlockId, out var itemRowId))
                     {
-                        Log.Info($"[FrameKitDebug] {entry.Name}: kein Item mit AdditionalData={entry.FrameKitUnlockId} gefunden.");
+                        // Debug statt Info (Nutzer-Report: "tausende Meldungen im Log") - trifft für
+                        // sehr viele Rahmen zu (nicht per Framer's-Kit-Item käuflich) und ist rein
+                        // diagnostisch; über den Debug-Dump-Knopf (DumpFrameKitDebugInfo) weiterhin
+                        // gezielt abrufbar, muss aber nicht bei jedem normalen Cache-Aufbau ins
+                        // Standard-Log fluten.
+                        Log.Debug($"[FrameKitDebug] {entry.Name}: kein Item mit AdditionalData={entry.FrameKitUnlockId} gefunden.");
                         continue;
                     }
                     if (!itemRowIdToShopMatch.TryGetValue(itemRowId, out var match))
                     {
-                        Log.Info($"[FrameKitDebug] {entry.Name}: Item #{itemRowId} in keinem SpecialShop als ReceiveItem gefunden.");
+                        Log.Debug($"[FrameKitDebug] {entry.Name}: Item #{itemRowId} in keinem SpecialShop als ReceiveItem gefunden.");
                         continue;
                     }
                     if (!shopIdToNpcId.TryGetValue(match.ShopId, out var npcId))
                     {
-                        Log.Info($"[FrameKitDebug] {entry.Name}: SpecialShop #{match.ShopId} (Währung: {match.CurrencyText}) wird von keinem NPC in ENpcBase.ENpcData referenziert.");
+                        Log.Debug($"[FrameKitDebug] {entry.Name}: SpecialShop #{match.ShopId} (Währung: {match.CurrencyText}) wird von keinem NPC in ENpcBase.ENpcData referenziert.");
                         continue;
                     }
                     if (!npcIdToPlace.TryGetValue(npcId, out var place))
                     {
-                        Log.Info($"[FrameKitDebug] {entry.Name}: NPC #{npcId} hat weder einen Platz im Level-Sheet noch in der ENpcPlace-CSV.");
+                        Log.Debug($"[FrameKitDebug] {entry.Name}: NPC #{npcId} hat weder einen Platz im Level-Sheet noch in der ENpcPlace-CSV.");
                         continue;
                     }
                     if (!npcResidentSheet.TryGetRow(npcId, out var npc))
