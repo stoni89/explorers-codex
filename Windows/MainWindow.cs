@@ -1405,6 +1405,15 @@ public class MainWindow : Window
         }
         ModernUi.EndCard();
 
+        ModernUi.GroupLabel(Loc.T("Overlay-Überlappung", "Overlay overlap"));
+        ModernUi.BeginCard();
+        if (ImGui.Button(Loc.T("Überlappende Fenster ins Log schreiben", "Log overlapping windows") + "##DumpOverlayOverlap"))
+            Plugin.DumpOverlayOverlapDiagnostics();
+        TextDisabledWrapped(Loc.T(
+            "Listet im Log jedes native und jedes andere Plugin-Fenster, das gerade das kompakte Overlay überlappt - zum Prüfen, wenn ein Fenster darüber nicht klickbar ist.",
+            "Logs every native and other plugin window currently overlapping the compact overlay - for checking when a window on top of it isn't clickable."));
+        ModernUi.EndCard();
+
         // Simulation und Debug-Dumps nur in der Dev-Version (als Dev-Plugin geladen) - reine
         // Entwickler-Werkzeuge, die in der installierten Version niemanden etwas angehen.
         if (Plugin.PluginInterface.IsDev)

@@ -5911,45 +5911,143 @@ public sealed class Plugin : IDalamudPlugin
     /// Liefert für jedes sichtbare, echte native Spielfenster (z.B. Währungs-, Inventar- oder
     /// Charakterfenster, aber auch randlose interaktive Auswahllisten ohne Titelleiste wie die
     /// Item-Liste beim Beastmaster-/Stammes-Tausch, Nutzer-Report: solche Listen waren bisher NICHT
-    /// klickbar, wenn das Overlay darüber lag), das den übergebenen Bildschirmbereich überlappt, das
-    /// jeweilige Überlappungsrechteck (auf min/max dieses Bereichs begrenzt). Erkannt über
-    /// AtkUnitBase.WindowNode != null (klassische bewegliche Fenster MIT Titelleiste) ODER
-    /// !DisableFocusability (auch randlose, aber echte interaktive Popups/Listen) - fest verankerte
-    /// HUD-Elemente wie Aktionsleisten haben WEDER ein WindowNode NOCH Focusability, fallen also
-    /// weiterhin raus (sonst würde praktisch der gesamte Hotbar-Bereich dauerhaft durchlöchert).
-    /// Dalamud/ImGui zeichnet grundsätzlich IMMER nach (also über) dem nativen Spiel-UI in einem
-    /// einzigen Rendering-Durchgang - es gibt keine echte Z-Order zwischen beiden.
-    /// CompactOverlayWindow nutzt die zurückgegebenen Rechtecke deshalb, um dort gezielt (a) per
-    /// ImGuiP.SetWindowHitTestHole Mausklicks ans native Fenster durchzureichen und (b) nur die
-    /// betroffenen Inhaltszeilen unsichtbar zu machen, statt (wie früher) das gesamte Overlay bei
+    /// klickbar, wenn das Overlay darüber lag) UND für jedes sichtbare Fenster eines ANDEREN Plugins
+    /// (Nutzer-Report: "Auch wenn andere Plugin Fenster über dem Overlay liegen sollen diese bedienbar
+    /// sein" - z.B. der native "Gegenstand löschen"-Dialog, der über ECommons/SelectYesno läuft, ODER
+    /// ein völlig anderes Plugin-Fenster), das den übergebenen Bildschirmbereich überlappt, das
+    /// jeweilige Überlappungsrechteck (auf min/max dieses Bereichs begrenzt).
+    ///
+    /// Native Fenster: erkannt über AtkUnitBase.WindowNode != null (klassische bewegliche Fenster MIT
+    /// Titelleiste) ODER !DisableFocusability (auch randlose, aber echte interaktive Popups/Listen) -
+    /// fest verankerte HUD-Elemente wie Aktionsleisten haben WEDER ein WindowNode NOCH Focusability,
+    /// fallen also weiterhin raus (sonst würde praktisch der gesamte Hotbar-Bereich dauerhaft
+    /// durchlöchert). Dalamud/ImGui zeichnet grundsätzlich IMMER nach (also über) dem nativen Spiel-UI
+    /// in einem einzigen Rendering-Durchgang - es gibt keine echte Z-Order zwischen beiden.
+    ///
+    /// Andere Plugin-Fenster: ALLE Plugins in Dalamud teilen sich denselben ImGui-Kontext
+    /// (ImGui.GetCurrentContext().Windows enthält jedes aktive Top-Level-Fenster, auch von anderen
+    /// Plugins) - unser eigenes Overlay-Fenster wird dabei per Namensabgleich ausgeschlossen. Da
+    /// CompactOverlayWindow sich selbst JEDEN Frame per BringWindowToDisplayBack ganz nach hinten
+    /// schiebt (siehe dortiger Kommentar), kann hier ohne echte Z-Order-Prüfung angenommen werden,
+    /// dass jedes andere sichtbare, überlappende Top-Level-ImGui-Fenster "davor" liegt.
+    ///
+    /// CompactOverlayWindow nutzt die zurückgegebenen Rechtecke, um dort gezielt (a) per
+    /// ImGuiP.SetWindowHitTestHole Mausklicks ans darunterliegende Fenster durchzureichen und (b) nur
+    /// die betroffenen Inhaltszeilen unsichtbar zu machen, statt (wie früher) das gesamte Overlay bei
     /// jeder noch so kleinen Überlappung komplett auszublenden.
     /// </summary>
     public static unsafe List<(Vector2 Min, Vector2 Max)> GetOverlappingNativeWindowRects(Vector2 min, Vector2 max)
     {
         var result = new List<(Vector2 Min, Vector2 Max)>();
         var unitManager = RaptureAtkUnitManager.Instance();
-        if (unitManager == null)
-            return result;
-
-        var list = unitManager->AllLoadedUnitsList;
-        for (var i = 0; i < list.Count; i++)
+        if (unitManager != null)
         {
-            var unit = list.Entries[i].Value;
-            if (unit == null || !unit->IsVisible)
-                continue;
-            if (unit->WindowNode == null && unit->DisableFocusability)
-                continue;
+            var list = unitManager->AllLoadedUnitsList;
+            for (var i = 0; i < list.Count; i++)
+            {
+                var unit = list.Entries[i].Value;
+                if (unit == null || !unit->IsVisible)
+                    continue;
+                if (unit->WindowNode == null && unit->DisableFocusability)
+                    continue;
 
-            var unitMin = new Vector2(unit->X, unit->Y);
-            var unitMax = unitMin + new Vector2(unit->GetScaledWidth(true), unit->GetScaledHeight(true));
+                var unitMin = new Vector2(unit->X, unit->Y);
+                var unitMax = unitMin + new Vector2(unit->GetScaledWidth(true), unit->GetScaledHeight(true));
+                AddOverlap(result, unitMin, unitMax, min, max);
+            }
+        }
 
-            var overlapMin = new Vector2(System.Math.Max(unitMin.X, min.X), System.Math.Max(unitMin.Y, min.Y));
-            var overlapMax = new Vector2(System.Math.Min(unitMax.X, max.X), System.Math.Min(unitMax.Y, max.Y));
-            if (overlapMin.X < overlapMax.X && overlapMin.Y < overlapMax.Y)
-                result.Add((overlapMin, overlapMax));
+        var context = ImGui.GetCurrentContext();
+        if (!context.IsNull)
+        {
+            var windows = context.Windows;
+            for (var i = 0; i < windows.Size; i++)
+            {
+                var window = windows[i];
+                if (window.IsNull || !window.Active || window.Hidden)
+                    continue;
+                if (window.RootWindow != window)
+                    continue; // nur Top-Level-Fenster, keine Kind-/Popup-Teilfenster einzeln zählen.
+                if (window.Size.X <= 0f || window.Size.Y <= 0f)
+                    continue;
+
+                var name = System.Runtime.InteropServices.Marshal.PtrToStringUTF8((nint)window.Name);
+                if (name != null && name.StartsWith("##TheExplorersCodexCompact", StringComparison.Ordinal))
+                    continue; // unser eigenes Overlay-Fenster selbst nicht als "darüberliegend" zählen.
+
+                AddOverlap(result, window.Pos, window.Pos + window.Size, min, max);
+            }
         }
 
         return result;
+    }
+
+    private static void AddOverlap(List<(Vector2 Min, Vector2 Max)> result, Vector2 rectMin, Vector2 rectMax, Vector2 min, Vector2 max)
+    {
+        var overlapMin = new Vector2(System.Math.Max(rectMin.X, min.X), System.Math.Max(rectMin.Y, min.Y));
+        var overlapMax = new Vector2(System.Math.Min(rectMax.X, max.X), System.Math.Min(rectMax.Y, max.Y));
+        if (overlapMin.X < overlapMax.X && overlapMin.Y < overlapMax.Y)
+            result.Add((overlapMin, overlapMax));
+    }
+
+    /// <summary>
+    /// Debug: loggt jedes native Fenster UND jedes andere ImGui-Fenster, das die aktuellen Grenzen
+    /// des kompakten Overlays überlappt (Name, WindowNode/DisableFocusability bzw. Active/Hidden,
+    /// Rechteck) - für den Fall, dass ein Fenster trotz GetOverlappingNativeWindowRects weiterhin
+    /// nicht klickbar ist (Nutzer-Report), um die genaue Ursache ohne weiteres Raten zu sehen.
+    /// </summary>
+    public static unsafe void DumpOverlayOverlapDiagnostics()
+    {
+        var bounds = Instance.CompactOverlayWindow.LastWindowBounds;
+        if (bounds == null)
+        {
+            Log.Info("[OverlayOverlapDebug] Kein bekanntes Overlay-Fensterrechteck (noch nicht gezeichnet?).");
+            return;
+        }
+
+        var (min, max) = bounds.Value;
+        Log.Info($"[OverlayOverlapDebug] Overlay-Fenster: {min} - {max}.");
+
+        var unitManager = RaptureAtkUnitManager.Instance();
+        if (unitManager != null)
+        {
+            var list = unitManager->AllLoadedUnitsList;
+            for (var i = 0; i < list.Count; i++)
+            {
+                var unit = list.Entries[i].Value;
+                if (unit == null || !unit->IsVisible)
+                    continue;
+
+                var unitMin = new Vector2(unit->X, unit->Y);
+                var unitMax = unitMin + new Vector2(unit->GetScaledWidth(true), unit->GetScaledHeight(true));
+                if (!(unitMin.X < max.X && unitMax.X > min.X && unitMin.Y < max.Y && unitMax.Y > min.Y))
+                    continue;
+
+                Log.Info($"[OverlayOverlapDebug] Natives Fenster '{unit->NameString}': WindowNode={(nint)unit->WindowNode != 0}, " +
+                    $"DisableFocusability={unit->DisableFocusability}, Rect={unitMin}-{unitMax}, " +
+                    $"WuerdeDurchloechert={unit->WindowNode != null || !unit->DisableFocusability}.");
+            }
+        }
+
+        var context = ImGui.GetCurrentContext();
+        if (!context.IsNull)
+        {
+            var windows = context.Windows;
+            for (var i = 0; i < windows.Size; i++)
+            {
+                var window = windows[i];
+                if (window.IsNull || !window.Active || window.Hidden || window.RootWindow != window)
+                    continue;
+
+                var winMin = window.Pos;
+                var winMax = window.Pos + window.Size;
+                if (!(winMin.X < max.X && winMax.X > min.X && winMin.Y < max.Y && winMax.Y > min.Y))
+                    continue;
+
+                var name = System.Runtime.InteropServices.Marshal.PtrToStringUTF8((nint)window.Name) ?? "?";
+                Log.Info($"[OverlayOverlapDebug] ImGui-Fenster '{name}': Rect={winMin}-{winMax}.");
+            }
+        }
     }
 
     /// <summary>

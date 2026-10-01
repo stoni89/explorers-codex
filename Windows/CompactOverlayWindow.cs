@@ -57,6 +57,10 @@ public class CompactOverlayWindow : Window
     private Vector2? lastWindowMin;
     private Vector2? lastWindowMax;
 
+    /// <summary>Für Plugin.DumpOverlayOverlapDiagnostics - dieselben Fenstergrenzen wie oben, von außen lesbar.</summary>
+    public (Vector2 Min, Vector2 Max)? LastWindowBounds =>
+        lastWindowMin.HasValue && lastWindowMax.HasValue ? (lastWindowMin.Value, lastWindowMax.Value) : null;
+
     // Vom aktuellen Frame - einmal in PreDraw ermittelt (auf Basis der Fensterposition vom LETZTEN
     // Frame, siehe lastWindowMin/Max), dann in Draw benutzt, um dort per ImGuiP.SetWindowHitTestHole
     // gezielt Mausklicks ans darunterliegende native Fenster durchzureichen, und über IsOccluded in
