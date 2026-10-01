@@ -57,13 +57,21 @@ public class CompactOverlayWindow : Window
     private Vector2? lastWindowMin;
     private Vector2? lastWindowMax;
 
-    // Vom aktuellen Frame - einmal in PreDraw ermittelt (auf Basis der Fensterposition vom LETZTEN
+// Vom aktuellen Frame - einmal in PreDraw ermittelt (auf Basis der Fensterposition vom LETZTEN
     // Frame, siehe lastWindowMin/Max), dann in Draw benutzt, um dort per ImGuiP.SetWindowHitTestHole
     // gezielt Mausklicks ans darunterliegende native Fenster durchzureichen, und über IsOccluded in
     // praktisch jedem Zeichenaufruf in DrawContent, um NUR die davon betroffenen Zeilen/Knöpfe/Icons
     // unsichtbar zu machen - der Rest des Overlays bleibt normal sichtbar/klickbar, auch wenn
     // irgendwo ein natives Fenster überlappt.
     private List<(Vector2 Min, Vector2 Max)> nativeOverlapRects = new();
+
+    // Eigener ImGuiWindow-Zeiger (siehe Draw, dort gesetzt) - für den Selbstausschluss in
+    // Plugin.GetOverlappingNativeWindowRects: ein Namensabgleich war unzuverlässig (Dalamuds Window-
+    // Basisklasse hängt an die in Begin() übergebene ID intern noch weitere Zeichen an, siehe Nutzer-
+    // Report "Overlay wird immer ausgeblendet" - der Namensvergleich traf dadurch nie, das Overlay
+    // hat sich selbst als "anderes Fenster" erkannt und sich dadurch komplett durchlöchert/versteckt).
+    // Ein Zeigervergleich ist dagegen unabhängig vom genauen internen Namensformat.
+    private nint ownWindowHandle;
 
     // Eingeklappt = nur die Kopfzeile (Titel + Schloss-/Einklapp-/Schließen-Knopf) sichtbar, der
     // Rest (Zonenname, Währungen, Sammelobjekt-Liste) wird ausgeblendet - identisches Prinzip wie
@@ -74,6 +82,28 @@ public class CompactOverlayWindow : Window
     private bool collapsed;
     private bool collapsedLastFrame;
     private Vector2 expandedSize = new(260, 200);
+
+    // Automatisches Einklappen, sobald ein ECHTES natives Fenster (mit Titelleiste, z.B. die
+    // Crucible-/Beastmaster-Tafel) das Overlay überlappt (Nutzer-Report: "Das Fenster vom Beastmaster
+    // ist nicht verschiebbar/klickbar, weil es auf dem Overlay liegt") - NoInputs (weder über die
+    // Dalamud-Flags-Eigenschaft noch direkt am rohen ImGui-Fenster gesetzt, siehe Git-Historie) hat
+    // sich als wirkungslos erwiesen; einzig TATSÄCHLICHES Einklappen (das Fenster existiert an der
+    // Stelle danach schlicht nicht mehr) hat im Test geholfen. Bewusst GETRENNT vom manuell vom
+    // Spieler gesetzten "collapsed" (das bleibt unverändert) - EffectiveCollapsed() ist überall dort
+    // zu verwenden, wo bisher "collapsed" direkt die Größe/den Inhalt steuerte, damit nach dem
+    // Verschwinden des nativen Fensters wieder genau der vom Spieler zuletzt gewählte Zustand gilt.
+    private bool autoCollapsedForNativeOverlap;
+
+    // Milderer Fall von autoCollapsedForNativeOverlap (Nutzeranforderung: "nicht alles ausblenden,
+    // wenn möglich") - überlappt das native Fenster NICHT bis ganz nach oben, bleibt genug Platz, um
+    // nur auf den freien oberen Teil (Kopfzeile + Anfang der Liste) zu schrumpfen, statt komplett auf
+    // Kopfzeilenhöhe einzuklappen. null = kein Teil-Schrumpfen nötig/möglich diesen Frame.
+    private float? autoShrinkToHeight;
+
+    private const float AutoShrinkMinimumHeight = 80f;
+    private const float AutoShrinkSafetyMargin = 4f;
+
+    private bool EffectiveCollapsed() => collapsed || autoCollapsedForNativeOverlap;
 
     // Wie collapsedLastFrame, aber für Configuration.HideOverlayWhenEmpty (siehe DrawContent, ganz
     // am Anfang gesetzt/gelesen) - ohne diese Wiederherstellung in PreDraw würde das Fenster nach
@@ -147,8 +177,36 @@ public class CompactOverlayWindow : Window
         // Frame Verzögerung ist dafür unmerklich, da sich die Fensterposition normalerweise nicht
         // jeden Frame ändert.
         nativeOverlapRects = lastWindowMin.HasValue && lastWindowMax.HasValue
-            ? Plugin.GetOverlappingNativeWindowRects(lastWindowMin.Value, lastWindowMax.Value)
+            ? Plugin.GetOverlappingNativeWindowRects(lastWindowMin.Value, lastWindowMax.Value, ownWindowHandle)
             : new List<(Vector2 Min, Vector2 Max)>();
+
+        // Automatisches Einklappen, solange ein ECHTES natives Fenster das Overlay überlappt (siehe
+        // autoCollapsedForNativeOverlap-Kommentar) - mit den Grenzen vom LETZTEN Frame geprüft, wie
+        // nativeOverlapRects oben auch (ein Frame Verzögerung ist unmerklich). BEWUSST gegen die volle
+        // AUSGEKLAPPTE Größe (expandedSize) geprüft, nicht gegen die aktuellen (ggf. schon wegen des
+        // Auto-Einklappens geschrumpften) lastWindowMax - sonst würde das geschrumpfte Fenster das
+        // native nicht mehr überlappen, "ausklappen" auslösen, das wieder überlappt, wieder
+        // einklappt, usw. (Endlos-Geflacker zwischen ein-/ausgeklappt).
+        //
+        // Bevorzugt NUR auf den nicht überlappten oberen Teil schrumpfen (autoShrinkToHeight,
+        // Nutzeranforderung: "nicht alles ausblenden, wenn möglich") - überlappt das native Fenster
+        // z.B. nur die untere Hälfte, bleiben Zonenname/obere Listeneinträge weiterhin sichtbar und
+        // bedienbar. Komplettes Einklappen (autoCollapsedForNativeOverlap) nur noch als Rückfall,
+        // wenn für den oberen Teil nicht einmal mehr AutoShrinkMinimumHeight übrig bleibt (natives
+        // Fenster reicht bis (fast) an die eigene Kopfzeile heran).
+        autoCollapsedForNativeOverlap = false;
+        autoShrinkToHeight = null;
+        if (lastWindowMin.HasValue
+            && Plugin.TryGetOverlappingDraggableNativeWindowRect(lastWindowMin.Value, lastWindowMin.Value + expandedSize, out var nativeMin, out _))
+        {
+            var availableHeight = nativeMin.Y - lastWindowMin.Value.Y - AutoShrinkSafetyMargin;
+            if (availableHeight >= AutoShrinkMinimumHeight)
+                autoShrinkToHeight = availableHeight;
+            else
+                autoCollapsedForNativeOverlap = true;
+        }
+
+        var effectiveCollapsed = EffectiveCollapsed();
 
         // Gesperrt = nur die Position fixiert, nicht die Größe - das Fenster bleibt also auch im
         // gesperrten Zustand an der Ecke skalierbar (z.B. wenn ein Mount-Name nicht mehr in die
@@ -160,8 +218,12 @@ public class CompactOverlayWindow : Window
         var flags = BaseFlags;
         if (config.CompactLocked)
             flags |= ImGuiWindowFlags.NoMove;
-        if (collapsed)
+        // Während des (vollen ODER teilweisen) automatischen Schrumpfens ebenfalls NoResize - siehe
+        // Begründung oben beim normalen Einklappen, gilt für den Teil-Fall genauso.
+        var adjustedThisFrame = effectiveCollapsed || autoShrinkToHeight.HasValue;
+        if (adjustedThisFrame)
             flags |= ImGuiWindowFlags.NoResize;
+
         Flags = flags;
 
         // Siehe MainWindow.PreDraw (identisches Problem/Lösung): ImGuis Stil-Standard WindowMinSize
@@ -169,12 +231,20 @@ public class CompactOverlayWindow : Window
         // verhindern, egal was wir per Größe vorgeben.
         ImGui.PushStyleVar(ImGuiStyleVar.WindowMinSize, new Vector2(1f, 1f));
 
+        if (autoShrinkToHeight.HasValue)
+        {
+            // Zielhöhe schon VOR Begin() bekannt (aus der Position des nativen Fensters berechnet,
+            // kein Messen nach dem Zeichnen nötig wie beim vollen Einklappen unten) - wirkt dadurch
+            // sofort in diesem Frame.
+            Size = new Vector2(expandedSize.X, autoShrinkToHeight.Value);
+            SizeCondition = ImGuiCond.Always;
+        }
         // Zurück zur zuletzt bekannten ausgeklappten Größe - muss VOR Begin() passieren (siehe
         // MainWindow.PreDraw), sonst kommt die Wiederherstellung erst einen Frame zu spät sichtbar
-        // an. Das Schrumpfen beim EINklappen passiert dagegen bewusst NICHT hier, sondern erst in
-        // DrawContent (nach Begin()) - dort ist die tatsächlich benötigte Höhe der Kopfzeile bekannt
-        // (abhängig von config.CompactFontScale), hier vorher noch nicht.
-        if ((!collapsed && collapsedLastFrame) || hiddenDueToEmptyLastFrame)
+        // an. Das Schrumpfen beim (vollen) EINklappen passiert dagegen bewusst NICHT hier, sondern
+        // erst in DrawContent (nach Begin()) - dort ist die tatsächlich benötigte Höhe der Kopfzeile
+        // bekannt (abhängig von config.CompactFontScale), hier vorher noch nicht.
+        else if ((!adjustedThisFrame && collapsedLastFrame) || hiddenDueToEmptyLastFrame)
         {
             Size = expandedSize;
             SizeCondition = ImGuiCond.Always;
@@ -184,7 +254,7 @@ public class CompactOverlayWindow : Window
             SizeCondition = ImGuiCond.FirstUseEver;
         }
 
-        collapsedLastFrame = collapsed;
+        collapsedLastFrame = adjustedThisFrame;
 
         var alpha = 1f - System.Math.Clamp(config.CompactTransparency, 0f, 1f);
 
@@ -220,9 +290,10 @@ public class CompactOverlayWindow : Window
         ImGui.PopStyleVar(4);
     }
 
-    public override void Draw()
+    public override unsafe void Draw()
     {
         var window = ImGuiP.GetCurrentWindow();
+        ownWindowHandle = (nint)window.Handle;
 
         // Erzwingt JEDEN Frame aufs Neue, dass dieses Fenster ganz hinten im Anzeige-Stapel sitzt -
         // NoBringToFrontOnFocus (siehe BaseFlags) verhindert nur, dass es bei eigener Interaktion
@@ -235,10 +306,11 @@ public class CompactOverlayWindow : Window
         lastWindowMin = ImGui.GetWindowPos();
         lastWindowMax = lastWindowMin + ImGui.GetWindowSize();
 
-        // Nur merken, solange NICHT eingeklappt - sonst würde die (künstlich auf Kopfzeilenhöhe
-        // geschrumpfte) Größe versehentlich als "neue ausgeklappte Normalgröße" gespeichert und beim
-        // Ausklappen fälschlich wiederhergestellt (identisches Problem/Lösung wie in MainWindow.Draw).
-        if (!collapsed)
+        // Nur merken, solange NICHT (voll ODER teilweise, auch automatisch wegen überlappendem
+        // nativen Fenster) geschrumpft - sonst würde die künstlich verkleinerte Größe versehentlich
+        // als "neue ausgeklappte Normalgröße" gespeichert und beim Zurückkehren zur Normalgröße
+        // fälschlich wiederhergestellt (identisches Problem/Lösung wie in MainWindow.Draw).
+        if (!EffectiveCollapsed() && !autoShrinkToHeight.HasValue)
             expandedSize = ImGui.GetWindowSize();
 
         // Dalamud/ImGui zeichnet grundsätzlich IMMER über dem nativen Spiel-UI (keine echte Z-Order
@@ -262,6 +334,18 @@ public class CompactOverlayWindow : Window
 
             ImGuiP.SetWindowHitTestHole(window, holeMin, holeMax - holeMin);
         }
+
+        // Direkt am rohen ImGui-Fenster NACH Begin() gesetzt, nicht über die Dalamud-Window.Flags-
+        // Eigenschaft (siehe PreDraw-Kommentar) - mehrere Versuche darüber haben trotz korrekt
+        // erkannter Überlappung nichts bewirkt (Nutzer-Report: Ziehen/Klicken am nativen Fenster ging
+        // weiterhin nicht, nur komplettes Einklappen unseres Fensters half - das bestätigte zumindest,
+        // dass UNSER Fenster tatsächlich die Ursache war, nicht ein anderes Plugin). Mit den JETZT
+        // aktuellen (nicht erst nächsten Frame bekannten) Fenstergrenzen geprüft, nicht den Werten vom
+        // letzten Frame.
+        // NoInputs (weder über die Dalamud-Flags-Eigenschaft noch direkt am rohen ImGui-Fenster
+        // gesetzt, siehe Git-Historie) hat sich im Live-Test als wirkungslos erwiesen - automatisches
+        // Einklappen (siehe autoCollapsedForNativeOverlap/EffectiveCollapsed, oben in PreDraw berechnet
+        // und unten in DrawContent angewendet) ersetzt das jetzt, da NUR das im Test tatsächlich half.
 
         DrawContent();
     }
@@ -403,9 +487,12 @@ public class CompactOverlayWindow : Window
             plugin.HuntingLogAutomation.Update(missingHuntingLogInZone);
 
         // Wie Hunting Log bewusst NICHT stadtweit - Ätherströmungen kommen aus aethercurrents.json
-        // mit exakter Zonen-Zuordnung, kein Bezirkswechsel nötig.
+        // mit exakter Zonen-Zuordnung, kein Bezirkswechsel nötig. !IsAchievementOrRankGated schließt
+        // Strömungen mit noch fehlender Voraussetzungs-Quest (z.B. CollectibleEntry.RequiredQuest)
+        // aus - Nutzer-Report: "wählt ihn aus, interagiert aber nicht" bei "Matoya's Cave vicinity",
+        // das native Objekt lässt sich ohne die Quest offenbar gar nicht anvisieren/interagieren.
         var missingAetherCurrentsInZone = allForZone
-            .Where(e => e.Type == CollectibleType.AetherCurrent && (config.SimulateAetherCurrentAutomation || !plugin.IsOwned(e)))
+            .Where(e => e.Type == CollectibleType.AetherCurrent && (config.SimulateAetherCurrentAutomation || !plugin.IsOwned(e)) && !Plugin.IsAchievementOrRankGated(e))
             .ToList();
         if (!exitingNoFlyArea)
             plugin.AetherCurrentAutomation.Update(missingAetherCurrentsInZone);
@@ -574,12 +661,15 @@ public class CompactOverlayWindow : Window
 
         ImGui.EndGroup();
 
-        if (collapsed)
+        if (EffectiveCollapsed())
         {
             // Fenster auf genau die Höhe der eben gezeichneten Kopfzeile (plus das obere/untere
             // Innenpolster, siehe PreDraw) schrumpfen - erst jetzt (nach dem Zeichnen) bekannt, siehe
             // Kommentar bei DrawContent-Aufruf/PreDraw. ImGuiCond.Always wirkt hier sofort, auch
-            // innerhalb desselben Begin()/End(), nicht erst nächsten Frame.
+            // innerhalb desselben Begin()/End(), nicht erst nächsten Frame. Greift auch beim
+            // AUTOMATISCHEN Einklappen (überlappendes natives Fenster, siehe
+            // autoCollapsedForNativeOverlap) - der Spieler sieht dann kurz nur die Kopfzeile, bis das
+            // native Fenster wieder weg ist.
             var windowPaddingY = ImGui.GetStyle().WindowPadding.Y;
             var neededHeight = ImGui.GetItemRectSize().Y + windowPaddingY * 2f;
             ImGui.SetWindowSize(new Vector2(ImGui.GetWindowSize().X, neededHeight), ImGuiCond.Always);
@@ -2068,15 +2158,28 @@ public class CompactOverlayWindow : Window
             onStart();
     }
 
-    // Nutzeranforderung: im Overlay nur noch "Zone (Landmark)" statt "Aether Current - Zone
-    // (Landmark)" anzeigen - die Daten selbst (Data/aethercurrents.json, Suche, Tooltips etc.)
-    // behalten den vollen Namen, das ist rein eine Anzeige-Kürzung hier im Overlay.
+    // Nutzeranforderung: im Overlay nur noch den Klammerteil (z.B. "Matoya's Cave vicinity") statt
+    // "Aether Current - Zone (Landmark)" oder auch nur "Zone (Landmark)" anzeigen - die Zone selbst
+    // steht ohnehin schon als Gruppenüberschrift darüber, der Ortsname in der Klammer reicht zur
+    // Unterscheidung. Die Daten selbst (Data/aethercurrents.json, Suche, Tooltips etc.) behalten den
+    // vollen Namen, das ist rein eine Anzeige-Kürzung hier im Overlay.
     private const string AetherCurrentNamePrefix = "Aether Current - ";
 
-    private static string GetOverlayDisplayName(CollectibleEntry entry) =>
-        entry.Type == CollectibleType.AetherCurrent && entry.Name.StartsWith(AetherCurrentNamePrefix, StringComparison.Ordinal)
+    private static string GetOverlayDisplayName(CollectibleEntry entry)
+    {
+        if (entry.Type != CollectibleType.AetherCurrent)
+            return entry.Name;
+
+        var name = entry.Name.StartsWith(AetherCurrentNamePrefix, StringComparison.Ordinal)
             ? entry.Name[AetherCurrentNamePrefix.Length..]
             : entry.Name;
+
+        var openParen = name.IndexOf('(');
+        var closeParen = name.LastIndexOf(')');
+        return openParen >= 0 && closeParen > openParen
+            ? name[(openParen + 1)..closeParen]
+            : name;
+    }
 
     private void DrawClickableName(CollectibleEntry entry, bool isNotYetPossible = false)
     {

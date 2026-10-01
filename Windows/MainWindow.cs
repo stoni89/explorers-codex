@@ -1405,6 +1405,25 @@ public class MainWindow : Window
         }
         ModernUi.EndCard();
 
+        ModernUi.GroupLabel(Loc.T("Aktueller Status", "Current status"));
+        ModernUi.BeginCard();
+        var territoryId = Plugin.ClientState.TerritoryType;
+        ImGui.TextUnformatted($"{Loc.T("Zone", "Zone")}: {Plugin.GetZoneName(territoryId)} ({territoryId})");
+
+        var playerPos = Plugin.ObjectTable.LocalPlayer?.Position;
+        var posText = playerPos.HasValue
+            ? $"{playerPos.Value.X:F3}, {playerPos.Value.Y:F3}, {playerPos.Value.Z:F3}"
+            : Loc.T("nicht verfügbar", "not available");
+        ImGui.TextUnformatted($"{Loc.T("Eigene Weltposition", "Own world position")}: {posText}");
+
+        if (playerPos.HasValue && ImGui.Button(Loc.T("In Zwischenablage kopieren", "Copy to clipboard") + "##CopyPlayerPos"))
+        {
+            ImGui.SetClipboardText($"{playerPos.Value.X.ToString(CultureInfo.InvariantCulture)}f, " +
+                                    $"{playerPos.Value.Y.ToString(CultureInfo.InvariantCulture)}f, " +
+                                    $"{playerPos.Value.Z.ToString(CultureInfo.InvariantCulture)}f");
+        }
+        ModernUi.EndCard();
+
         // Simulation und Debug-Dumps nur in der Dev-Version (als Dev-Plugin geladen) - reine
         // Entwickler-Werkzeuge, die in der installierten Version niemanden etwas angehen.
         if (Plugin.PluginInterface.IsDev)
@@ -1477,25 +1496,6 @@ public class MainWindow : Window
             });
             ModernUi.EndCard();
         }
-
-        ModernUi.GroupLabel(Loc.T("Aktueller Status", "Current status"));
-        ModernUi.BeginCard();
-        var territoryId = Plugin.ClientState.TerritoryType;
-        ImGui.TextUnformatted($"{Loc.T("Zone", "Zone")}: {Plugin.GetZoneName(territoryId)} ({territoryId})");
-
-        var playerPos = Plugin.ObjectTable.LocalPlayer?.Position;
-        var posText = playerPos.HasValue
-            ? $"{playerPos.Value.X:F3}, {playerPos.Value.Y:F3}, {playerPos.Value.Z:F3}"
-            : Loc.T("nicht verfügbar", "not available");
-        ImGui.TextUnformatted($"{Loc.T("Eigene Weltposition", "Own world position")}: {posText}");
-
-        if (playerPos.HasValue && ImGui.Button(Loc.T("In Zwischenablage kopieren", "Copy to clipboard") + "##CopyPlayerPos"))
-        {
-            ImGui.SetClipboardText($"{playerPos.Value.X.ToString(CultureInfo.InvariantCulture)}f, " +
-                                    $"{playerPos.Value.Y.ToString(CultureInfo.InvariantCulture)}f, " +
-                                    $"{playerPos.Value.Z.ToString(CultureInfo.InvariantCulture)}f");
-        }
-        ModernUi.EndCard();
     }
 
     /// <summary>

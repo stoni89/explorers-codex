@@ -76,6 +76,15 @@ public sealed class Plugin : IDalamudPlugin
     /// </summary>
     public static bool SimulateAetheryteAutomation => instance.Configuration.SimulateAetheryteAutomation;
 
+    /// <summary>
+    /// Für AetherCurrentAutomation (hält sonst bewusst keine Plugin-Instanz) - ob gerade
+    /// Configuration.SimulateAetherCurrentAutomation aktiv ist, siehe UpdateInteracting-Kommentar
+    /// dort: bereits freigeschaltete Ätherströmungen bleiben im Simulation-Modus absichtlich Ziel,
+    /// haben im Spiel aber oft gar kein echtes Einsammel-Objekt mehr, daher nur eine kurze simulierte
+    /// Pause statt eines echten Interacts.
+    /// </summary>
+    public static bool SimulateAetherCurrentAutomation => instance.Configuration.SimulateAetherCurrentAutomation;
+
     public readonly WindowSystem WindowSystem = new("TheExplorersCodex");
     private MainWindow MainWindow { get; init; }
     public CompactOverlayWindow CompactOverlayWindow { get; init; }
@@ -2289,10 +2298,12 @@ public sealed class Plugin : IDalamudPlugin
             },
             DismountAtStart: true),
         [2162755] = new( // The Nail
-            new Vector3(200.99124f, 312.62598f, 420.37384f),
+            new Vector3(205.26137f, 307.8622f, 426.19162f),
             new[]
             {
-                new SightseeingPuzzleStep(new Vector3(200.82906f, 310.8367f, 420.1173f), Jump: false), // Punkt 2 (Sightseeing-Punkt)
+                new SightseeingPuzzleStep(new Vector3(204.75603f, 307.8623f, 425.35046f), Jump: false),            // Punkt 1
+                new SightseeingPuzzleStep(new Vector3(202.6492f, 309.5727f, 422.6516f), Jump: true, RunUp: true),   // Punkt 2 - mit Anlauf ab Punkt 1
+                new SightseeingPuzzleStep(new Vector3(200.88103f, 310.83673f, 420.2911f), Jump: true),              // Punkt 3 (Sightseeing-Punkt)
             },
             DismountAtStart: true),
         [2162756] = new( // The Observatorium
@@ -2342,8 +2353,12 @@ public sealed class Plugin : IDalamudPlugin
     // JumpTarget. Erst danach läuft die Automation normal über BeginFinalApproach zur echten, bereits
     // bekannten Position (entry.WorldPosition) weiter. Viel einfacher als SightseeingJumpingPuzzle
     // (nur EIN Sprung, kein Mehrschritt-Parcours), daher ein eigener, schlankerer Record statt
-    // SightseeingPuzzleStep wiederzuverwenden.
-    public readonly record struct AetherCurrentJumpRoute(Vector3 Start, Vector3 RunUpPoint, Vector3 JumpTarget);
+    // SightseeingPuzzleStep wiederzuverwenden. ReturnPath = wohin AetherCurrentAutomation.
+    // State.ReturningToStart nach der Freischaltung zurückläuft, NACHEINANDER zu Fuß abgelaufen
+    // (Nutzeranforderung: "nicht zur Startposition zurück, sondern auf folgende Positionen" - direkt
+    // zum letzten Punkt ist nicht begehbar, braucht einen Zwischenpunkt) - null bedeutet "zurück zu
+    // Start" (bisheriges Verhalten).
+    public readonly record struct AetherCurrentJumpRoute(Vector3 Start, Vector3 RunUpPoint, Vector3 JumpTarget, Vector3[]? ReturnPath = null);
 
     // Von Hand hinterlegte Ätherströmungen, die nur über einen kurzen Sprung erreichbar sind (Key =
     // AetherCurrent-RowId, siehe AetherCurrentAutomation-Kommentar) - z.B. "The Dravanian Forelands
@@ -2354,6 +2369,18 @@ public sealed class Plugin : IDalamudPlugin
             new Vector3(399.45297f, -92.03338f, 683.3449f),
             new Vector3(401.5101f, -92.208374f, 684.6267f),
             new Vector3(403.9884f, -90.32586f, 686.1742f)),
+        [2818117] = new( // The Sea of Clouds (Before Ok' Zundu entrance) - Sprung direkt ab Startpunkt,
+                          // kein separater Anlaufpunkt (RunUpPoint = Start), danach nur noch zu Fuß
+                          // (kein weiterer Sprung) zur echten Position (entry.WorldPosition). Rückweg
+                          // NICHT zum Startpunkt, sondern über ReturnPath (Nutzeranforderung).
+            new Vector3(-755.60956f, -13.877344f, -120.60146f),
+            new Vector3(-755.60956f, -13.877344f, -120.60146f),
+            new Vector3(-756.6963f, -11.8391f, -117.56789f),
+            new[]
+            {
+                new Vector3(-753.7361f, -13.87734f, -122.25843f),
+                new Vector3(-720.17566f, -13.877411f, -108.292f),
+            }),
     };
 
     /// <summary>Siehe AetherCurrentJumpRoutes-Kommentar.</summary>
@@ -5909,45 +5936,139 @@ public sealed class Plugin : IDalamudPlugin
     /// Liefert für jedes sichtbare, echte native Spielfenster (z.B. Währungs-, Inventar- oder
     /// Charakterfenster, aber auch randlose interaktive Auswahllisten ohne Titelleiste wie die
     /// Item-Liste beim Beastmaster-/Stammes-Tausch, Nutzer-Report: solche Listen waren bisher NICHT
-    /// klickbar, wenn das Overlay darüber lag), das den übergebenen Bildschirmbereich überlappt, das
-    /// jeweilige Überlappungsrechteck (auf min/max dieses Bereichs begrenzt). Erkannt über
-    /// AtkUnitBase.WindowNode != null (klassische bewegliche Fenster MIT Titelleiste) ODER
-    /// !DisableFocusability (auch randlose, aber echte interaktive Popups/Listen) - fest verankerte
-    /// HUD-Elemente wie Aktionsleisten haben WEDER ein WindowNode NOCH Focusability, fallen also
-    /// weiterhin raus (sonst würde praktisch der gesamte Hotbar-Bereich dauerhaft durchlöchert).
-    /// Dalamud/ImGui zeichnet grundsätzlich IMMER nach (also über) dem nativen Spiel-UI in einem
-    /// einzigen Rendering-Durchgang - es gibt keine echte Z-Order zwischen beiden.
-    /// CompactOverlayWindow nutzt die zurückgegebenen Rechtecke deshalb, um dort gezielt (a) per
-    /// ImGuiP.SetWindowHitTestHole Mausklicks ans native Fenster durchzureichen und (b) nur die
-    /// betroffenen Inhaltszeilen unsichtbar zu machen, statt (wie früher) das gesamte Overlay bei
+    /// klickbar, wenn das Overlay darüber lag) UND für jedes sichtbare Fenster eines ANDEREN Plugins
+    /// (Nutzer-Report: "Auch wenn andere Plugin Fenster über dem Overlay liegen sollen diese bedienbar
+    /// sein" - z.B. der native "Gegenstand löschen"-Dialog, der über ECommons/SelectYesno läuft, ODER
+    /// ein völlig anderes Plugin-Fenster), das den übergebenen Bildschirmbereich überlappt, das
+    /// jeweilige Überlappungsrechteck (auf min/max dieses Bereichs begrenzt).
+    ///
+    /// Native Fenster: erkannt über AtkUnitBase.WindowNode != null (klassische bewegliche Fenster MIT
+    /// Titelleiste) ODER !DisableFocusability (auch randlose, aber echte interaktive Popups/Listen) -
+    /// fest verankerte HUD-Elemente wie Aktionsleisten haben WEDER ein WindowNode NOCH Focusability,
+    /// fallen also weiterhin raus (sonst würde praktisch der gesamte Hotbar-Bereich dauerhaft
+    /// durchlöchert). Dalamud/ImGui zeichnet grundsätzlich IMMER nach (also über) dem nativen Spiel-UI
+    /// in einem einzigen Rendering-Durchgang - es gibt keine echte Z-Order zwischen beiden.
+    ///
+    /// Andere Plugin-Fenster: ALLE Plugins in Dalamud teilen sich denselben ImGui-Kontext
+    /// (ImGui.GetCurrentContext().Windows enthält jedes aktive Top-Level-Fenster, auch von anderen
+    /// Plugins) - unser eigenes Overlay-Fenster wird dabei über excludeWindowHandle (Zeigervergleich,
+    /// siehe CompactOverlayWindow.ownWindowHandle) ausgeschlossen, NICHT per Namensabgleich (der war
+    /// unzuverlässig - Dalamuds Window-Basisklasse hängt an die in Begin() übergebene ID intern noch
+    /// weitere Zeichen an, wodurch ein reiner Präfix-/Namensvergleich nie traf und das Overlay sich
+    /// selbst als "anderes Fenster" erkannt und komplett durchlöchert/versteckt hat, Nutzer-Report:
+    /// "Overlay wird immer ausgeblendet und erscheint nie"). Da CompactOverlayWindow sich selbst
+    /// JEDEN Frame per BringWindowToDisplayBack ganz nach hinten
+    /// schiebt (siehe dortiger Kommentar), kann hier ohne echte Z-Order-Prüfung angenommen werden,
+    /// dass jedes andere sichtbare, überlappende Top-Level-ImGui-Fenster "davor" liegt.
+    ///
+    /// CompactOverlayWindow nutzt die zurückgegebenen Rechtecke, um dort gezielt (a) per
+    /// ImGuiP.SetWindowHitTestHole Mausklicks ans darunterliegende Fenster durchzureichen und (b) nur
+    /// die betroffenen Inhaltszeilen unsichtbar zu machen, statt (wie früher) das gesamte Overlay bei
     /// jeder noch so kleinen Überlappung komplett auszublenden.
     /// </summary>
-    public static unsafe List<(Vector2 Min, Vector2 Max)> GetOverlappingNativeWindowRects(Vector2 min, Vector2 max)
+    public static unsafe List<(Vector2 Min, Vector2 Max)> GetOverlappingNativeWindowRects(Vector2 min, Vector2 max, nint excludeWindowHandle = 0)
     {
         var result = new List<(Vector2 Min, Vector2 Max)>();
         var unitManager = RaptureAtkUnitManager.Instance();
+        if (unitManager != null)
+        {
+            var list = unitManager->AllLoadedUnitsList;
+            for (var i = 0; i < list.Count; i++)
+            {
+                var unit = list.Entries[i].Value;
+                if (unit == null || !unit->IsVisible)
+                    continue;
+                if (unit->WindowNode == null && unit->DisableFocusability)
+                    continue;
+
+                var unitMin = new Vector2(unit->X, unit->Y);
+                var unitMax = unitMin + new Vector2(unit->GetScaledWidth(true), unit->GetScaledHeight(true));
+                AddOverlap(result, unitMin, unitMax, min, max);
+            }
+        }
+
+        // Die Erkennung anderer ImGui-Plugin-Fenster ist hier ABSICHTLICH NICHT mehr aktiv eingebunden
+        // (Nutzer-Report: "Overlay wird immer ausgeblendet und erscheint nie" - schwerwiegende
+        // Regression, vermutlich weil ein stets vorhandenes, großes/verstecktes ImGui-Verwaltungsfenster
+        // fälschlich als "überlappend" erkannt wurde und dadurch das gesamte Overlay verdeckte).
+
+        return result;
+    }
+
+    /// <summary>
+    /// Ob die MAUS GERADE über einem ECHTEN nativen Fenster (AtkUnitBase.WindowNode != null, eigene
+    /// Titelleiste/Ziehgriff) steht, das den übergebenen Bereich überlappt - für
+    /// CompactOverlayWindow.PreDraw: ein per ImGuiP.SetWindowHitTestHole gestanztes Loch reicht für
+    /// normale Klicks (Knöpfe etc.), aber NICHT zuverlässig zum VERSCHIEBEN eines Fensters per Ziehen
+    /// an seiner Titelleiste (Nutzer-Report: "Das Fenster vom Beastmaster ist nicht verschiebbar").
+    /// Steht die Maus über so einem Fenster, klappt das Overlay (teilweise oder ganz) automatisch
+    /// ein (siehe CompactOverlayWindow.autoCollapsedForNativeOverlap/autoShrinkToHeight) - NoInputs
+    /// wurde dafür ebenfalls versucht, hat sich im Live-Test aber als wirkungslos erwiesen.
+    ///
+    /// Zwei vorherige, verworfene Fassungen:
+    /// 1) "Irgendein sichtbares Fenster mit Titelleiste" - zu breit: zählte auch ein irgendwo offen
+    ///    herumstehendes Fenster (z.B. Charakterfenster), das der Spieler gar nicht benutzt, wodurch
+    ///    NoInputs quasi dauerhaft aktiv war und sogar die EIGENEN Overlay-Knöpfe nicht mehr klickbar
+    ///    waren (Nutzer-Report).
+    /// 2) RaptureAtkUnitManager.FocusedAddon - zu eng/zirkulär: Fokus wird erst GESETZT, NACHDEM ein
+    ///    Klick das native Fenster erfolgreich erreicht - während wir aber noch blockieren, kann das
+    ///    nie passieren, die Regel hätte also nie ausgelöst (Nutzer-Report: "Fokussiertes natives
+    ///    Fenster: keins", obwohl das Fenster sichtbar überlappte).
+    /// Die Mausposition braucht dagegen KEINEN vorherigen erfolgreichen Klick (unabhängig von uns
+    /// abfragbar) und bleibt trotzdem eng genug: nur dort aktiv, wo der Spieler gerade tatsächlich
+    /// zeigt/klickt/zieht.
+    /// </summary>
+    public static unsafe bool HasOverlappingDraggableNativeWindow(Vector2 min, Vector2 max) =>
+        TryGetOverlappingDraggableNativeWindowRect(min, max, out _, out _);
+
+    /// <summary>
+    /// Wie HasOverlappingDraggableNativeWindow, liefert aber zusätzlich das Rechteck des gefundenen
+    /// nativen Fensters zurück - für CompactOverlayWindow: statt IMMER komplett einzuklappen, kann so
+    /// versucht werden, nur auf den NICHT überlappten oberen Teil zu schrumpfen (Nutzeranforderung:
+    /// "Gibt es eine Möglichkeit nicht alles auszublenden"), und nur dann komplett einzuklappen, wenn
+    /// dafür kein sinnvoller Platz mehr übrig bleibt.
+    /// </summary>
+    public static unsafe bool TryGetOverlappingDraggableNativeWindowRect(Vector2 min, Vector2 max, out Vector2 nativeMin, out Vector2 nativeMax)
+    {
+        nativeMin = default;
+        nativeMax = default;
+
+        var unitManager = RaptureAtkUnitManager.Instance();
         if (unitManager == null)
-            return result;
+            return false;
+
+        var mousePos = ImGui.GetIO().MousePos;
 
         var list = unitManager->AllLoadedUnitsList;
         for (var i = 0; i < list.Count; i++)
         {
             var unit = list.Entries[i].Value;
-            if (unit == null || !unit->IsVisible)
-                continue;
-            if (unit->WindowNode == null && unit->DisableFocusability)
+            if (unit == null || !unit->IsVisible || unit->WindowNode == null)
                 continue;
 
             var unitMin = new Vector2(unit->X, unit->Y);
             var unitMax = unitMin + new Vector2(unit->GetScaledWidth(true), unit->GetScaledHeight(true));
+            if (!(unitMin.X < max.X && unitMax.X > min.X && unitMin.Y < max.Y && unitMax.Y > min.Y))
+                continue; // überlappt das Overlay gar nicht - irrelevant.
 
-            var overlapMin = new Vector2(System.Math.Max(unitMin.X, min.X), System.Math.Max(unitMin.Y, min.Y));
-            var overlapMax = new Vector2(System.Math.Min(unitMax.X, max.X), System.Math.Min(unitMax.Y, max.Y));
-            if (overlapMin.X < overlapMax.X && overlapMin.Y < overlapMax.Y)
-                result.Add((overlapMin, overlapMax));
+            if (mousePos.X >= unitMin.X && mousePos.X < unitMax.X && mousePos.Y >= unitMin.Y && mousePos.Y < unitMax.Y)
+            {
+                // Maus steht gerade über diesem (überlappenden) Fenster.
+                nativeMin = unitMin;
+                nativeMax = unitMax;
+                return true;
+            }
         }
 
-        return result;
+        return false;
+    }
+
+    private static void AddOverlap(List<(Vector2 Min, Vector2 Max)> result, Vector2 rectMin, Vector2 rectMax, Vector2 min, Vector2 max)
+    {
+        var overlapMin = new Vector2(System.Math.Max(rectMin.X, min.X), System.Math.Max(rectMin.Y, min.Y));
+        var overlapMax = new Vector2(System.Math.Min(rectMax.X, max.X), System.Math.Min(rectMax.Y, max.Y));
+        if (overlapMin.X < overlapMax.X && overlapMin.Y < overlapMax.Y)
+            result.Add((overlapMin, overlapMax));
     }
 
     /// <summary>

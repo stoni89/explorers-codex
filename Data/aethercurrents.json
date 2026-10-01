@@ -89,8 +89,7 @@
         "Category": "Aether Current",
         "TerritoryTypeId": 399,
         "MapId": 213,
-        "VendorMapX": 37.1,
-        "VendorMapY": 25.5,
+        "WorldPosition": {"X": 730.72534, "Y": 135.08194, "Z": 150.39201},
         "Source": "Field exploration"
     },
     {
@@ -100,8 +99,7 @@
         "Category": "Aether Current",
         "TerritoryTypeId": 399,
         "MapId": 213,
-        "VendorMapX": 24.5,
-        "VendorMapY": 19,
+        "WorldPosition": {"X": 101.44631, "Y": 73.04062, "Z": -173.51355},
         "Source": "Field exploration"
     },
     {
@@ -113,6 +111,7 @@
         "MapId": 213,
         "VendorMapX": 12.8,
         "VendorMapY": 16.8,
+        "RequiredQuest": "Leaving Idyllshire",
         "Source": "Field exploration"
     },
     {
@@ -122,8 +121,8 @@
         "Category": "Aether Current",
         "TerritoryTypeId": 399,
         "MapId": 213,
-        "VendorMapX": 13.5,
-        "VendorMapY": 36.1,
+        "WorldPosition": {"X": -451.1721, "Y": 138.35184, "Z": 677.9089},
+        "RequiredQuest": "Leaving Idyllshire",
         "Source": "Field exploration"
     },
     {
@@ -188,8 +187,7 @@
         "Category": "Aether Current",
         "TerritoryTypeId": 401,
         "MapId": 215,
-        "VendorMapX": 7.3,
-        "VendorMapY": 20.3,
+        "WorldPosition": {"X": -758.9546, "Y": -9.34803, "Z": -112.03019},
         "Source": "Field exploration"
     },
     {
@@ -199,8 +197,7 @@
         "Category": "Aether Current",
         "TerritoryTypeId": 401,
         "MapId": 215,
-        "VendorMapX": 18.9,
-        "VendorMapY": 11.6,
+        "WorldPosition": {"X": -179.66747, "Y": -14.915871, "Z": -544.3298},
         "Source": "Field exploration"
     },
     {
@@ -210,8 +207,7 @@
         "Category": "Aether Current",
         "TerritoryTypeId": 401,
         "MapId": 215,
-        "VendorMapX": 11.2,
-        "VendorMapY": 15.2,
+        "WorldPosition": {"X": -564.25323, "Y": -36.761303, "Z": -350.9818},
         "Source": "Field exploration"
     },
     {
