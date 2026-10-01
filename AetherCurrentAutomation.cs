@@ -307,6 +307,17 @@ public sealed class AetherCurrentAutomation
         // einfach bei State.Interacting - kein Überspringen.
         if (currentTargetEntry != null)
         {
+            // Ist das Ziel schon freigeschaltet (z.B. Angriff auf dem Rückweg zum Startpunkt, siehe
+            // State.ReturningToStart/BeginReturnToStart) - NICHT die Sprungroute von vorne versuchen,
+            // einfach den Rückweg fortsetzen (Nutzer-Report: "will den Aether Current erneut
+            // versuchen", obwohl er schon aktiviert war).
+            if (jumpRouteStartPoint is { } returnPoint && Plugin.IsAetherCurrentUnlocked(currentTargetEntry.Id))
+            {
+                Plugin.Log.Info($"[AetherCurrentAutomation] Kampf vorbei - bereits freigeschaltet, setze Rückweg zum Startpunkt fort: {currentTargetEntry.Name}.");
+                BeginReturnToStart(returnPoint);
+                return false;
+            }
+
             // Ätherströmungen mit Sprungroute (siehe Plugin.AetherCurrentJumpRoutes) lassen sich vom
             // Kampf-Ort aus meist gar nicht direkt anlaufen (genau deshalb braucht es den Sprung) -
             // dort komplett neu vom Startpunkt aus versuchen statt direkt zur Zielposition zu laufen
@@ -998,6 +1009,15 @@ public sealed class AetherCurrentAutomation
 
     private void UpdateReturningToStart()
     {
+        // Der Rückweg ist bewusst zu Fuß (Nutzeranforderung: "zu Fuß zurück an die Startposition,
+        // dann aufmounten") - manche Spiel-/Mount-Einstellungen mounten sonst während eines langen
+        // Laufauftrags automatisch wieder auf, einfach jeden Frame dagegen absteigen.
+        if (Plugin.Condition[ConditionFlag.Mounted])
+        {
+            Plugin.TryDismount();
+            return;
+        }
+
         if (pathIsRunning.InvokeFunc())
         {
             if (DateTime.UtcNow - stateEnteredAt > StepMaxDuration)
