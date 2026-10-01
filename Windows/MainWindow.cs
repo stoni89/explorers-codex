@@ -1324,7 +1324,7 @@ public class MainWindow : Window
             var id => unlockedMounts.FirstOrDefault(m => m.Id == (uint)id.Value)?.Name ?? noneLabel,
         };
 
-        var aetheryteMountRowStart = ModernUi.LabelRow(Loc.T("Mount", "Mount"), 280f);
+        var aetheryteMountRowStart = ModernUi.LabelRow(Loc.T("Mount", "Mount"), 280f, contentOffsetY: -4f);
         if (noMountsUnlocked)
             ImGui.BeginDisabled();
 
@@ -1378,7 +1378,7 @@ public class MainWindow : Window
             }
         }
 
-        ModernUi.EndLabelRow(aetheryteMountRowStart, aetheryteMountComboHeight);
+        ModernUi.EndLabelRow(aetheryteMountRowStart, aetheryteMountComboHeight - 4f);
     }
 
     private void DrawDebugTab()
