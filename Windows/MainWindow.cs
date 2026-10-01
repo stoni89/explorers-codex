@@ -1039,8 +1039,7 @@ public class MainWindow : Window
         var useChocobo = config.UseChocoboCompanion;
         if (ModernUi.ToggleRow(Loc.T("Chocobo-Begleiter nutzen", "Use Chocobo Companion"), ref useChocobo, Loc.T(
                 "Lässt die Quest- und Hunting-Log-Automation den Chocobo-Begleiter beschwören und am Leben erhalten (verbraucht dabei Gysahl Greens).",
-                "Lets the quest and hunting log automation summon and keep the Chocobo Companion alive (consumes Gysahl Greens)."),
-                heightReduction: 0f, contentOffsetY: 0f))
+                "Lets the quest and hunting log automation summon and keep the Chocobo Companion alive (consumes Gysahl Greens).")))
         {
             config.UseChocoboCompanion = useChocobo;
             config.Save();
