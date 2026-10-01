@@ -175,15 +175,12 @@ public class CompactOverlayWindow : Window
         if (collapsed)
             flags |= ImGuiWindowFlags.NoResize;
 
-        // Ein gestanztes Loch (siehe unten) reicht für normale Klicks auf ein überlappendes natives
-        // Fenster, aber NICHT zuverlässig zum VERSCHIEBEN eines solchen per Ziehen an seiner
-        // Titelleiste (Nutzer-Report: "Das Fenster vom Beastmaster ist nicht verschiebbar, weil es
-        // auf dem Overlay liegt") - liegt ein ECHTES natives Fenster (mit Titelleiste) über uns, wird
-        // das Overlay für den Frame komplett auf NoInputs geschaltet, statt nur ein Loch zu stanzen.
-        if (lastWindowMin.HasValue && lastWindowMax.HasValue
-            && Plugin.HasOverlappingDraggableNativeWindow(lastWindowMin.Value, lastWindowMax.Value))
-            flags |= ImGuiWindowFlags.NoInputs;
-
+        // Die NoInputs-Eskalation bei überlappenden "echten" nativen Fenstern (Plugin.
+        // HasOverlappingDraggableNativeWindow) wurde wieder entfernt (Nutzer-Report: dadurch waren
+        // selbst die EIGENEN Overlay-Knöpfe - Schloss, Einklappen - nicht mehr klickbar, auch wenn
+        // GAR KEIN Fenster darüber lag - schwerwiegende Regression, vermutlich eine Fehlerkennung in
+        // der Überlappungsprüfung). Zurück auf reines Loch-Stanzen; das Ziehen eines nativen Fensters
+        // über dem Overlay bleibt dadurch wieder eingeschränkt.
         Flags = flags;
 
         // Siehe MainWindow.PreDraw (identisches Problem/Lösung): ImGuis Stil-Standard WindowMinSize
