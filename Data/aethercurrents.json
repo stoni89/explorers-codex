@@ -111,6 +111,7 @@
         "MapId": 213,
         "VendorMapX": 12.8,
         "VendorMapY": 16.8,
+        "RequiredQuest": "Leaving Idyllshire",
         "Source": "Field exploration"
     },
     {
