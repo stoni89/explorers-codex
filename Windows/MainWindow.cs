@@ -884,7 +884,7 @@ public class MainWindow : Window
         ModernUi.GroupLabel("QoL");
         ModernUi.BeginCard();
         var showNavigationArrow = config.ShowNavigationArrow;
-        if (ModernUi.ToggleRow(Loc.T("Wegweiser-Pfeil anzeigen", "Show navigation arrow"), ref showNavigationArrow))
+        if (ModernUi.ToggleRow(Loc.T("Wegweiser-Pfeil anzeigen", "Show navigation arrow"), ref showNavigationArrow, heightReduction: 0f, contentOffsetY: 0f))
         {
             config.ShowNavigationArrow = showNavigationArrow;
             config.Save();
