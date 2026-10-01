@@ -1135,13 +1135,13 @@ public class MainWindow : Window
 
         ModernUi.CardDivider();
         var fontScale = config.CompactFontScale;
-        var fontScaleRowStart = ModernUi.LabelRow(Loc.T("Textgröße", "Text size"), 280f);
+        var fontScaleRowStart = ModernUi.LabelRow(Loc.T("Textgröße", "Text size"), 280f, contentOffsetY: -6f);
         if (ImGui.SliderFloat("##FontScale", ref fontScale, 0.7f, 2f, "%.2f"))
         {
             config.CompactFontScale = fontScale;
             config.Save();
         }
-        ModernUi.EndLabelRow(fontScaleRowStart);
+        ModernUi.EndLabelRow(fontScaleRowStart, ImGui.GetItemRectSize().Y - 6f);
 
         ModernUi.CardDivider();
         var monoLabel = Loc.T("Monospace", "Monospace");
@@ -1153,7 +1153,7 @@ public class MainWindow : Window
             _ => standardLabel,
         };
 
-        var compactFontRowStart = ModernUi.LabelRow(Loc.T("Schriftart", "Font"), 280f);
+        var compactFontRowStart = ModernUi.LabelRow(Loc.T("Schriftart", "Font"), 280f, contentOffsetY: -6f);
         var compactFontComboOpen = ImGui.BeginCombo("##CompactFont", currentLabel);
         var compactFontComboHeight = ImGui.GetItemRectSize().Y;
         if (compactFontComboOpen)
@@ -1195,7 +1195,7 @@ public class MainWindow : Window
 
             ImGui.EndCombo();
         }
-        ModernUi.EndLabelRow(compactFontRowStart, compactFontComboHeight);
+        ModernUi.EndLabelRow(compactFontRowStart, compactFontComboHeight - 6f);
         ModernUi.EndCard();
 
         ModernUi.GroupLabel(Loc.T("Pfeil-Aussehen", "Arrow appearance"));
@@ -1212,24 +1212,24 @@ public class MainWindow : Window
         ModernUi.CardDivider();
 
         var arrowHeight = config.NavigationArrowHeight;
-        var arrowHeightRowStart = ModernUi.LabelRow(Loc.T("Pfeil-Höhe", "Arrow height"), 280f);
+        var arrowHeightRowStart = ModernUi.LabelRow(Loc.T("Pfeil-Höhe", "Arrow height"), 280f, contentOffsetY: -6f);
         if (ImGui.SliderFloat("##NavigationArrowHeight", ref arrowHeight, 40f, 300f, "%.0f"))
         {
             config.NavigationArrowHeight = arrowHeight;
             config.Save();
         }
-        ModernUi.EndLabelRow(arrowHeightRowStart);
+        ModernUi.EndLabelRow(arrowHeightRowStart, ImGui.GetItemRectSize().Y - 6f);
 
         ModernUi.CardDivider();
 
         var arrowColor = config.NavigationArrowColor;
-        var arrowColorRowStart = ModernUi.LabelRow(Loc.T("Pfeil-Farbe", "Arrow color"), 280f);
+        var arrowColorRowStart = ModernUi.LabelRow(Loc.T("Pfeil-Farbe", "Arrow color"), 280f, contentOffsetY: -6f);
         if (ImGui.ColorEdit4("##NavigationArrowColor", ref arrowColor, ImGuiColorEditFlags.AlphaBar | ImGuiColorEditFlags.NoInputs))
         {
             config.NavigationArrowColor = arrowColor;
             config.Save();
         }
-        ModernUi.EndLabelRow(arrowColorRowStart);
+        ModernUi.EndLabelRow(arrowColorRowStart, ImGui.GetItemRectSize().Y - 6f);
         ModernUi.EndCard();
 
         ModernUi.GroupLabel(Loc.T("Reihenfolge", "Order"));
@@ -1428,7 +1428,7 @@ public class MainWindow : Window
                 "Makes the automation revisit already-unlocked targets too, for testing pathing/interaction. Only affects the automation, not the normal overlay display."));
 
             var simulateAetheryte = config.SimulateAetheryteAutomation;
-            if (ModernUi.ToggleRow(Loc.T("Auto Aetheryte simulieren", "Simulate Auto Aetheryte"), ref simulateAetheryte))
+            if (ModernUi.ToggleRow(Loc.T("Auto Aetheryte simulieren", "Simulate Auto Aetheryte"), ref simulateAetheryte, heightReduction: 0f, contentOffsetY: 0f))
             {
                 config.SimulateAetheryteAutomation = simulateAetheryte;
                 config.Save();
