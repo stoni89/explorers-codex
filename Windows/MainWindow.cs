@@ -778,7 +778,7 @@ public class MainWindow : Window
         ModernUi.GroupLabel(Loc.T("Overlay", "Overlay"));
         ModernUi.BeginCard();
         var showOverlay = config.ShowCompactOverlay;
-        if (ModernUi.ToggleRow(Loc.T("Overlay aktivieren", "Enable overlay"), ref showOverlay))
+        if (ModernUi.ToggleRow(Loc.T("Overlay aktivieren", "Enable overlay"), ref showOverlay, heightReduction: 0f, contentOffsetY: 0f))
         {
             config.ShowCompactOverlay = showOverlay;
             plugin.CompactOverlayWindow.IsOpen = showOverlay;
