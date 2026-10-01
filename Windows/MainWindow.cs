@@ -1395,6 +1395,25 @@ public class MainWindow : Window
             Loc.T("Debug", "Debug"),
             Loc.T("Nur relevant, wenn im Overlay etwas nicht wie erwartet angezeigt wird.", "Only relevant if something in the overlay doesn't show as expected."));
 
+        ModernUi.GroupLabel(Loc.T("Aktueller Status", "Current status"));
+        ModernUi.BeginCard();
+        var territoryId = Plugin.ClientState.TerritoryType;
+        ImGui.TextUnformatted($"{Loc.T("Zone", "Zone")}: {Plugin.GetZoneName(territoryId)} ({territoryId})");
+
+        var playerPos = Plugin.ObjectTable.LocalPlayer?.Position;
+        var posText = playerPos.HasValue
+            ? $"{playerPos.Value.X:F3}, {playerPos.Value.Y:F3}, {playerPos.Value.Z:F3}"
+            : Loc.T("nicht verfügbar", "not available");
+        ImGui.TextUnformatted($"{Loc.T("Eigene Weltposition", "Own world position")}: {posText}");
+
+        if (playerPos.HasValue && ImGui.Button(Loc.T("In Zwischenablage kopieren", "Copy to clipboard") + "##CopyPlayerPos"))
+        {
+            ImGui.SetClipboardText($"{playerPos.Value.X.ToString(CultureInfo.InvariantCulture)}f, " +
+                                    $"{playerPos.Value.Y.ToString(CultureInfo.InvariantCulture)}f, " +
+                                    $"{playerPos.Value.Z.ToString(CultureInfo.InvariantCulture)}f");
+        }
+        ModernUi.EndCard();
+
         ModernUi.GroupLabel(Loc.T("Allgemein", "General"));
         ModernUi.BeginCard();
         var showDebug = config.ShowDebugInfo;
@@ -1403,15 +1422,6 @@ public class MainWindow : Window
             config.ShowDebugInfo = showDebug;
             config.Save();
         }
-        ModernUi.EndCard();
-
-        ModernUi.GroupLabel(Loc.T("Overlay-Überlappung", "Overlay overlap"));
-        ModernUi.BeginCard();
-        if (ImGui.Button(Loc.T("Überlappende Fenster ins Log schreiben", "Log overlapping windows") + "##DumpOverlayOverlap"))
-            Plugin.DumpOverlayOverlapDiagnostics();
-        TextDisabledWrapped(Loc.T(
-            "Listet im Log jedes native und jedes andere Plugin-Fenster, das gerade das kompakte Overlay überlappt - zum Prüfen, wenn ein Fenster darüber nicht klickbar ist.",
-            "Logs every native and other plugin window currently overlapping the compact overlay - for checking when a window on top of it isn't clickable."));
         ModernUi.EndCard();
 
         // Simulation und Debug-Dumps nur in der Dev-Version (als Dev-Plugin geladen) - reine
@@ -1486,25 +1496,6 @@ public class MainWindow : Window
             });
             ModernUi.EndCard();
         }
-
-        ModernUi.GroupLabel(Loc.T("Aktueller Status", "Current status"));
-        ModernUi.BeginCard();
-        var territoryId = Plugin.ClientState.TerritoryType;
-        ImGui.TextUnformatted($"{Loc.T("Zone", "Zone")}: {Plugin.GetZoneName(territoryId)} ({territoryId})");
-
-        var playerPos = Plugin.ObjectTable.LocalPlayer?.Position;
-        var posText = playerPos.HasValue
-            ? $"{playerPos.Value.X:F3}, {playerPos.Value.Y:F3}, {playerPos.Value.Z:F3}"
-            : Loc.T("nicht verfügbar", "not available");
-        ImGui.TextUnformatted($"{Loc.T("Eigene Weltposition", "Own world position")}: {posText}");
-
-        if (playerPos.HasValue && ImGui.Button(Loc.T("In Zwischenablage kopieren", "Copy to clipboard") + "##CopyPlayerPos"))
-        {
-            ImGui.SetClipboardText($"{playerPos.Value.X.ToString(CultureInfo.InvariantCulture)}f, " +
-                                    $"{playerPos.Value.Y.ToString(CultureInfo.InvariantCulture)}f, " +
-                                    $"{playerPos.Value.Z.ToString(CultureInfo.InvariantCulture)}f");
-        }
-        ModernUi.EndCard();
     }
 
     /// <summary>

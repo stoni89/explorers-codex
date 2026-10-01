@@ -5962,13 +5962,10 @@ public sealed class Plugin : IDalamudPlugin
             }
         }
 
-        // Die Erkennung anderer ImGui-Plugin-Fenster (siehe GetOverlappingImGuiWindowRects) ist hier
-        // ABSICHTLICH NICHT mehr aktiv eingebunden (Nutzer-Report: "Overlay wird immer ausgeblendet
-        // und erscheint nie" - schwerwiegende Regression, vermutlich weil ein stets vorhandenes,
-        // großes/verstecktes ImGui-Verwaltungsfenster fälschlich als "überlappend" erkannt wurde und
-        // dadurch das gesamte Overlay verdeckte). Bleibt vorerst nur über
-        // Plugin.DumpOverlayOverlapDiagnostics zum reinen Betrachten verfügbar, bis die genaue Ursache
-        // anhand von Log-Daten geklärt ist, statt das Overlay erneut zu riskieren.
+        // Die Erkennung anderer ImGui-Plugin-Fenster ist hier ABSICHTLICH NICHT mehr aktiv eingebunden
+        // (Nutzer-Report: "Overlay wird immer ausgeblendet und erscheint nie" - schwerwiegende
+        // Regression, vermutlich weil ein stets vorhandenes, großes/verstecktes ImGui-Verwaltungsfenster
+        // fälschlich als "überlappend" erkannt wurde und dadurch das gesamte Overlay verdeckte).
 
         return result;
     }
@@ -6047,71 +6044,6 @@ public sealed class Plugin : IDalamudPlugin
         var overlapMax = new Vector2(System.Math.Min(rectMax.X, max.X), System.Math.Min(rectMax.Y, max.Y));
         if (overlapMin.X < overlapMax.X && overlapMin.Y < overlapMax.Y)
             result.Add((overlapMin, overlapMax));
-    }
-
-    /// <summary>
-    /// Debug: loggt jedes native Fenster UND jedes andere ImGui-Fenster, das die aktuellen Grenzen
-    /// des kompakten Overlays überlappt (Name, WindowNode/DisableFocusability bzw. Active/Hidden,
-    /// Rechteck) - für den Fall, dass ein Fenster trotz GetOverlappingNativeWindowRects weiterhin
-    /// nicht klickbar ist (Nutzer-Report), um die genaue Ursache ohne weiteres Raten zu sehen.
-    /// </summary>
-    public static unsafe void DumpOverlayOverlapDiagnostics()
-    {
-        var bounds = Instance.CompactOverlayWindow.LastWindowBounds;
-        if (bounds == null)
-        {
-            Log.Info("[OverlayOverlapDebug] Kein bekanntes Overlay-Fensterrechteck (noch nicht gezeichnet?).");
-            return;
-        }
-
-        var (min, max) = bounds.Value;
-        var unitManagerForFocus = RaptureAtkUnitManager.Instance();
-        var focusedName = unitManagerForFocus != null && unitManagerForFocus->FocusedAddon != null
-            ? unitManagerForFocus->FocusedAddon->NameString
-            : "keins";
-        Log.Info($"[OverlayOverlapDebug] Overlay-Fenster: {min} - {max}. Fokussiertes natives Fenster: '{focusedName}'. " +
-            $"HasOverlappingDraggableNativeWindow={HasOverlappingDraggableNativeWindow(min, max)} (bestimmt, ob NoInputs für den Frame gesetzt wird).");
-
-        var unitManager = RaptureAtkUnitManager.Instance();
-        if (unitManager != null)
-        {
-            var list = unitManager->AllLoadedUnitsList;
-            for (var i = 0; i < list.Count; i++)
-            {
-                var unit = list.Entries[i].Value;
-                if (unit == null || !unit->IsVisible)
-                    continue;
-
-                var unitMin = new Vector2(unit->X, unit->Y);
-                var unitMax = unitMin + new Vector2(unit->GetScaledWidth(true), unit->GetScaledHeight(true));
-                if (!(unitMin.X < max.X && unitMax.X > min.X && unitMin.Y < max.Y && unitMax.Y > min.Y))
-                    continue;
-
-                Log.Info($"[OverlayOverlapDebug] Natives Fenster '{unit->NameString}': WindowNode={(nint)unit->WindowNode != 0}, " +
-                    $"DisableFocusability={unit->DisableFocusability}, Rect={unitMin}-{unitMax}, " +
-                    $"WuerdeDurchloechert={unit->WindowNode != null || !unit->DisableFocusability}.");
-            }
-        }
-
-        var context = ImGui.GetCurrentContext();
-        if (!context.IsNull)
-        {
-            var windows = context.Windows;
-            for (var i = 0; i < windows.Size; i++)
-            {
-                var window = windows[i];
-                if (window.IsNull || !window.Active || window.Hidden || window.RootWindow != window)
-                    continue;
-
-                var winMin = window.Pos;
-                var winMax = window.Pos + window.Size;
-                if (!(winMin.X < max.X && winMax.X > min.X && winMin.Y < max.Y && winMax.Y > min.Y))
-                    continue;
-
-                var name = System.Runtime.InteropServices.Marshal.PtrToStringUTF8((nint)window.Name) ?? "?";
-                Log.Info($"[OverlayOverlapDebug] ImGui-Fenster '{name}': Rect={winMin}-{winMax}.");
-            }
-        }
     }
 
     /// <summary>
