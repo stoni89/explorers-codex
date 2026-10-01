@@ -2195,16 +2195,19 @@ public sealed class Plugin : IDalamudPlugin
                 new SightseeingPuzzleStep(new Vector3(97.89942f, 3.56555f, -75.178215f), Jump: false, Exact: true),  // Punkt 3 (Sightseeing-Punkt)
             },
             DismountAtStart: true), // erst genau am Startpunkt absteigen
-        [2162723] = new( // The Hermit's Hovel (Central Shroud) - zwei Fußschritte, dann ein Flug-
-                          // Zwischenschritt (siehe SightseeingPuzzleStep.Fly) über die Schlucht, dann
-                          // zu Fuß der letzte kurze Rest zur Sightseeing-Kugel.
+        [2162723] = new( // The Hermit's Hovel (Central Shroud) - zwei Fußschritte, dann drei
+                          // Sprünge über die Schlucht (dazwischen ein kurzes Stück zu Fuß), dann der
+                          // letzte Rest zu Fuß zur Sightseeing-Kugel.
             new Vector3(-299.863f, 5.586483f, -563.8493f),
             new[]
             {
                 new SightseeingPuzzleStep(new Vector3(-304.39178f, 5.3948965f, -570.99744f), Jump: false),
-                new SightseeingPuzzleStep(new Vector3(-313.12915f, 5.7721624f, -571.2731f), Jump: false),
-                new SightseeingPuzzleStep(new Vector3(-305.5048f, 11.571671f, -570.61395f), Jump: false, Fly: true),
-                new SightseeingPuzzleStep(new Vector3(-302.9975f, 10.269597f, -570.6104f), Jump: false), // Sightseeing-Punkt
+                new SightseeingPuzzleStep(new Vector3(-312.7482f, 5.7721624f, -573.4029f), Jump: false),
+                new SightseeingPuzzleStep(new Vector3(-309.36017f, 6.564163f, -575.6682f), Jump: true),
+                new SightseeingPuzzleStep(new Vector3(-308.33078f, 6.564163f, -576.1312f), Jump: false),
+                new SightseeingPuzzleStep(new Vector3(-306.4013f, 8.290334f, -576.50903f), Jump: true),
+                new SightseeingPuzzleStep(new Vector3(-305.77518f, 9.786908f, -576.3396f), Jump: true),
+                new SightseeingPuzzleStep(new Vector3(-302.92184f, 10.269598f, -570.6858f), Jump: false), // Sightseeing-Punkt
             },
             DismountAtStart: true),
         [2162724] = new( // The Carline Canopy (Gridania)
