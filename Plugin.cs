@@ -5962,25 +5962,13 @@ public sealed class Plugin : IDalamudPlugin
             }
         }
 
-        var context = ImGui.GetCurrentContext();
-        if (!context.IsNull)
-        {
-            var windows = context.Windows;
-            for (var i = 0; i < windows.Size; i++)
-            {
-                var window = windows[i];
-                if (window.IsNull || !window.Active || window.Hidden)
-                    continue;
-                if (window.RootWindow != window)
-                    continue; // nur Top-Level-Fenster, keine Kind-/Popup-Teilfenster einzeln zählen.
-                if (window.Size.X <= 0f || window.Size.Y <= 0f)
-                    continue;
-                if (excludeWindowHandle != 0 && (nint)window.Handle == excludeWindowHandle)
-                    continue; // unser eigenes Overlay-Fenster selbst nicht als "darüberliegend" zählen.
-
-                AddOverlap(result, window.Pos, window.Pos + window.Size, min, max);
-            }
-        }
+        // Die Erkennung anderer ImGui-Plugin-Fenster (siehe GetOverlappingImGuiWindowRects) ist hier
+        // ABSICHTLICH NICHT mehr aktiv eingebunden (Nutzer-Report: "Overlay wird immer ausgeblendet
+        // und erscheint nie" - schwerwiegende Regression, vermutlich weil ein stets vorhandenes,
+        // großes/verstecktes ImGui-Verwaltungsfenster fälschlich als "überlappend" erkannt wurde und
+        // dadurch das gesamte Overlay verdeckte). Bleibt vorerst nur über
+        // Plugin.DumpOverlayOverlapDiagnostics zum reinen Betrachten verfügbar, bis die genaue Ursache
+        // anhand von Log-Daten geklärt ist, statt das Overlay erneut zu riskieren.
 
         return result;
     }
