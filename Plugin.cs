@@ -5974,34 +5974,52 @@ public sealed class Plugin : IDalamudPlugin
     }
 
     /// <summary>
-    /// Ob das AKTUELL FOKUSSIERTE native Fenster (RaptureAtkUnitManager.FocusedAddon - es gibt immer
-    /// nur EIN fokussiertes natives Fenster, genau das, mit dem der Spieler gerade tatsächlich
-    /// interagiert) den übergebenen Bereich überlappt - für CompactOverlayWindow.PreDraw: ein per
-    /// ImGuiP.SetWindowHitTestHole gestanztes Loch reicht für normale Klicks (Knöpfe etc.), aber NICHT
-    /// zuverlässig zum VERSCHIEBEN eines Fensters per Ziehen an seiner Titelleiste (Nutzer-Report:
-    /// "Das Fenster vom Beastmaster ist nicht verschiebbar, weil es auf dem Overlay liegt"). Liegt das
-    /// fokussierte Fenster über dem Overlay, wird dieses stattdessen für den Frame komplett auf
-    /// NoInputs geschaltet (siehe PreDraw).
+    /// Ob die MAUS GERADE über einem ECHTEN nativen Fenster (AtkUnitBase.WindowNode != null, eigene
+    /// Titelleiste/Ziehgriff) steht, das den übergebenen Bereich überlappt - für
+    /// CompactOverlayWindow.PreDraw: ein per ImGuiP.SetWindowHitTestHole gestanztes Loch reicht für
+    /// normale Klicks (Knöpfe etc.), aber NICHT zuverlässig zum VERSCHIEBEN eines Fensters per Ziehen
+    /// an seiner Titelleiste (Nutzer-Report: "Das Fenster vom Beastmaster ist nicht verschiebbar").
+    /// Steht die Maus über so einem Fenster, wird das Overlay für den Frame komplett auf NoInputs
+    /// geschaltet (siehe PreDraw), statt nur ein Loch zu stanzen.
     ///
-    /// BEWUSST auf "fokussiert" statt "irgendein sichtbares Fenster mit Titelleiste" eingeschränkt -
-    /// Letzteres war die vorherige (verworfene) Fassung: die hat JEDES offen herumstehende native
-    /// Fenster gezählt, auch wenn der Spieler es gerade gar nicht benutzt (z.B. ein irgendwo
-    /// geöffnetes Charakterfenster) - dadurch blieb NoInputs quasi dauerhaft aktiv und sogar die
-    /// EIGENEN Overlay-Knöpfe (Schloss, Einklappen) waren nicht mehr klickbar, selbst ohne jede
-    /// tatsächliche Überlappung sichtbar auf dem Bildschirm (Nutzer-Report). FocusedAddon ändert sich
-    /// dagegen GENAU dann, wenn der Spieler tatsächlich in ein anderes natives Fenster klickt/zieht -
-    /// also exakt der gesuchte Moment, kein Dauerzustand.
+    /// Zwei vorherige, verworfene Fassungen:
+    /// 1) "Irgendein sichtbares Fenster mit Titelleiste" - zu breit: zählte auch ein irgendwo offen
+    ///    herumstehendes Fenster (z.B. Charakterfenster), das der Spieler gar nicht benutzt, wodurch
+    ///    NoInputs quasi dauerhaft aktiv war und sogar die EIGENEN Overlay-Knöpfe nicht mehr klickbar
+    ///    waren (Nutzer-Report).
+    /// 2) RaptureAtkUnitManager.FocusedAddon - zu eng/zirkulär: Fokus wird erst GESETZT, NACHDEM ein
+    ///    Klick das native Fenster erfolgreich erreicht - während wir aber noch blockieren, kann das
+    ///    nie passieren, die Regel hätte also nie ausgelöst (Nutzer-Report: "Fokussiertes natives
+    ///    Fenster: keins", obwohl das Fenster sichtbar überlappte).
+    /// Die Mausposition braucht dagegen KEINEN vorherigen erfolgreichen Klick (unabhängig von uns
+    /// abfragbar) und bleibt trotzdem eng genug: nur dort aktiv, wo der Spieler gerade tatsächlich
+    /// zeigt/klickt/zieht.
     /// </summary>
     public static unsafe bool HasOverlappingDraggableNativeWindow(Vector2 min, Vector2 max)
     {
         var unitManager = RaptureAtkUnitManager.Instance();
-        var unit = unitManager != null ? unitManager->FocusedAddon : null;
-        if (unit == null || !unit->IsVisible || unit->WindowNode == null)
+        if (unitManager == null)
             return false;
 
-        var unitMin = new Vector2(unit->X, unit->Y);
-        var unitMax = unitMin + new Vector2(unit->GetScaledWidth(true), unit->GetScaledHeight(true));
-        return unitMin.X < max.X && unitMax.X > min.X && unitMin.Y < max.Y && unitMax.Y > min.Y;
+        var mousePos = ImGui.GetIO().MousePos;
+
+        var list = unitManager->AllLoadedUnitsList;
+        for (var i = 0; i < list.Count; i++)
+        {
+            var unit = list.Entries[i].Value;
+            if (unit == null || !unit->IsVisible || unit->WindowNode == null)
+                continue;
+
+            var unitMin = new Vector2(unit->X, unit->Y);
+            var unitMax = unitMin + new Vector2(unit->GetScaledWidth(true), unit->GetScaledHeight(true));
+            if (!(unitMin.X < max.X && unitMax.X > min.X && unitMin.Y < max.Y && unitMax.Y > min.Y))
+                continue; // überlappt das Overlay gar nicht - irrelevant.
+
+            if (mousePos.X >= unitMin.X && mousePos.X < unitMax.X && mousePos.Y >= unitMin.Y && mousePos.Y < unitMax.Y)
+                return true; // Maus steht gerade über diesem (überlappenden) Fenster.
+        }
+
+        return false;
     }
 
     private static void AddOverlap(List<(Vector2 Min, Vector2 Max)> result, Vector2 rectMin, Vector2 rectMax, Vector2 min, Vector2 max)
