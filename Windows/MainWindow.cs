@@ -1070,7 +1070,7 @@ public class MainWindow : Window
             (ChocoboStance.FreeStance, Loc.T("Freie Haltung", "Free Stance")),
         };
 
-        var chocoboStanceRowStart = ModernUi.LabelRow(Loc.T("Chocobo-Haltung", "Chocobo stance"), 280f);
+        var chocoboStanceRowStart = ModernUi.LabelRow(Loc.T("Chocobo-Haltung", "Chocobo stance"), 280f, contentOffsetY: -6f);
         var currentStanceLabel = string.Empty;
         foreach (var (stance, label) in stances)
         {
@@ -1112,7 +1112,7 @@ public class MainWindow : Window
         if (!stanceComboEnabled)
             ImGui.EndDisabled();
 
-        ModernUi.EndLabelRow(chocoboStanceRowStart, chocoboStanceComboHeight);
+        ModernUi.EndLabelRow(chocoboStanceRowStart, chocoboStanceComboHeight - 6f);
     }
 
     private void DrawDisplayTab()
