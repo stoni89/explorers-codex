@@ -87,6 +87,19 @@ public class CompactOverlayWindow : Window
     private bool collapsedLastFrame;
     private Vector2 expandedSize = new(260, 200);
 
+    // Automatisches Einklappen, sobald ein ECHTES natives Fenster (mit Titelleiste, z.B. die
+    // Crucible-/Beastmaster-Tafel) das Overlay überlappt (Nutzer-Report: "Das Fenster vom Beastmaster
+    // ist nicht verschiebbar/klickbar, weil es auf dem Overlay liegt") - NoInputs (weder über die
+    // Dalamud-Flags-Eigenschaft noch direkt am rohen ImGui-Fenster gesetzt, siehe Git-Historie) hat
+    // sich als wirkungslos erwiesen; einzig TATSÄCHLICHES Einklappen (das Fenster existiert an der
+    // Stelle danach schlicht nicht mehr) hat im Test geholfen. Bewusst GETRENNT vom manuell vom
+    // Spieler gesetzten "collapsed" (das bleibt unverändert) - EffectiveCollapsed() ist überall dort
+    // zu verwenden, wo bisher "collapsed" direkt die Größe/den Inhalt steuerte, damit nach dem
+    // Verschwinden des nativen Fensters wieder genau der vom Spieler zuletzt gewählte Zustand gilt.
+    private bool autoCollapsedForNativeOverlap;
+
+    private bool EffectiveCollapsed() => collapsed || autoCollapsedForNativeOverlap;
+
     // Wie collapsedLastFrame, aber für Configuration.HideOverlayWhenEmpty (siehe DrawContent, ganz
     // am Anfang gesetzt/gelesen) - ohne diese Wiederherstellung in PreDraw würde das Fenster nach
     // dem Schrumpfen auf 0x0 dauerhaft winzig bleiben, auch nachdem wieder etwas fehlt.
@@ -162,6 +175,17 @@ public class CompactOverlayWindow : Window
             ? Plugin.GetOverlappingNativeWindowRects(lastWindowMin.Value, lastWindowMax.Value, ownWindowHandle)
             : new List<(Vector2 Min, Vector2 Max)>();
 
+        // Automatisches Einklappen, solange ein ECHTES natives Fenster das Overlay überlappt (siehe
+        // autoCollapsedForNativeOverlap-Kommentar) - mit den Grenzen vom LETZTEN Frame geprüft, wie
+        // nativeOverlapRects oben auch (ein Frame Verzögerung ist unmerklich). BEWUSST gegen die volle
+        // AUSGEKLAPPTE Größe (expandedSize) geprüft, nicht gegen die aktuellen (ggf. schon wegen des
+        // Auto-Einklappens geschrumpften) lastWindowMax - sonst würde das geschrumpfte Fenster das
+        // native nicht mehr überlappen, "ausklappen" auslösen, das wieder überlappt, wieder
+        // einklappt, usw. (Endlos-Geflacker zwischen ein-/ausgeklappt).
+        autoCollapsedForNativeOverlap = lastWindowMin.HasValue
+            && Plugin.HasOverlappingDraggableNativeWindow(lastWindowMin.Value, lastWindowMin.Value + expandedSize);
+        var effectiveCollapsed = EffectiveCollapsed();
+
         // Gesperrt = nur die Position fixiert, nicht die Größe - das Fenster bleibt also auch im
         // gesperrten Zustand an der Ecke skalierbar (z.B. wenn ein Mount-Name nicht mehr in die
         // aktuelle Breite passt), nur das versehentliche Verschieben wird verhindert. Eingeklappt
@@ -172,15 +196,9 @@ public class CompactOverlayWindow : Window
         var flags = BaseFlags;
         if (config.CompactLocked)
             flags |= ImGuiWindowFlags.NoMove;
-        if (collapsed)
+        if (effectiveCollapsed)
             flags |= ImGuiWindowFlags.NoResize;
 
-        // Die NoInputs-Eskalation (siehe Draw) wird NICHT mehr über diese Flags-Eigenschaft gesetzt -
-        // mehrere Versuche darüber (siehe Git-Historie) haben trotz korrekt erkannter Überlappung
-        // nichts bewirkt (Nutzer-Report: Ziehen/Klicken ging weiterhin nicht, nur komplettes
-        // Einklappen des Fensters half). Vermutlich reicht Dalamuds Window.Flags-Eigenschaft (nur VOR
-        // Begin() wirksam) dafür nicht zuverlässig aus - stattdessen jetzt direkt am rohen ImGui-
-        // Fenster nach Begin() gesetzt, siehe Draw().
         Flags = flags;
 
         // Siehe MainWindow.PreDraw (identisches Problem/Lösung): ImGuis Stil-Standard WindowMinSize
@@ -193,7 +211,7 @@ public class CompactOverlayWindow : Window
         // an. Das Schrumpfen beim EINklappen passiert dagegen bewusst NICHT hier, sondern erst in
         // DrawContent (nach Begin()) - dort ist die tatsächlich benötigte Höhe der Kopfzeile bekannt
         // (abhängig von config.CompactFontScale), hier vorher noch nicht.
-        if ((!collapsed && collapsedLastFrame) || hiddenDueToEmptyLastFrame)
+        if ((!effectiveCollapsed && collapsedLastFrame) || hiddenDueToEmptyLastFrame)
         {
             Size = expandedSize;
             SizeCondition = ImGuiCond.Always;
@@ -203,7 +221,7 @@ public class CompactOverlayWindow : Window
             SizeCondition = ImGuiCond.FirstUseEver;
         }
 
-        collapsedLastFrame = collapsed;
+        collapsedLastFrame = effectiveCollapsed;
 
         var alpha = 1f - System.Math.Clamp(config.CompactTransparency, 0f, 1f);
 
@@ -255,10 +273,11 @@ public class CompactOverlayWindow : Window
         lastWindowMin = ImGui.GetWindowPos();
         lastWindowMax = lastWindowMin + ImGui.GetWindowSize();
 
-        // Nur merken, solange NICHT eingeklappt - sonst würde die (künstlich auf Kopfzeilenhöhe
-        // geschrumpfte) Größe versehentlich als "neue ausgeklappte Normalgröße" gespeichert und beim
-        // Ausklappen fälschlich wiederhergestellt (identisches Problem/Lösung wie in MainWindow.Draw).
-        if (!collapsed)
+        // Nur merken, solange NICHT (auch automatisch wegen überlappendem nativen Fenster)
+        // eingeklappt - sonst würde die (künstlich auf Kopfzeilenhöhe geschrumpfte) Größe
+        // versehentlich als "neue ausgeklappte Normalgröße" gespeichert und beim Ausklappen fälschlich
+        // wiederhergestellt (identisches Problem/Lösung wie in MainWindow.Draw).
+        if (!EffectiveCollapsed())
             expandedSize = ImGui.GetWindowSize();
 
         // Dalamud/ImGui zeichnet grundsätzlich IMMER über dem nativen Spiel-UI (keine echte Z-Order
@@ -290,28 +309,13 @@ public class CompactOverlayWindow : Window
         // dass UNSER Fenster tatsächlich die Ursache war, nicht ein anderes Plugin). Mit den JETZT
         // aktuellen (nicht erst nächsten Frame bekannten) Fenstergrenzen geprüft, nicht den Werten vom
         // letzten Frame.
-        if (Plugin.HasOverlappingDraggableNativeWindow(lastWindowMin.Value, lastWindowMax.Value))
-        {
-            var flagsBefore = window.Flags;
-            window.Flags |= ImGuiWindowFlags.NoInputs;
-
-            // Passive Diagnose (max. 1x/Sekunde) - loggt automatisch genau in dem Moment, in dem die
-            // Erkennung auslöst, OHNE dass extra der Debug-Knopf gedrückt werden müsste (der selbst
-            // die Maus vom nativen Fenster wegzieht und die Prüfung dadurch verfälscht). Bestätigt
-            // schwarz auf weiß, ob die NoInputs-Zuweisung tatsächlich ankommt (Nutzer-Report:
-            // "Geht nicht" trotz mehrerer Ansätze).
-            if (DateTime.UtcNow - lastNoInputsDebugLogAt > TimeSpan.FromSeconds(1))
-            {
-                lastNoInputsDebugLogAt = DateTime.UtcNow;
-                Plugin.Log.Info($"[OverlayNoInputsDebug] Ausgelöst - FlagsVorher={flagsBefore}, FlagsNachher={window.Flags}, " +
-                    $"MousePos={ImGui.GetIO().MousePos}, EigeneFensterGrenzen={lastWindowMin}-{lastWindowMax}.");
-            }
-        }
+        // NoInputs (weder über die Dalamud-Flags-Eigenschaft noch direkt am rohen ImGui-Fenster
+        // gesetzt, siehe Git-Historie) hat sich im Live-Test als wirkungslos erwiesen - automatisches
+        // Einklappen (siehe autoCollapsedForNativeOverlap/EffectiveCollapsed, oben in PreDraw berechnet
+        // und unten in DrawContent angewendet) ersetzt das jetzt, da NUR das im Test tatsächlich half.
 
         DrawContent();
     }
-
-    private DateTime lastNoInputsDebugLogAt = DateTime.MinValue;
 
     private void DrawContent()
     {
@@ -621,12 +625,15 @@ public class CompactOverlayWindow : Window
 
         ImGui.EndGroup();
 
-        if (collapsed)
+        if (EffectiveCollapsed())
         {
             // Fenster auf genau die Höhe der eben gezeichneten Kopfzeile (plus das obere/untere
             // Innenpolster, siehe PreDraw) schrumpfen - erst jetzt (nach dem Zeichnen) bekannt, siehe
             // Kommentar bei DrawContent-Aufruf/PreDraw. ImGuiCond.Always wirkt hier sofort, auch
-            // innerhalb desselben Begin()/End(), nicht erst nächsten Frame.
+            // innerhalb desselben Begin()/End(), nicht erst nächsten Frame. Greift auch beim
+            // AUTOMATISCHEN Einklappen (überlappendes natives Fenster, siehe
+            // autoCollapsedForNativeOverlap) - der Spieler sieht dann kurz nur die Kopfzeile, bis das
+            // native Fenster wieder weg ist.
             var windowPaddingY = ImGui.GetStyle().WindowPadding.Y;
             var neededHeight = ImGui.GetItemRectSize().Y + windowPaddingY * 2f;
             ImGui.SetWindowSize(new Vector2(ImGui.GetWindowSize().X, neededHeight), ImGuiCond.Always);
