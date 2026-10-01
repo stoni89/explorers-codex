@@ -2195,6 +2195,18 @@ public sealed class Plugin : IDalamudPlugin
                 new SightseeingPuzzleStep(new Vector3(97.89942f, 3.56555f, -75.178215f), Jump: false, Exact: true),  // Punkt 3 (Sightseeing-Punkt)
             },
             DismountAtStart: true), // erst genau am Startpunkt absteigen
+        [2162723] = new( // The Hermit's Hovel (Central Shroud) - zwei Fußschritte, dann ein Flug-
+                          // Zwischenschritt (siehe SightseeingPuzzleStep.Fly) über die Schlucht, dann
+                          // zu Fuß der letzte kurze Rest zur Sightseeing-Kugel.
+            new Vector3(-299.863f, 5.586483f, -563.8493f),
+            new[]
+            {
+                new SightseeingPuzzleStep(new Vector3(-304.39178f, 5.3948965f, -570.99744f), Jump: false),
+                new SightseeingPuzzleStep(new Vector3(-313.06525f, 5.7721624f, -573.32f), Jump: false),
+                new SightseeingPuzzleStep(new Vector3(-302.7302f, 10.808259f, -571.0995f), Jump: false, Fly: true),
+                new SightseeingPuzzleStep(new Vector3(-302.9975f, 10.269597f, -570.6104f), Jump: false), // Sightseeing-Punkt
+            },
+            DismountAtStart: true),
         [2162724] = new( // The Carline Canopy (Gridania)
             new Vector3(144.2908f, -13.261837f, 160.06638f),
             new[]
