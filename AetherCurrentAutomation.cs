@@ -138,11 +138,12 @@ public sealed class AetherCurrentAutomation
 
     // Bleibt (anders als activeJumpRoute, das schon nach der Landung wieder null wird) für die
     // GESAMTE Dauer des aktuellen Ziels gesetzt, sobald eine Sprungroute hinterlegt ist - nach
-    // erfolgreicher Freischaltung läuft State.ReturningToStart damit noch einmal zurück zum
-    // Startpunkt der Route, BEVOR es zum nächsten Ziel weitergeht (Nutzeranforderung: "nachdem der
-    // Aether Current aktiviert wurde erstmal wieder zurück auf den Startpunkt"; die Landestelle
-    // selbst ist oft ein schmaler Vorsprung, von dem aus man nicht sinnvoll weiterlaufen/-fliegen
-    // kann).
+    // erfolgreicher Freischaltung läuft State.ReturningToStart damit noch einmal zurück zu diesem
+    // Punkt (normalerweise route.Start, ODER route.ReturnPoint, falls abweichend hinterlegt - siehe
+    // Plugin.AetherCurrentJumpRoute-Kommentar), BEVOR es zum nächsten Ziel weitergeht (Nutzer-
+    // anforderung: "nachdem der Aether Current aktiviert wurde erstmal wieder zurück"; die
+    // Landestelle selbst ist oft ein schmaler Vorsprung, von dem aus man nicht sinnvoll
+    // weiterlaufen/-fliegen kann).
     private Vector3? jumpRouteStartPoint;
 
     // Siehe BeginReturnToStart/UpdateReturningToStart - das eigentliche Ziel des Rückwegs, damit ein
@@ -349,7 +350,7 @@ public sealed class AetherCurrentAutomation
             {
                 Plugin.Log.Info($"[AetherCurrentAutomation] Kampf vorbei - Kampf-Plugin wieder aus, starte Sprungroute neu: {currentTargetEntry.Name}.");
                 activeJumpRoute = route;
-                jumpRouteStartPoint = route.Start;
+                jumpRouteStartPoint = route.ReturnPoint ?? route.Start;
                 didFinalApproach = false;
                 currentTargetPosition = route.Start;
                 if (pathfindAndMoveCloseTo.InvokeFunc(route.Start, false, ArrivalTolerance))
@@ -552,7 +553,7 @@ public sealed class AetherCurrentAutomation
         if (Plugin.TryGetAetherCurrentJumpRoute(entry.Id, out var jumpRoute))
         {
             activeJumpRoute = jumpRoute;
-            jumpRouteStartPoint = jumpRoute.Start;
+            jumpRouteStartPoint = jumpRoute.ReturnPoint ?? jumpRoute.Start;
             currentTargetPosition = jumpRoute.Start;
         }
         else

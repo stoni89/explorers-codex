@@ -2353,8 +2353,11 @@ public sealed class Plugin : IDalamudPlugin
     // JumpTarget. Erst danach läuft die Automation normal über BeginFinalApproach zur echten, bereits
     // bekannten Position (entry.WorldPosition) weiter. Viel einfacher als SightseeingJumpingPuzzle
     // (nur EIN Sprung, kein Mehrschritt-Parcours), daher ein eigener, schlankerer Record statt
-    // SightseeingPuzzleStep wiederzuverwenden.
-    public readonly record struct AetherCurrentJumpRoute(Vector3 Start, Vector3 RunUpPoint, Vector3 JumpTarget);
+    // SightseeingPuzzleStep wiederzuverwenden. ReturnPoint = wohin AetherCurrentAutomation.
+    // State.ReturningToStart nach der Freischaltung zurückläuft (Nutzeranforderung: "nicht zur
+    // Startposition zurück, sondern auf folgende Position") - null bedeutet "zurück zu Start"
+    // (bisheriges Verhalten).
+    public readonly record struct AetherCurrentJumpRoute(Vector3 Start, Vector3 RunUpPoint, Vector3 JumpTarget, Vector3? ReturnPoint = null);
 
     // Von Hand hinterlegte Ätherströmungen, die nur über einen kurzen Sprung erreichbar sind (Key =
     // AetherCurrent-RowId, siehe AetherCurrentAutomation-Kommentar) - z.B. "The Dravanian Forelands
@@ -2367,10 +2370,12 @@ public sealed class Plugin : IDalamudPlugin
             new Vector3(403.9884f, -90.32586f, 686.1742f)),
         [2818117] = new( // The Sea of Clouds (Before Ok' Zundu entrance) - Sprung direkt ab Startpunkt,
                           // kein separater Anlaufpunkt (RunUpPoint = Start), danach nur noch zu Fuß
-                          // (kein weiterer Sprung) zur echten Position (entry.WorldPosition).
+                          // (kein weiterer Sprung) zur echten Position (entry.WorldPosition). Rückweg
+                          // NICHT zum Startpunkt, sondern zu ReturnPoint (Nutzeranforderung).
             new Vector3(-755.60956f, -13.877344f, -120.60146f),
             new Vector3(-755.60956f, -13.877344f, -120.60146f),
-            new Vector3(-756.6963f, -11.8391f, -117.56789f)),
+            new Vector3(-756.6963f, -11.8391f, -117.56789f),
+            new Vector3(-720.17566f, -13.877411f, -108.292f)),
     };
 
     /// <summary>Siehe AetherCurrentJumpRoutes-Kommentar.</summary>
