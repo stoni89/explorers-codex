@@ -156,6 +156,13 @@ public sealed class AetherCurrentAutomation
     private static readonly TimeSpan PostReturnToStartSettleDelay = TimeSpan.FromSeconds(2);
     private DateTime? returnToStartArrivedAt;
 
+    // Siehe TryStartNext-Kommentar: die ID der GERADE erst abgeschlossenen Ätherströmung - steht man
+    // nach dem Rückweg direkt daneben, wäre sie (im Simulations-Modus, wo bereits freigeschaltete
+    // absichtlich Ziel bleiben) über die "nächstgelegene zuerst"-Sortierung sonst fast immer wieder
+    // die erste Wahl (Nutzer-Report: "hat wieder den gleichen Current versucht anstatt zum nächsten
+    // zu laufen").
+    private uint? lastFinishedId;
+
     // Kurze Wartezeit nach dem Abmounten (wie DismountSettleDelay in anderen Automationen) - ein
     // Sprung-Versuch mitten in der Absteige-Animation greift nicht.
     private static readonly TimeSpan JumpDismountSettleDelay = TimeSpan.FromSeconds(1);
@@ -229,6 +236,7 @@ public sealed class AetherCurrentAutomation
         jumpRouteStartPoint = null;
         returnToStartPoint = null;
         returnToStartArrivedAt = null;
+        lastFinishedId = null;
         StatusText = Loc.T("Automation gestartet...", "Automation started...");
     }
 
@@ -446,6 +454,13 @@ public sealed class AetherCurrentAutomation
         // Export, ohne eigene rohe Weltposition (siehe aethercurrents.json-Kommentar in
         // CollectionData.cs). Plugin.OpenEntryMap in StartMovingTo kommt mit beiden Varianten klar.
         var candidates = entries.Where(e => e.HasGoToTarget && !skippedIds.Contains(e.Id)).ToList();
+
+        // Siehe lastFinishedId-Kommentar - nur ausschließen, wenn tatsächlich noch etwas ANDERES zur
+        // Auswahl steht, sonst (einzige verbleibende Ätherströmung, z.B. Simulation mit nur einem
+        // Eintrag) ganz normal wieder dieselbe nehmen dürfen.
+        if (lastFinishedId is { } finishedId && candidates.Any(e => e.Id != finishedId))
+            candidates = candidates.Where(e => e.Id != finishedId).ToList();
+
         if (candidates.Count == 0)
         {
             StatusText = Loc.T(
@@ -993,6 +1008,7 @@ public sealed class AetherCurrentAutomation
     {
         Plugin.Log.Info($"[AetherCurrentAutomation] FinishCurrent({currentTargetEntry?.Name}): freigeschaltet.");
         attemptCounts.Remove(currentTargetEntry!.Id);
+        lastFinishedId = currentTargetEntry.Id;
         currentTargetEntry = null;
         jumpRouteStartPoint = null;
         returnToStartPoint = null;
