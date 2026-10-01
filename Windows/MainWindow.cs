@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -751,11 +751,13 @@ public class MainWindow : Window
             (MenuLanguage.English, "English"),
         };
 
-        ModernUi.LabelRow(Loc.T("Menüsprache", "Menu language"), 280f, Loc.T(
+        var menuLanguageRowStart = ModernUi.LabelRow(Loc.T("Menüsprache", "Menu language"), 280f, Loc.T(
             "Gilt nur für dieses Menü - das kompakte Overlay folgt weiterhin der Spielsprache.",
             "Only affects this menu - the compact overlay keeps following the game language."));
         var currentLanguageLabel = languageLabels.First(l => l.Language == config.MenuLanguage).Label;
-        if (ImGui.BeginCombo("##MenuLanguage", currentLanguageLabel))
+        var menuLanguageComboOpen = ImGui.BeginCombo("##MenuLanguage", currentLanguageLabel);
+        var menuLanguageComboHeight = ImGui.GetItemRectSize().Y;
+        if (menuLanguageComboOpen)
         {
             foreach (var (language, label) in languageLabels)
             {
@@ -769,6 +771,8 @@ public class MainWindow : Window
             ImGui.EndCombo();
         }
 
+        ModernUi.EndLabelRow(menuLanguageRowStart, menuLanguageComboHeight);
+
         ModernUi.EndCard();
 
         ModernUi.GroupLabel(Loc.T("Overlay", "Overlay"));
@@ -781,9 +785,7 @@ public class MainWindow : Window
             config.Save();
         }
 
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
+        ModernUi.CardDivider();
 
         var showAutomationButtons = config.ShowAutomationButtons;
         if (ModernUi.ToggleRow(Loc.T("Automation-Knöpfe anzeigen", "Show automation buttons"), ref showAutomationButtons))
@@ -798,9 +800,7 @@ public class MainWindow : Window
                 "Only hides the start/stop buttons in the overlay - running automations keep running."));
         }
 
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
+        ModernUi.CardDivider();
 
         var showWallet = config.ShowCurrencyWallet;
         if (ModernUi.ToggleRow(Loc.T("Währungen anzeigen", "Show currencies"), ref showWallet))
@@ -809,9 +809,7 @@ public class MainWindow : Window
             config.Save();
         }
 
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
+        ModernUi.CardDivider();
 
         var showGoToIcon = config.ShowGoToIcon;
         if (ModernUi.ToggleRow(Loc.T("\"Hinlaufen\"-Icon anzeigen", "Show \"go to\" icon"), ref showGoToIcon))
@@ -820,9 +818,7 @@ public class MainWindow : Window
             config.Save();
         }
 
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
+        ModernUi.CardDivider();
 
         var hideOverlayWhenEmpty = config.HideOverlayWhenEmpty;
         if (ModernUi.ToggleRow(Loc.T("Overlay bei leerer Zone ausblenden", "Hide overlay when zone is empty"), ref hideOverlayWhenEmpty, Loc.T(
@@ -833,9 +829,7 @@ public class MainWindow : Window
             config.Save();
         }
 
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
+        ModernUi.CardDivider();
 
         // Automatisch abschalten, falls Allagan Tools nachträglich deinstalliert/deaktiviert wurde -
         // gleiches Muster wie EnableAllaganToolsIntegration (siehe QoL-Karte weiter unten).
@@ -864,9 +858,7 @@ public class MainWindow : Window
         if (!allaganToolsAvailableForRetainerCounts && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(Loc.T("Allagan Tools ist nicht installiert.", "Allagan Tools is not installed."));
 
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
+        ModernUi.CardDivider();
 
         var showAllItems = config.ShowAllItems;
         if (ModernUi.ToggleRow(Loc.T("Alle Gegenstände anzeigen", "Show all items"), ref showAllItems, Loc.T(
@@ -877,9 +869,7 @@ public class MainWindow : Window
             config.Save();
         }
 
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
+        ModernUi.CardDivider();
 
         var showOnlyActiveEventItems = config.ShowOnlyActiveEventItems;
         if (ModernUi.ToggleRow(Loc.T("Nur aktive Event-Gegenstände anzeigen", "Show only active event items"), ref showOnlyActiveEventItems, Loc.T(
@@ -906,9 +896,7 @@ public class MainWindow : Window
                 "Shows a movable arrow pointing to the current target (automation, \"go to\" icon or map link) - disappears on arrival or right-click."));
         }
 
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
+        ModernUi.CardDivider();
 
         var useSprint = config.UseSprintOnCooldown;
         if (ModernUi.ToggleRow(Loc.T("Sprint auf Cooldown nutzen", "Use Sprint on cooldown"), ref useSprint))
@@ -917,9 +905,7 @@ public class MainWindow : Window
             config.Save();
         }
 
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
+        ModernUi.CardDivider();
 
         // Automatisch abschalten, falls Allagan Tools nachträglich deinstalliert/deaktiviert wurde -
         // sonst bliebe die Option "an", obwohl der Klick-Handler (siehe Plugin.OpenAllaganToolsItemInfo)
@@ -955,15 +941,11 @@ public class MainWindow : Window
         ModernUi.BeginCard();
         DrawCombatPluginPicker(config);
 
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
+        ModernUi.CardDivider();
 
         DrawAetheryteMountPicker(config);
 
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
+        ModernUi.CardDivider();
 
         DrawChocoboCompanionSettings(config);
         ModernUi.EndCard();
@@ -981,7 +963,7 @@ public class MainWindow : Window
         var installed = CombatPluginBridge.GetInstalled();
         var effective = CombatPluginBridge.GetEffective();
 
-        ModernUi.LabelRow(Loc.T("Kampf-Plugin", "Combat plugin"), 280f, Loc.T(
+        var combatPluginRowStart = ModernUi.LabelRow(Loc.T("Kampf-Plugin", "Combat plugin"), 280f, Loc.T(
             "Welches Plugin bei der Hunting-Log-Automation (und kampfpflichtigen Quest-Schritten) den Kampf übernimmt.",
             "Which plugin handles combat during the hunting log automation (and combat-required quest steps)."));
 
@@ -992,7 +974,9 @@ public class MainWindow : Window
         var currentLabel = effective is { } current
             ? CombatPluginBridge.DisplayName(current)
             : Loc.T("Keines installiert", "None installed");
-        if (ImGui.BeginCombo("##CombatPlugin", currentLabel))
+        var combatPluginComboOpen = ImGui.BeginCombo("##CombatPlugin", currentLabel);
+        var combatPluginComboHeight = ImGui.GetItemRectSize().Y;
+        if (combatPluginComboOpen)
         {
             foreach (var kind in Enum.GetValues<CombatPluginKind>())
             {
@@ -1033,6 +1017,8 @@ public class MainWindow : Window
                         $"Only {currentLabel} is installed and is used automatically."));
             }
         }
+
+        ModernUi.EndLabelRow(combatPluginRowStart, combatPluginComboHeight);
     }
 
     /// <summary>
@@ -1069,9 +1055,7 @@ public class MainWindow : Window
                 "Requires the completed quest \"My Feisty Little Chocobo\"."));
         }
 
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
+        ModernUi.CardDivider();
 
         var stanceComboEnabled = unlocked && config.UseChocoboCompanion;
         if (!stanceComboEnabled)
@@ -1085,7 +1069,7 @@ public class MainWindow : Window
             (ChocoboStance.FreeStance, Loc.T("Freie Haltung", "Free Stance")),
         };
 
-        ModernUi.LabelRow(Loc.T("Chocobo-Haltung", "Chocobo stance"), 280f);
+        var chocoboStanceRowStart = ModernUi.LabelRow(Loc.T("Chocobo-Haltung", "Chocobo stance"), 280f);
         var currentStanceLabel = string.Empty;
         foreach (var (stance, label) in stances)
         {
@@ -1093,7 +1077,9 @@ public class MainWindow : Window
                 currentStanceLabel = label;
         }
 
-        if (ImGui.BeginCombo("##ChocoboStance", currentStanceLabel))
+        var chocoboStanceComboOpen = ImGui.BeginCombo("##ChocoboStance", currentStanceLabel);
+        var chocoboStanceComboHeight = ImGui.GetItemRectSize().Y;
+        if (chocoboStanceComboOpen)
         {
             foreach (var (stance, label) in stances)
             {
@@ -1124,6 +1110,8 @@ public class MainWindow : Window
 
         if (!stanceComboEnabled)
             ImGui.EndDisabled();
+
+        ModernUi.EndLabelRow(chocoboStanceRowStart, chocoboStanceComboHeight);
     }
 
     private void DrawDisplayTab()
@@ -1137,27 +1125,25 @@ public class MainWindow : Window
         ModernUi.GroupLabel(Loc.T("Overlay-Aussehen", "Overlay appearance"));
         ModernUi.BeginCard();
         var transparency = config.CompactTransparency;
-        ModernUi.LabelRow(Loc.T("Transparenz", "Transparency"), 280f);
+        var transparencyRowStart = ModernUi.LabelRow(Loc.T("Transparenz", "Transparency"), 280f);
         if (ImGui.SliderFloat("##Transparency", ref transparency, 0f, 1f, "%.2f"))
         {
             config.CompactTransparency = transparency;
             config.Save();
         }
+        ModernUi.EndLabelRow(transparencyRowStart);
 
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
+        ModernUi.CardDivider();
         var fontScale = config.CompactFontScale;
-        ModernUi.LabelRow(Loc.T("Textgröße", "Text size"), 280f);
+        var fontScaleRowStart = ModernUi.LabelRow(Loc.T("Textgröße", "Text size"), 280f);
         if (ImGui.SliderFloat("##FontScale", ref fontScale, 0.7f, 2f, "%.2f"))
         {
             config.CompactFontScale = fontScale;
             config.Save();
         }
+        ModernUi.EndLabelRow(fontScaleRowStart);
 
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
+        ModernUi.CardDivider();
         var monoLabel = Loc.T("Monospace", "Monospace");
         var standardLabel = Loc.T("Standard", "Standard");
         var currentLabel = config.CompactFontMode switch
@@ -1167,8 +1153,10 @@ public class MainWindow : Window
             _ => standardLabel,
         };
 
-        ModernUi.LabelRow(Loc.T("Schriftart", "Font"), 280f);
-        if (ImGui.BeginCombo("##CompactFont", currentLabel))
+        var compactFontRowStart = ModernUi.LabelRow(Loc.T("Schriftart", "Font"), 280f);
+        var compactFontComboOpen = ImGui.BeginCombo("##CompactFont", currentLabel);
+        var compactFontComboHeight = ImGui.GetItemRectSize().Y;
+        if (compactFontComboOpen)
         {
             if (ImGui.Selectable(standardLabel, config.CompactFontMode == CompactFontMode.Standard))
             {
@@ -1207,41 +1195,41 @@ public class MainWindow : Window
 
             ImGui.EndCombo();
         }
+        ModernUi.EndLabelRow(compactFontRowStart, compactFontComboHeight);
         ModernUi.EndCard();
 
         ModernUi.GroupLabel(Loc.T("Pfeil-Aussehen", "Arrow appearance"));
         ModernUi.BeginCard();
         var arrowWidth = config.NavigationArrowWidth;
-        ModernUi.LabelRow(Loc.T("Pfeil-Breite", "Arrow width"), 280f);
+        var arrowWidthRowStart = ModernUi.LabelRow(Loc.T("Pfeil-Breite", "Arrow width"), 280f);
         if (ImGui.SliderFloat("##NavigationArrowWidth", ref arrowWidth, 40f, 300f, "%.0f"))
         {
             config.NavigationArrowWidth = arrowWidth;
             config.Save();
         }
+        ModernUi.EndLabelRow(arrowWidthRowStart);
 
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
+        ModernUi.CardDivider();
 
         var arrowHeight = config.NavigationArrowHeight;
-        ModernUi.LabelRow(Loc.T("Pfeil-Höhe", "Arrow height"), 280f);
+        var arrowHeightRowStart = ModernUi.LabelRow(Loc.T("Pfeil-Höhe", "Arrow height"), 280f);
         if (ImGui.SliderFloat("##NavigationArrowHeight", ref arrowHeight, 40f, 300f, "%.0f"))
         {
             config.NavigationArrowHeight = arrowHeight;
             config.Save();
         }
+        ModernUi.EndLabelRow(arrowHeightRowStart);
 
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
+        ModernUi.CardDivider();
 
         var arrowColor = config.NavigationArrowColor;
-        ModernUi.LabelRow(Loc.T("Pfeil-Farbe", "Arrow color"), 280f);
+        var arrowColorRowStart = ModernUi.LabelRow(Loc.T("Pfeil-Farbe", "Arrow color"), 280f);
         if (ImGui.ColorEdit4("##NavigationArrowColor", ref arrowColor, ImGuiColorEditFlags.AlphaBar | ImGuiColorEditFlags.NoInputs))
         {
             config.NavigationArrowColor = arrowColor;
             config.Save();
         }
+        ModernUi.EndLabelRow(arrowColorRowStart);
         ModernUi.EndCard();
 
         ModernUi.GroupLabel(Loc.T("Reihenfolge", "Order"));
@@ -1335,11 +1323,13 @@ public class MainWindow : Window
             var id => unlockedMounts.FirstOrDefault(m => m.Id == (uint)id.Value)?.Name ?? noneLabel,
         };
 
-        ModernUi.LabelRow(Loc.T("Mount", "Mount"), 280f);
+        var aetheryteMountRowStart = ModernUi.LabelRow(Loc.T("Mount", "Mount"), 280f);
         if (noMountsUnlocked)
             ImGui.BeginDisabled();
 
-        if (ImGui.BeginCombo("##AetheryteMount", currentLabel))
+        var aetheryteMountComboOpen = ImGui.BeginCombo("##AetheryteMount", currentLabel);
+        var aetheryteMountComboHeight = ImGui.GetItemRectSize().Y;
+        if (aetheryteMountComboOpen)
         {
             if (ImGui.Selectable(noneLabel, config.AetheryteMountId == null))
             {
@@ -1386,6 +1376,8 @@ public class MainWindow : Window
                     "No mounts unlocked yet."));
             }
         }
+
+        ModernUi.EndLabelRow(aetheryteMountRowStart, aetheryteMountComboHeight);
     }
 
     private void DrawDebugTab()
@@ -1442,9 +1434,7 @@ public class MainWindow : Window
                 config.Save();
             }
 
-            ImGui.Spacing();
-            ImGui.Separator();
-            ImGui.Spacing();
+            ModernUi.CardDivider();
 
             var simulateChocobokeep = config.SimulateChocobokeepAutomation;
             if (ModernUi.ToggleRow(Loc.T("Auto Chocobokeep simulieren", "Simulate Auto Chocobokeep"), ref simulateChocobokeep))
@@ -1453,9 +1443,7 @@ public class MainWindow : Window
                 config.Save();
             }
 
-            ImGui.Spacing();
-            ImGui.Separator();
-            ImGui.Spacing();
+            ModernUi.CardDivider();
 
             var simulateSightseeing = config.SimulateSightseeingAutomation;
             if (ModernUi.ToggleRow(Loc.T("Auto Sightseeing simulieren", "Simulate Auto Sightseeing"), ref simulateSightseeing))
@@ -1464,9 +1452,7 @@ public class MainWindow : Window
                 config.Save();
             }
 
-            ImGui.Spacing();
-            ImGui.Separator();
-            ImGui.Spacing();
+            ModernUi.CardDivider();
 
             var simulateAetherCurrent = config.SimulateAetherCurrentAutomation;
             if (ModernUi.ToggleRow(Loc.T("Auto Ätherströmung simulieren", "Simulate Auto Aether Current"), ref simulateAetherCurrent))

@@ -265,6 +265,26 @@ public static class ModernUi
         ImGui.Dummy(new Vector2(0f, CardTrailingGap));
     }
 
+    // Fester, gleicher Abstand ÜBER und UNTER der Trennlinie (siehe CardDivider) - per Draw-List
+    // statt ImGui.Separator() (dessen eigene Innenabstände nicht exakt symmetrisch sind), damit der
+    // Einstellungstext/Toggle/Combobox einer Zeile exakt vertikal mittig zwischen der Linie darüber
+    // und der Linie darunter sitzt (Nutzeranforderung/Screenshot, wie bei Big Fish Helper).
+    private const float CardDividerPadding = 9f;
+
+    /// <summary>
+    /// Dünne horizontale Trennlinie ZWISCHEN mehreren Einstellungen innerhalb derselben Karte - NICHT
+    /// zu verwechseln mit der Linie in SectionHeader (die trennt Titel/Hilfstext von den Karten
+    /// darunter, nicht einzelne Zeilen INNERHALB einer Karte).
+    /// </summary>
+    public static void CardDivider()
+    {
+        var width = ImGui.GetContentRegionAvail().X;
+        var pos = ImGui.GetCursorScreenPos();
+        var lineY = pos.Y + CardDividerPadding;
+        ImGui.GetWindowDrawList().AddLine(new Vector2(pos.X, lineY), new Vector2(pos.X + width, lineY), ImGui.GetColorU32(ImGuiCol.Separator), 1f);
+        ImGui.Dummy(new Vector2(0f, CardDividerPadding * 2f));
+    }
+
     /// <summary>
     /// Kleine Zwischenüberschrift direkt über einer Karte (z.B. "Match intro" im Referenzdesign) -
     /// um CardMargin eingerückt, damit sie mit dem eingerückten Karteninhalt darunter fluchtet statt
@@ -335,8 +355,14 @@ public static class ModernUi
     /// Widget auf - direkt danach z.B. ImGui.SliderFloat mit SetNextItemWidth(controlWidth) davor.
     /// helpText siehe HelpIconIfHovered-Kommentar - die Zeilenhöhe wird dabei als einfache
     /// Framehöhe angenommen (für mehrzeilige Controls direkt HelpIconIfHovered selbst aufrufen).
+    /// Gibt die Zeilen-Startposition zurück - direkt nach dem eigentlichen Widget (Combo/Slider) an
+    /// EndLabelRow übergeben, sonst bestimmt das Widget selbst (mitsamt ImGuis eigener Abstands-
+    /// Verbuchung) die Zeilenhöhe, was neben ToggleRow (das den Cursor explizit auf eine feste Höhe
+    /// setzt) sichtbar uneinheitlich aussah (Nutzer-Report/Screenshot, wie bei Big Fish Helper).
+    /// contentOffsetY verschiebt NUR Label+Widget (nicht rowStart selbst) - für Zeilen, bei denen
+    /// EndLabelRow mit reduzierter Höhe aufgerufen wird, um den Inhalt wieder zu zentrieren.
     /// </summary>
-    public static void LabelRow(string label, float controlWidth, string? helpText = null)
+    public static Vector2 LabelRow(string label, float controlWidth, string? helpText = null, float contentOffsetY = 0f)
     {
         // Von Hand positioniert statt AlignTextToFramePadding()+SameLine() (identisches Problem wie
         // in BigFishHelper per Nutzer-Screenshot entdeckt: Beschriftung sitzt bei Combo-/Slider-Zeilen
@@ -356,17 +382,33 @@ public static class ModernUi
         // korrekt zentriert) - siehe ToggleRow-Kommentar: TextUnformitted addiert beim Zeichnen
         // intern noch einen "Zeilen-Basislinien-Offset", der von der GroupLabel-Überschrift direkt
         // davor nachhängen kann. AddText umgeht das komplett.
-        var labelPos = rowScreenMin + new Vector2(0f, (rowHeight - textHeight) * 0.5f);
+        var labelPos = rowScreenMin + new Vector2(0f, (rowHeight - textHeight) * 0.5f + contentOffsetY);
         ImGui.GetWindowDrawList().AddText(labelPos, ImGui.GetColorU32(ImGuiCol.Text), label);
         var labelMax = labelPos + ImGui.CalcTextSize(label);
         var labelMinY = labelPos.Y;
 
         var widgetX = totalAvail > controlWidth ? rowStart.X + totalAvail - controlWidth : rowStart.X;
-        ImGui.SetCursorPos(new Vector2(widgetX, rowStart.Y));
+        ImGui.SetCursorPos(new Vector2(widgetX, rowStart.Y + contentOffsetY));
         ImGui.SetNextItemWidth(controlWidth);
 
         if (!string.IsNullOrEmpty(helpText))
             HelpIconIfHovered(rowScreenMin, new Vector2(totalAvail, rowHeight), labelMax, labelMinY, helpText);
+
+        return rowStart;
+    }
+
+    /// <summary>
+    /// Direkt NACH dem eigentlichen Widget (Combo/SliderFloat/ColorEdit) aufzurufen, mit der von
+    /// LabelRow zurückgegebenen Zeilen-Startposition - setzt den Cursor explizit auf eine feste
+    /// Zeilenhöhe. measuredHeight optional für Widgets, bei denen GetItemRectSize() direkt danach
+    /// nicht mehr zuverlässig das richtige Element liefert (z.B. ein Combo, in dessen Popup danach
+    /// noch weitere Elemente gezeichnet wurden - dort gleich nach BeginCombo() selbst messen und hier
+    /// durchreichen). Ohne Angabe wird GetItemRectSize() des zuletzt gezeichneten Elements genutzt.
+    /// </summary>
+    public static void EndLabelRow(Vector2 rowStart, float? measuredHeight = null)
+    {
+        var height = measuredHeight ?? ImGui.GetItemRectSize().Y;
+        ImGui.SetCursorPos(rowStart + new Vector2(0f, height));
     }
 
     /// <summary>
@@ -399,9 +441,8 @@ public static class ModernUi
             ImGui.SetTooltip(helpText);
     }
 
-    // Von ToggleRow UND ToggleSwitch genutzt, damit beide immer dieselbe Höhe annehmen - größer
-    // als die Standard-Framehöhe (1.15x), damit der Schalter sichtbar größer als ein Textfeld wirkt.
-    private const float ToggleHeightScale = 1.05f;
+    // Von ToggleRow UND ToggleSwitch genutzt, damit beide immer dieselbe Höhe annehmen.
+    private const float ToggleHeightScale = 1f;
 
     /// <summary>
     /// Zeile "Beschriftung ..................... Toggle" - Kombination aus LabelRow und
@@ -409,7 +450,9 @@ public static class ModernUi
     /// HelpIconIfHovered-Kommentar - ersetzt den früher permanent darunter stehenden Fließtext:
     /// erscheint nur noch als "?"-Icon neben dem Titel, solange die Zeile gehovert wird.
     /// </summary>
-    public static bool ToggleRow(string label, ref bool value, string? helpText = null)
+    /// <param name="heightReduction">Feinjustierung der Zeilenhöhe, damit Toggle-Zeilen genauso hoch wie Combobox-/Slider-Zeilen (LabelRow/EndLabelRow) wirken (Nutzeranforderung/Screenshot, kalibriert anhand Big Fish Helper).</param>
+    /// <param name="contentOffsetY">Verschiebt NUR Label+Toggle (nicht den Zeilen-Endpunkt) - gleicht die Kürzung durch heightReduction wieder aus.</param>
+    public static bool ToggleRow(string label, ref bool value, string? helpText = null, float heightReduction = 7f, float contentOffsetY = -8f)
     {
         // Bewusst mit von Hand berechneten Positionen statt AlignTextToFramePadding() (das nimmt
         // die volle Standard-Framehöhe an) - der Toggle weicht davon ab (siehe ToggleHeightScale),
@@ -430,19 +473,19 @@ public static class ModernUi
         // Per Draw-List statt SetCursorPos()+TextUnformitted() - siehe LabelRow-Kommentar: umgeht
         // TextUnformitteds internen Zeilen-Basislinien-Offset, der sonst bei der ersten Zeile pro
         // Karte (direkt nach der größer skalierten GroupLabel-Überschrift) nachhängen kann.
-        var labelPos = rowScreenMin + new Vector2(0f, (rowHeight - textHeight) * 0.5f);
+        var labelPos = rowScreenMin + new Vector2(0f, (rowHeight - textHeight) * 0.5f + contentOffsetY);
         ImGui.GetWindowDrawList().AddText(labelPos, ImGui.GetColorU32(ImGuiCol.Text), label);
         var labelMax = labelPos + ImGui.CalcTextSize(label);
         var labelMinY = labelPos.Y;
 
         var toggleX = totalAvail > toggleWidth ? rowStart.X + totalAvail - toggleWidth : rowStart.X;
-        ImGui.SetCursorPos(new Vector2(toggleX, rowStart.Y + (rowHeight - toggleHeight) * 0.5f));
+        ImGui.SetCursorPos(new Vector2(toggleX, rowStart.Y + (rowHeight - toggleHeight) * 0.5f + contentOffsetY));
         var changed = ToggleSwitch($"##toggle_{label}", ref value);
 
         if (!string.IsNullOrEmpty(helpText))
             HelpIconIfHovered(rowScreenMin, new Vector2(totalAvail, rowHeight), labelMax, labelMinY, helpText);
 
-        ImGui.SetCursorPos(rowStart + new Vector2(0f, rowHeight));
+        ImGui.SetCursorPos(rowStart + new Vector2(0f, rowHeight - heightReduction));
         return changed;
     }
 
