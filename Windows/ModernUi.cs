@@ -265,16 +265,12 @@ public static class ModernUi
                 drawList.AddRectFilled(min + offset, max + offset, ImGui.ColorConvertFloat4ToU32(new Vector4(0f, 0f, 0f, alpha)), rounding);
             }
 
-            // Basisfüllung - AddRectFilledMultiColor (für einen echten Verlauf) unterstützt KEINE
-            // Rundung, das hätte eckige Ecken unter dem runden Rahmen hervorblitzen lassen (Nutzer-
-            // Report/Screenshot). Stattdessen: flache Füllung plus ein leicht akzentuiertes,
-            // korrekt rund abgeschlossenes Band oben für einen dezenten Verlaufs-Eindruck.
+            // Flache Füllung - ein echter Verlauf (AddRectFilledMultiColor) unterstützt keine
+            // Rundung (eckige Ecken unter dem runden Rahmen, erster Report/Screenshot), und ein
+            // separates Tönungs-Band oben sah als sichtbar abgesetzter Streifen in der ersten Zeile
+            // genauso falsch aus (zweiter Report/Screenshot) - einfach einfarbig, der pulsierende
+            // Rahmen unten liefert den Akzent.
             drawList.AddRectFilled(min, max, ImGui.ColorConvertFloat4ToU32(CardBg), rounding);
-
-            var topTint = LerpColor(CardBg, Accent, 0.06f);
-            topTint.W = CardBg.W;
-            var bandHeight = MathF.Min(28f, (max.Y - min.Y) * 0.4f);
-            drawList.AddRectFilled(min, new Vector2(max.X, min.Y + bandHeight), ImGui.ColorConvertFloat4ToU32(topTint), rounding, ImDrawFlags.RoundCornersTop);
 
             // Leicht pulsierender, akzentfarbener Rahmen-Schimmer statt eines starren Rands.
             var pulse = 0.5f + 0.5f * MathF.Sin(animTime * 1.3f);
