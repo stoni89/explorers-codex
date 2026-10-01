@@ -265,13 +265,16 @@ public static class ModernUi
                 drawList.AddRectFilled(min + offset, max + offset, ImGui.ColorConvertFloat4ToU32(new Vector4(0f, 0f, 0f, alpha)), rounding);
             }
 
-            // Sanfter Verlauf von leicht akzentuiert (oben links) zu normalem Kartenhintergrund
-            // (unten rechts) statt einer flachen Füllfarbe.
-            var topTint = LerpColor(CardBg, Accent, 0.05f);
+            // Basisfüllung - AddRectFilledMultiColor (für einen echten Verlauf) unterstützt KEINE
+            // Rundung, das hätte eckige Ecken unter dem runden Rahmen hervorblitzen lassen (Nutzer-
+            // Report/Screenshot). Stattdessen: flache Füllung plus ein leicht akzentuiertes,
+            // korrekt rund abgeschlossenes Band oben für einen dezenten Verlaufs-Eindruck.
+            drawList.AddRectFilled(min, max, ImGui.ColorConvertFloat4ToU32(CardBg), rounding);
+
+            var topTint = LerpColor(CardBg, Accent, 0.06f);
             topTint.W = CardBg.W;
-            var topColor = ImGui.ColorConvertFloat4ToU32(topTint);
-            var baseColor = ImGui.ColorConvertFloat4ToU32(CardBg);
-            drawList.AddRectFilledMultiColor(min, max, topColor, topColor, baseColor, baseColor);
+            var bandHeight = MathF.Min(28f, (max.Y - min.Y) * 0.4f);
+            drawList.AddRectFilled(min, new Vector2(max.X, min.Y + bandHeight), ImGui.ColorConvertFloat4ToU32(topTint), rounding, ImDrawFlags.RoundCornersTop);
 
             // Leicht pulsierender, akzentfarbener Rahmen-Schimmer statt eines starren Rands.
             var pulse = 0.5f + 0.5f * MathF.Sin(animTime * 1.3f);
