@@ -1017,6 +1017,9 @@ public sealed class AetherCurrentAutomation
         jumpRouteReturnPath = null;
         returnWaypointIndex = 0;
         returnToStartArrivedAt = null;
+        // Enge Toleranz (siehe IssueReturnWaypointMove) nicht dauerhaft gesetzt lassen - das nächste
+        // Ziel wird wieder ganz normal mit der großzügigeren ArrivalTolerance angelaufen.
+        RestorePathTolerance();
         state = State.Idle;
     }
 
@@ -1042,9 +1045,13 @@ public sealed class AetherCurrentAutomation
 
     private void IssueReturnWaypointMove()
     {
-        SetExactPathTolerance(false);
+        // Ohne Toleranz genau auf die hinterlegten Punkte laufen (Nutzeranforderung: "ohne Toleranz
+        // auf die Punkte laufen und erst zum nächsten wenn er angekommen ist") - ArrivalTolerance
+        // (6y, für die grobe Anfahrt zur Ätherströmung gedacht) blieb hier schon weit vor den echten
+        // Punkten stehen. Gleiche enge Toleranz wie beim Sprung selbst (JumpRoutePreciseTolerance).
+        SetExactPathTolerance(true);
         var waypoint = jumpRouteReturnPath![returnWaypointIndex];
-        if (!pathfindAndMoveCloseTo.InvokeFunc(waypoint, false, ArrivalTolerance))
+        if (!pathfindAndMoveCloseTo.InvokeFunc(waypoint, false, JumpRoutePreciseTolerance))
         {
             // vnavmesh lehnt ab (z.B. schon am Wegpunkt) - kein Problem, einfach direkt fertig.
             FinishCurrent();
@@ -1094,9 +1101,9 @@ public sealed class AetherCurrentAutomation
         // angefangen werden (Nutzer-Report: "fängt den gleichen von vorne an").
         var waypoint = jumpRouteReturnPath![returnWaypointIndex];
         var playerPos = Plugin.ObjectTable.LocalPlayer?.Position;
-        if (playerPos is { } pos && Vector3.Distance(pos, waypoint) > ArrivalTolerance)
+        if (playerPos is { } pos && Vector3.Distance(pos, waypoint) > JumpRoutePreciseTolerance)
         {
-            pathfindAndMoveCloseTo.InvokeFunc(waypoint, false, ArrivalTolerance);
+            pathfindAndMoveCloseTo.InvokeFunc(waypoint, false, JumpRoutePreciseTolerance);
             return;
         }
 
