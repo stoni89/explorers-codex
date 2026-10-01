@@ -2356,6 +2356,12 @@ public sealed class Plugin : IDalamudPlugin
             new Vector3(399.45297f, -92.03338f, 683.3449f),
             new Vector3(401.5101f, -92.208374f, 684.6267f),
             new Vector3(403.9884f, -90.32586f, 686.1742f)),
+        [2818117] = new( // The Sea of Clouds (Before Ok' Zundu entrance) - Sprung direkt ab Startpunkt,
+                          // kein separater Anlaufpunkt (RunUpPoint = Start), danach nur noch zu Fuß
+                          // (kein weiterer Sprung) zur echten Position (entry.WorldPosition).
+            new Vector3(-755.60956f, -13.877344f, -120.60146f),
+            new Vector3(-755.60956f, -13.877344f, -120.60146f),
+            new Vector3(-756.6963f, -11.8391f, -117.56789f)),
     };
 
     /// <summary>Siehe AetherCurrentJumpRoutes-Kommentar.</summary>
