@@ -162,13 +162,6 @@ public class Configuration : IPluginConfiguration
     // #FFC200FF
     public Vector4 NavigationArrowColor { get; set; } = new(1f, 0.7607843f, 0f, 1f);
 
-    // Schickeres Menü-Design mit sanften Animationen (Glanz-/Leuchteffekte, weiche Übergänge an
-    // Toggles/Karten) für das Hauptfenster - Nutzeranforderung: "extrem schön... jederzeit wieder
-    // zurückgehen können zum aktuellen Menü Design, wenn es mir doch nicht gefällt." Default true
-    // (das ist ja der neue, gewünschte Look), per Schalter in den Allgemein-Einstellungen aber
-    // jederzeit auf das bisherige, schlichtere Design zurückstellbar (siehe ModernUi.Enhanced).
-    public bool EnhancedUiTheme { get; set; } = true;
-
     // Debug
     public bool ShowDebugInfo { get; set; } = false;
 

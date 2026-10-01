@@ -195,9 +195,6 @@ public class MainWindow : Window
         // Eingeklappt eigenes, knapperes oberes/unteres Innenpolster (siehe WindowPaddingYCollapsed-
         // Kommentar oben) - macht die eingeklappte Titelleiste so kompakt wie bei anderen Dalamud-
         // Plugins mit nativer Titelleiste.
-        // Siehe Configuration.EnhancedUiTheme/ModernUi.Enhanced-Kommentar - VOR PushStyle gesetzt,
-        // da PushStyle im Enhanced-Modus leicht andere Rundungswerte verwendet.
-        ModernUi.Enhanced = plugin.Configuration.EnhancedUiTheme;
         ModernUi.AdvanceAnimationTime(ImGui.GetIO().DeltaTime);
         ModernUi.PushStyle(new Vector2(12f, collapsed ? WindowPaddingYCollapsed : WindowPaddingY));
     }
@@ -770,22 +767,6 @@ public class MainWindow : Window
             }
 
             ImGui.EndCombo();
-        }
-
-        ModernUi.EndCard();
-
-        ModernUi.GroupLabel(Loc.T("Design", "Design"));
-        ModernUi.BeginCard();
-        var enhancedTheme = config.EnhancedUiTheme;
-        if (ModernUi.ToggleRow(
-                Loc.T("Elegantes Design", "Elegant design"),
-                ref enhancedTheme,
-                Loc.T(
-                    "Schickeres Menü mit weichen Leuchteffekten und Übergängen. Aus = zurück zum bisherigen, schlichten Design.",
-                    "Fancier menu with soft glow effects and transitions. Off = back to the previous, plain design.")))
-        {
-            config.EnhancedUiTheme = enhancedTheme;
-            config.Save();
         }
 
         ModernUi.EndCard();
