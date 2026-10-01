@@ -98,6 +98,15 @@ public class CompactOverlayWindow : Window
     // Verschwinden des nativen Fensters wieder genau der vom Spieler zuletzt gewählte Zustand gilt.
     private bool autoCollapsedForNativeOverlap;
 
+    // Milderer Fall von autoCollapsedForNativeOverlap (Nutzeranforderung: "nicht alles ausblenden,
+    // wenn möglich") - überlappt das native Fenster NICHT bis ganz nach oben, bleibt genug Platz, um
+    // nur auf den freien oberen Teil (Kopfzeile + Anfang der Liste) zu schrumpfen, statt komplett auf
+    // Kopfzeilenhöhe einzuklappen. null = kein Teil-Schrumpfen nötig/möglich diesen Frame.
+    private float? autoShrinkToHeight;
+
+    private const float AutoShrinkMinimumHeight = 80f;
+    private const float AutoShrinkSafetyMargin = 4f;
+
     private bool EffectiveCollapsed() => collapsed || autoCollapsedForNativeOverlap;
 
     // Wie collapsedLastFrame, aber für Configuration.HideOverlayWhenEmpty (siehe DrawContent, ganz
@@ -182,8 +191,25 @@ public class CompactOverlayWindow : Window
         // Auto-Einklappens geschrumpften) lastWindowMax - sonst würde das geschrumpfte Fenster das
         // native nicht mehr überlappen, "ausklappen" auslösen, das wieder überlappt, wieder
         // einklappt, usw. (Endlos-Geflacker zwischen ein-/ausgeklappt).
-        autoCollapsedForNativeOverlap = lastWindowMin.HasValue
-            && Plugin.HasOverlappingDraggableNativeWindow(lastWindowMin.Value, lastWindowMin.Value + expandedSize);
+        //
+        // Bevorzugt NUR auf den nicht überlappten oberen Teil schrumpfen (autoShrinkToHeight,
+        // Nutzeranforderung: "nicht alles ausblenden, wenn möglich") - überlappt das native Fenster
+        // z.B. nur die untere Hälfte, bleiben Zonenname/obere Listeneinträge weiterhin sichtbar und
+        // bedienbar. Komplettes Einklappen (autoCollapsedForNativeOverlap) nur noch als Rückfall,
+        // wenn für den oberen Teil nicht einmal mehr AutoShrinkMinimumHeight übrig bleibt (natives
+        // Fenster reicht bis (fast) an die eigene Kopfzeile heran).
+        autoCollapsedForNativeOverlap = false;
+        autoShrinkToHeight = null;
+        if (lastWindowMin.HasValue
+            && Plugin.TryGetOverlappingDraggableNativeWindowRect(lastWindowMin.Value, lastWindowMin.Value + expandedSize, out var nativeMin, out _))
+        {
+            var availableHeight = nativeMin.Y - lastWindowMin.Value.Y - AutoShrinkSafetyMargin;
+            if (availableHeight >= AutoShrinkMinimumHeight)
+                autoShrinkToHeight = availableHeight;
+            else
+                autoCollapsedForNativeOverlap = true;
+        }
+
         var effectiveCollapsed = EffectiveCollapsed();
 
         // Gesperrt = nur die Position fixiert, nicht die Größe - das Fenster bleibt also auch im
@@ -196,7 +222,10 @@ public class CompactOverlayWindow : Window
         var flags = BaseFlags;
         if (config.CompactLocked)
             flags |= ImGuiWindowFlags.NoMove;
-        if (effectiveCollapsed)
+        // Während des (vollen ODER teilweisen) automatischen Schrumpfens ebenfalls NoResize - siehe
+        // Begründung oben beim normalen Einklappen, gilt für den Teil-Fall genauso.
+        var adjustedThisFrame = effectiveCollapsed || autoShrinkToHeight.HasValue;
+        if (adjustedThisFrame)
             flags |= ImGuiWindowFlags.NoResize;
 
         Flags = flags;
@@ -206,12 +235,20 @@ public class CompactOverlayWindow : Window
         // verhindern, egal was wir per Größe vorgeben.
         ImGui.PushStyleVar(ImGuiStyleVar.WindowMinSize, new Vector2(1f, 1f));
 
+        if (autoShrinkToHeight.HasValue)
+        {
+            // Zielhöhe schon VOR Begin() bekannt (aus der Position des nativen Fensters berechnet,
+            // kein Messen nach dem Zeichnen nötig wie beim vollen Einklappen unten) - wirkt dadurch
+            // sofort in diesem Frame.
+            Size = new Vector2(expandedSize.X, autoShrinkToHeight.Value);
+            SizeCondition = ImGuiCond.Always;
+        }
         // Zurück zur zuletzt bekannten ausgeklappten Größe - muss VOR Begin() passieren (siehe
         // MainWindow.PreDraw), sonst kommt die Wiederherstellung erst einen Frame zu spät sichtbar
-        // an. Das Schrumpfen beim EINklappen passiert dagegen bewusst NICHT hier, sondern erst in
-        // DrawContent (nach Begin()) - dort ist die tatsächlich benötigte Höhe der Kopfzeile bekannt
-        // (abhängig von config.CompactFontScale), hier vorher noch nicht.
-        if ((!effectiveCollapsed && collapsedLastFrame) || hiddenDueToEmptyLastFrame)
+        // an. Das Schrumpfen beim (vollen) EINklappen passiert dagegen bewusst NICHT hier, sondern
+        // erst in DrawContent (nach Begin()) - dort ist die tatsächlich benötigte Höhe der Kopfzeile
+        // bekannt (abhängig von config.CompactFontScale), hier vorher noch nicht.
+        else if ((!adjustedThisFrame && collapsedLastFrame) || hiddenDueToEmptyLastFrame)
         {
             Size = expandedSize;
             SizeCondition = ImGuiCond.Always;
@@ -221,7 +258,7 @@ public class CompactOverlayWindow : Window
             SizeCondition = ImGuiCond.FirstUseEver;
         }
 
-        collapsedLastFrame = effectiveCollapsed;
+        collapsedLastFrame = adjustedThisFrame;
 
         var alpha = 1f - System.Math.Clamp(config.CompactTransparency, 0f, 1f);
 
@@ -273,11 +310,11 @@ public class CompactOverlayWindow : Window
         lastWindowMin = ImGui.GetWindowPos();
         lastWindowMax = lastWindowMin + ImGui.GetWindowSize();
 
-        // Nur merken, solange NICHT (auch automatisch wegen überlappendem nativen Fenster)
-        // eingeklappt - sonst würde die (künstlich auf Kopfzeilenhöhe geschrumpfte) Größe
-        // versehentlich als "neue ausgeklappte Normalgröße" gespeichert und beim Ausklappen fälschlich
-        // wiederhergestellt (identisches Problem/Lösung wie in MainWindow.Draw).
-        if (!EffectiveCollapsed())
+        // Nur merken, solange NICHT (voll ODER teilweise, auch automatisch wegen überlappendem
+        // nativen Fenster) geschrumpft - sonst würde die künstlich verkleinerte Größe versehentlich
+        // als "neue ausgeklappte Normalgröße" gespeichert und beim Zurückkehren zur Normalgröße
+        // fälschlich wiederhergestellt (identisches Problem/Lösung wie in MainWindow.Draw).
+        if (!EffectiveCollapsed() && !autoShrinkToHeight.HasValue)
             expandedSize = ImGui.GetWindowSize();
 
         // Dalamud/ImGui zeichnet grundsätzlich IMMER über dem nativen Spiel-UI (keine echte Z-Order

@@ -5979,8 +5979,9 @@ public sealed class Plugin : IDalamudPlugin
     /// CompactOverlayWindow.PreDraw: ein per ImGuiP.SetWindowHitTestHole gestanztes Loch reicht für
     /// normale Klicks (Knöpfe etc.), aber NICHT zuverlässig zum VERSCHIEBEN eines Fensters per Ziehen
     /// an seiner Titelleiste (Nutzer-Report: "Das Fenster vom Beastmaster ist nicht verschiebbar").
-    /// Steht die Maus über so einem Fenster, wird das Overlay für den Frame komplett auf NoInputs
-    /// geschaltet (siehe PreDraw), statt nur ein Loch zu stanzen.
+    /// Steht die Maus über so einem Fenster, klappt das Overlay (teilweise oder ganz) automatisch
+    /// ein (siehe CompactOverlayWindow.autoCollapsedForNativeOverlap/autoShrinkToHeight) - NoInputs
+    /// wurde dafür ebenfalls versucht, hat sich im Live-Test aber als wirkungslos erwiesen.
     ///
     /// Zwei vorherige, verworfene Fassungen:
     /// 1) "Irgendein sichtbares Fenster mit Titelleiste" - zu breit: zählte auch ein irgendwo offen
@@ -5995,8 +5996,21 @@ public sealed class Plugin : IDalamudPlugin
     /// abfragbar) und bleibt trotzdem eng genug: nur dort aktiv, wo der Spieler gerade tatsächlich
     /// zeigt/klickt/zieht.
     /// </summary>
-    public static unsafe bool HasOverlappingDraggableNativeWindow(Vector2 min, Vector2 max)
+    public static unsafe bool HasOverlappingDraggableNativeWindow(Vector2 min, Vector2 max) =>
+        TryGetOverlappingDraggableNativeWindowRect(min, max, out _, out _);
+
+    /// <summary>
+    /// Wie HasOverlappingDraggableNativeWindow, liefert aber zusätzlich das Rechteck des gefundenen
+    /// nativen Fensters zurück - für CompactOverlayWindow: statt IMMER komplett einzuklappen, kann so
+    /// versucht werden, nur auf den NICHT überlappten oberen Teil zu schrumpfen (Nutzeranforderung:
+    /// "Gibt es eine Möglichkeit nicht alles auszublenden"), und nur dann komplett einzuklappen, wenn
+    /// dafür kein sinnvoller Platz mehr übrig bleibt.
+    /// </summary>
+    public static unsafe bool TryGetOverlappingDraggableNativeWindowRect(Vector2 min, Vector2 max, out Vector2 nativeMin, out Vector2 nativeMax)
     {
+        nativeMin = default;
+        nativeMax = default;
+
         var unitManager = RaptureAtkUnitManager.Instance();
         if (unitManager == null)
             return false;
@@ -6016,7 +6030,12 @@ public sealed class Plugin : IDalamudPlugin
                 continue; // überlappt das Overlay gar nicht - irrelevant.
 
             if (mousePos.X >= unitMin.X && mousePos.X < unitMax.X && mousePos.Y >= unitMin.Y && mousePos.Y < unitMax.Y)
-                return true; // Maus steht gerade über diesem (überlappenden) Fenster.
+            {
+                // Maus steht gerade über diesem (überlappenden) Fenster.
+                nativeMin = unitMin;
+                nativeMax = unitMax;
+                return true;
+            }
         }
 
         return false;
