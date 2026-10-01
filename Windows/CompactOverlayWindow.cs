@@ -521,7 +521,13 @@ public class CompactOverlayWindow : Window
             .Where(e => (!Plugin.IsSightseeingUnsupportedByAutomation(e.Id)
                          || (config.SimulateSightseeingAutomation && Plugin.TryGetSightseeingJumpingPuzzle(e.Id, out _)))
                         && !Plugin.IsSightseeingBlockedByFlying(e))
-            .Where(e => config.SimulateSightseeingAutomation || (!plugin.IsOwned(e) && !Plugin.IsAchievementOrRankGated(e)))
+            // Bewusst NICHT IsAchievementOrRankGated (das lehnt sich an ComputeGrandCompanyOrTribeGateReason
+            // an, welches für Sightseeing-Punkte AUCH Wetter/Uhrzeit als "Gate-Grund" zählt und damit einen
+            // nur deswegen gerade blockierten Punkt hier fälschlich komplett ausgeschlossen hätte, noch
+            // bevor hasActionableSightseeing unten ihn überhaupt sehen konnte - IsSightseeingBookAccessible
+            // prüft exakt dieselben ÜBERGEORDNETEN Voraussetzungen (Log/Fliegen/erste 20/Gate-Quest) OHNE
+            // Wetter/Uhrzeit.
+            .Where(e => config.SimulateSightseeingAutomation || (!plugin.IsOwned(e) && Plugin.IsSightseeingBookAccessible(e)))
             .ToList();
         // Punkte, die NUR wegen Wetter/Uhrzeit gerade nicht gehen (siehe
         // Plugin.IsSightseeingOnlyTemporarilyUnavailable) - solange davon noch welche übrig sind, wartet
@@ -586,17 +592,23 @@ public class CompactOverlayWindow : Window
         // sinnlos loszulaufen (Nutzeranforderung).
         var hasActionableAetherCurrents = missingAetherCurrentsInZone.Any(e => e.HasGoToTarget && !Plugin.IsAchievementOrRankGated(e));
         // hasVisibleSightseeing entscheidet nur, ob der Knopf überhaupt gezeichnet wird (siehe
-        // DrawAutomationButtonIfNeeded) - hasActionableSightseeing (gerade durch Wetter/Uhrzeit/
-        // Buch-Freischaltung eingeschränkt) entscheidet zusätzlich, ob er dabei ausgegraut ist. Im
-        // Simulation-Modus (Configuration.SimulateSightseeingAutomation) zählen bewusst auch schon
-        // BESESSENE Punkte (nicht nur visibleSightseeingInZone, das die nur zum Testen ausblendet) -
-        // sonst verschwindet der Knopf dort, sobald alle Punkte der Zone bereits abgeschlossen sind,
-        // obwohl der Simulation-Modus ja gerade dafür da ist, genau solche Punkte erneut anzulaufen.
+        // DrawAutomationButtonIfNeeded) - hasActionableSightseeing entscheidet zusätzlich, ob er dabei
+        // ausgegraut ist. Im Simulation-Modus (Configuration.SimulateSightseeingAutomation) zählen
+        // bewusst auch schon BESESSENE Punkte (nicht nur visibleSightseeingInZone, das die nur zum
+        // Testen ausblendet) - sonst verschwindet der Knopf dort, sobald alle Punkte der Zone bereits
+        // abgeschlossen sind, obwohl der Simulation-Modus ja gerade dafür da ist, genau solche Punkte
+        // erneut anzulaufen.
         var hasVisibleSightseeing = (config.SimulateSightseeingAutomation
                 ? allForZone.Any(e => e.Type == CollectibleType.Sightseeing && e.HasGoToTarget)
                 : visibleSightseeingInZone.Any(e => e.HasGoToTarget))
             && Plugin.IsSightseeingLogUnlocked();
-        var hasActionableSightseeing = missingSightseeingInZone.Any(e => e.HasGoToTarget) && Plugin.IsSightseeingLogUnlocked();
+        // Bewusst NICHT nach Wetter/Uhrzeit gefiltert (Nutzeranforderung: "nicht ausgrauen, wenn
+        // mindestens 1 Eintrag mit condition not met aufgrund Wetter oder Zeit ist") - ein Punkt, der
+        // NUR deswegen gerade nicht geht, zählt weiterhin als aktionierbar, die Automation wartet
+        // dann einfach ab (siehe pendingSightseeingInZone/AFK-Modus oben). IsSightseeingBookAccessible
+        // prüft dagegen alle ÜBERGEORDNETEN Voraussetzungen (Log/Fliegen/erste 20/Quest-Freischaltung
+        // des Buchs) - fehlt eine davon, bleibt der Knopf wie bisher ausgegraut.
+        var hasActionableSightseeing = missingSightseeingInZone.Any(e => e.HasGoToTarget && Plugin.IsSightseeingBookAccessible(e));
         var hasActionableChocobokeeps = missingChocobokeepsInZone.Any(e => e.HasGoToTarget);
         var hasActionableTripleTriad = missingNpcCardsInZone.Count > 0;
 
@@ -1999,8 +2011,8 @@ public class CompactOverlayWindow : Window
                             ? OtherAutomationActiveTooltip
                         : isDisabled
                             ? Loc.T(
-                                "Aktuell kein Sightseeing-Punkt in dieser Zone erreichbar (keine bekannte Position, oder Wetter/Uhrzeit passt gerade nicht).",
-                                "No sightseeing point currently reachable in this zone (no known position, or the weather/time doesn't match right now).")
+                                "Aktuell kein Sightseeing-Punkt in dieser Zone erreichbar (keine bekannte Position, oder Fliegen/Quest-Freischaltung fehlt noch). Nur wegen Wetter/Uhrzeit gesperrte Punkte zählen weiterhin als erreichbar, die Automation wartet dann einfach ab.",
+                                "No sightseeing point currently reachable in this zone (no known position, or flying/the gating quest isn't unlocked yet). Points only blocked by weather/time still count as reachable - the automation just waits them out.")
                             : automation.IsActive
                             ? Loc.T("Bricht die Laufbewegung sofort ab und stoppt die Automation.", "Immediately stops movement and the automation.")
                             : Loc.T(

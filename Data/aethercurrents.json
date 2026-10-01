@@ -132,8 +132,7 @@
         "Category": "Aether Current",
         "TerritoryTypeId": 400,
         "MapId": 214,
-        "VendorMapX": 30.9,
-        "VendorMapY": 35.7,
+        "WorldPosition": {"X": 420.922, "Y": -43.398537, "Z": 660.618},
         "Source": "Field exploration"
     },
     {
@@ -143,8 +142,7 @@
         "Category": "Aether Current",
         "TerritoryTypeId": 400,
         "MapId": 214,
-        "VendorMapX": 20.6,
-        "VendorMapY": 27,
+        "WorldPosition": {"X": -94.26475, "Y": -8.844476, "Z": 222.46089},
         "Source": "Field exploration"
     },
     {
@@ -154,8 +152,7 @@
         "Category": "Aether Current",
         "TerritoryTypeId": 400,
         "MapId": 214,
-        "VendorMapX": 7,
-        "VendorMapY": 27.4,
+        "WorldPosition": {"X": -775.12286, "Y": 123.728714, "Z": 242.13803},
         "Source": "Field exploration"
     },
     {

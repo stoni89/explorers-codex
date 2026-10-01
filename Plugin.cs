@@ -34,7 +34,14 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IDalamudPluginInterface PluginInterface { get; private set; } = null!;
     [PluginService] internal static ICommandManager CommandManager { get; private set; } = null!;
     [PluginService] internal static IClientState ClientState { get; private set; } = null!;
-    [PluginService] internal static IPluginLog Log { get; private set; } = null!;
+    // RawLog = das von Dalamud injizierte, echte IPluginLog. Log selbst liefert stattdessen einen
+    // PluginLogRecorder, der jeden Aufruf unverändert an RawLog weiterreicht (identisches Verhalten
+    // in /xllog) UND zusätzlich in PluginLogStore ablegt, damit die eigene Log-Seite im Plugin-Menü
+    // (siehe MainWindow.DrawLogPage) die eigenen Log-Zeilen durchsuchbar/filterbar anzeigen kann -
+    // ALLE bestehenden Plugin.Log.X(...)-Aufrufstellen im Projekt bleiben dadurch unverändert.
+    [PluginService] internal static IPluginLog RawLog { get; private set; } = null!;
+    private static PluginLogRecorder? logRecorder;
+    internal static IPluginLog Log => logRecorder ??= new PluginLogRecorder(RawLog);
     [PluginService] internal static IGameGui GameGui { get; private set; } = null!;
     [PluginService] internal static ITextureProvider TextureProvider { get; private set; } = null!;
     [PluginService] internal static IDataManager DataManager { get; private set; } = null!;
@@ -44,6 +51,7 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static ICondition Condition { get; private set; } = null!;
     [PluginService] internal static IUnlockState UnlockState { get; private set; } = null!;
     [PluginService] internal static IDutyState DutyState { get; private set; } = null!;
+    [PluginService] internal static INotificationManager NotificationManager { get; private set; } = null!;
 
     private const string CommandName = "/exc";
 
@@ -1154,22 +1162,27 @@ public sealed class Plugin : IDalamudPlugin
                 {
                     if (!kitIdToItemRowId.TryGetValue(entry.FrameKitUnlockId, out var itemRowId))
                     {
-                        Log.Info($"[FrameKitDebug] {entry.Name}: kein Item mit AdditionalData={entry.FrameKitUnlockId} gefunden.");
+                        // Debug statt Info (Nutzer-Report: "tausende Meldungen im Log") - trifft für
+                        // sehr viele Rahmen zu (nicht per Framer's-Kit-Item käuflich) und ist rein
+                        // diagnostisch; über den Debug-Dump-Knopf (DumpFrameKitDebugInfo) weiterhin
+                        // gezielt abrufbar, muss aber nicht bei jedem normalen Cache-Aufbau ins
+                        // Standard-Log fluten.
+                        Log.Debug($"[FrameKitDebug] {entry.Name}: kein Item mit AdditionalData={entry.FrameKitUnlockId} gefunden.");
                         continue;
                     }
                     if (!itemRowIdToShopMatch.TryGetValue(itemRowId, out var match))
                     {
-                        Log.Info($"[FrameKitDebug] {entry.Name}: Item #{itemRowId} in keinem SpecialShop als ReceiveItem gefunden.");
+                        Log.Debug($"[FrameKitDebug] {entry.Name}: Item #{itemRowId} in keinem SpecialShop als ReceiveItem gefunden.");
                         continue;
                     }
                     if (!shopIdToNpcId.TryGetValue(match.ShopId, out var npcId))
                     {
-                        Log.Info($"[FrameKitDebug] {entry.Name}: SpecialShop #{match.ShopId} (Währung: {match.CurrencyText}) wird von keinem NPC in ENpcBase.ENpcData referenziert.");
+                        Log.Debug($"[FrameKitDebug] {entry.Name}: SpecialShop #{match.ShopId} (Währung: {match.CurrencyText}) wird von keinem NPC in ENpcBase.ENpcData referenziert.");
                         continue;
                     }
                     if (!npcIdToPlace.TryGetValue(npcId, out var place))
                     {
-                        Log.Info($"[FrameKitDebug] {entry.Name}: NPC #{npcId} hat weder einen Platz im Level-Sheet noch in der ENpcPlace-CSV.");
+                        Log.Debug($"[FrameKitDebug] {entry.Name}: NPC #{npcId} hat weder einen Platz im Level-Sheet noch in der ENpcPlace-CSV.");
                         continue;
                     }
                     if (!npcResidentSheet.TryGetRow(npcId, out var npc))
@@ -2195,6 +2208,21 @@ public sealed class Plugin : IDalamudPlugin
                 new SightseeingPuzzleStep(new Vector3(97.89942f, 3.56555f, -75.178215f), Jump: false, Exact: true),  // Punkt 3 (Sightseeing-Punkt)
             },
             DismountAtStart: true), // erst genau am Startpunkt absteigen
+        [2162723] = new( // The Hermit's Hovel (Central Shroud) - zwei Fußschritte, dann drei
+                          // Sprünge über die Schlucht (dazwischen ein kurzes Stück zu Fuß), dann der
+                          // letzte Rest zu Fuß zur Sightseeing-Kugel.
+            new Vector3(-299.863f, 5.586483f, -563.8493f),
+            new[]
+            {
+                new SightseeingPuzzleStep(new Vector3(-304.39178f, 5.3948965f, -570.99744f), Jump: false),
+                new SightseeingPuzzleStep(new Vector3(-312.7482f, 5.7721624f, -573.4029f), Jump: false),
+                new SightseeingPuzzleStep(new Vector3(-309.36017f, 6.564163f, -575.6682f), Jump: true),
+                new SightseeingPuzzleStep(new Vector3(-308.33078f, 6.564163f, -576.1312f), Jump: false),
+                new SightseeingPuzzleStep(new Vector3(-306.4013f, 8.290334f, -576.50903f), Jump: true),
+                new SightseeingPuzzleStep(new Vector3(-305.77518f, 9.786908f, -576.3396f), Jump: true),
+                new SightseeingPuzzleStep(new Vector3(-302.92184f, 10.269598f, -570.6858f), Jump: false), // Sightseeing-Punkt
+            },
+            DismountAtStart: true),
         [2162724] = new( // The Carline Canopy (Gridania)
             new Vector3(144.2908f, -13.261837f, 160.06638f),
             new[]
