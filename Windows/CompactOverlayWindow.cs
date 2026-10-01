@@ -2155,15 +2155,28 @@ public class CompactOverlayWindow : Window
             onStart();
     }
 
-    // Nutzeranforderung: im Overlay nur noch "Zone (Landmark)" statt "Aether Current - Zone
-    // (Landmark)" anzeigen - die Daten selbst (Data/aethercurrents.json, Suche, Tooltips etc.)
-    // behalten den vollen Namen, das ist rein eine Anzeige-Kürzung hier im Overlay.
+    // Nutzeranforderung: im Overlay nur noch den Klammerteil (z.B. "Matoya's Cave vicinity") statt
+    // "Aether Current - Zone (Landmark)" oder auch nur "Zone (Landmark)" anzeigen - die Zone selbst
+    // steht ohnehin schon als Gruppenüberschrift darüber, der Ortsname in der Klammer reicht zur
+    // Unterscheidung. Die Daten selbst (Data/aethercurrents.json, Suche, Tooltips etc.) behalten den
+    // vollen Namen, das ist rein eine Anzeige-Kürzung hier im Overlay.
     private const string AetherCurrentNamePrefix = "Aether Current - ";
 
-    private static string GetOverlayDisplayName(CollectibleEntry entry) =>
-        entry.Type == CollectibleType.AetherCurrent && entry.Name.StartsWith(AetherCurrentNamePrefix, StringComparison.Ordinal)
+    private static string GetOverlayDisplayName(CollectibleEntry entry)
+    {
+        if (entry.Type != CollectibleType.AetherCurrent)
+            return entry.Name;
+
+        var name = entry.Name.StartsWith(AetherCurrentNamePrefix, StringComparison.Ordinal)
             ? entry.Name[AetherCurrentNamePrefix.Length..]
             : entry.Name;
+
+        var openParen = name.IndexOf('(');
+        var closeParen = name.LastIndexOf(')');
+        return openParen >= 0 && closeParen > openParen
+            ? name[(openParen + 1)..closeParen]
+            : name;
+    }
 
     private void DrawClickableName(CollectibleEntry entry, bool isNotYetPossible = false)
     {
