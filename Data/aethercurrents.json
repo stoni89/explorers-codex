@@ -121,8 +121,7 @@
         "Category": "Aether Current",
         "TerritoryTypeId": 399,
         "MapId": 213,
-        "VendorMapX": 13.5,
-        "VendorMapY": 36.1,
+        "WorldPosition": {"X": -451.1721, "Y": 138.35184, "Z": 677.9089},
         "RequiredQuest": "Leaving Idyllshire",
         "Source": "Field exploration"
     },
