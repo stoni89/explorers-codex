@@ -1395,6 +1395,16 @@ public class MainWindow : Window
             Loc.T("Debug", "Debug"),
             Loc.T("Nur relevant, wenn im Overlay etwas nicht wie erwartet angezeigt wird.", "Only relevant if something in the overlay doesn't show as expected."));
 
+        ModernUi.GroupLabel(Loc.T("Allgemein", "General"));
+        ModernUi.BeginCard();
+        var showDebug = config.ShowDebugInfo;
+        if (ModernUi.ToggleRow(Loc.T("Debug-Infos im Overlay anzeigen", "Show debug info in overlay"), ref showDebug))
+        {
+            config.ShowDebugInfo = showDebug;
+            config.Save();
+        }
+        ModernUi.EndCard();
+
         ModernUi.GroupLabel(Loc.T("Aktueller Status", "Current status"));
         ModernUi.BeginCard();
         var territoryId = Plugin.ClientState.TerritoryType;
@@ -1411,16 +1421,6 @@ public class MainWindow : Window
             ImGui.SetClipboardText($"{playerPos.Value.X.ToString(CultureInfo.InvariantCulture)}f, " +
                                     $"{playerPos.Value.Y.ToString(CultureInfo.InvariantCulture)}f, " +
                                     $"{playerPos.Value.Z.ToString(CultureInfo.InvariantCulture)}f");
-        }
-        ModernUi.EndCard();
-
-        ModernUi.GroupLabel(Loc.T("Allgemein", "General"));
-        ModernUi.BeginCard();
-        var showDebug = config.ShowDebugInfo;
-        if (ModernUi.ToggleRow(Loc.T("Debug-Infos im Overlay anzeigen", "Show debug info in overlay"), ref showDebug))
-        {
-            config.ShowDebugInfo = showDebug;
-            config.Save();
         }
         ModernUi.EndCard();
 
