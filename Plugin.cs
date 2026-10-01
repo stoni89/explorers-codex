@@ -76,6 +76,15 @@ public sealed class Plugin : IDalamudPlugin
     /// </summary>
     public static bool SimulateAetheryteAutomation => instance.Configuration.SimulateAetheryteAutomation;
 
+    /// <summary>
+    /// Für AetherCurrentAutomation (hält sonst bewusst keine Plugin-Instanz) - ob gerade
+    /// Configuration.SimulateAetherCurrentAutomation aktiv ist, siehe UpdateInteracting-Kommentar
+    /// dort: bereits freigeschaltete Ätherströmungen bleiben im Simulation-Modus absichtlich Ziel,
+    /// haben im Spiel aber oft gar kein echtes Einsammel-Objekt mehr, daher nur eine kurze simulierte
+    /// Pause statt eines echten Interacts.
+    /// </summary>
+    public static bool SimulateAetherCurrentAutomation => instance.Configuration.SimulateAetherCurrentAutomation;
+
     public readonly WindowSystem WindowSystem = new("TheExplorersCodex");
     private MainWindow MainWindow { get; init; }
     public CompactOverlayWindow CompactOverlayWindow { get; init; }

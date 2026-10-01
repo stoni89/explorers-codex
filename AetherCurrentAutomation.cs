@@ -115,6 +115,11 @@ public sealed class AetherCurrentAutomation
     private readonly FlightPathUpgrade flightUpgrade = new(); // siehe Plugin.FlightPathUpgrade (Flugverbots-Bereiche)
     private bool hasInteractedThisCycle;
     private DateTime? interactObjectNotFoundSince;
+
+    // Siehe UpdateInteracting-Kommentar zu Configuration.SimulateAetherCurrentAutomation - kurze
+    // künstliche Pause statt auf ein eventuell gar nicht mehr vorhandenes Objekt zu warten.
+    private DateTime? simulatedActivationStartedAt;
+    private static readonly TimeSpan SimulatedActivationPause = TimeSpan.FromSeconds(1.5);
     private bool didFinalApproach;
 
     // Verhindert, dass Plugin.TryRemountAfterForcedDismount (gedacht für unfreiwilliges Absteigen
@@ -495,6 +500,7 @@ public sealed class AetherCurrentAutomation
         currentTargetPosition = floorPoint.Value;
         hasInteractedThisCycle = false;
         interactObjectNotFoundSince = null;
+        simulatedActivationStartedAt = null;
         didFinalApproach = false;
         hasIntentionallyDismounted = false;
 
@@ -856,6 +862,35 @@ public sealed class AetherCurrentAutomation
 
         if (!StillNeeded(entries, currentTargetEntry.Id))
         {
+            FinishCurrent();
+            return;
+        }
+
+        // Im Simulations-Modus (siehe Configuration.SimulateAetherCurrentAutomation) bleiben bereits
+        // freigeschaltete Ätherströmungen absichtlich trotzdem Ziel (siehe CompactOverlayWindow), um
+        // Laufweg/Interaktion erneut zu testen - das echte Einsammel-Objekt existiert für sie im
+        // Spiel aber oft gar nicht mehr (schon entdeckt), und IsAetherCurrentUnlocked ist ohnehin
+        // schon true, OHNE dass überhaupt interagiert wurde. Statt endlos auf ein nicht (mehr)
+        // vorhandenes Objekt zu warten: kurze künstliche Pause simulieren, dann normal weiter wie bei
+        // einer echten Freischaltung (Nutzeranforderung: "nur simulieren dass er ihn aktiviert").
+        if (Plugin.SimulateAetherCurrentAutomation && Plugin.IsAetherCurrentUnlocked(currentTargetEntry.Id))
+        {
+            simulatedActivationStartedAt ??= DateTime.UtcNow;
+            if (DateTime.UtcNow - simulatedActivationStartedAt.Value < SimulatedActivationPause)
+            {
+                StatusText = Loc.T(
+                    $"Simuliere Aktivierung: {currentTargetEntry.Name}...",
+                    $"Simulating activation: {currentTargetEntry.Name}...");
+                return;
+            }
+
+            Plugin.Log.Info($"[AetherCurrentAutomation] UpdateInteracting({currentTargetEntry.Name}): bereits freigeschaltet, Simulation beendet.");
+            if (jumpRouteStartPoint is { } simulatedStartPoint)
+            {
+                BeginReturnToStart(simulatedStartPoint);
+                return;
+            }
+
             FinishCurrent();
             return;
         }
