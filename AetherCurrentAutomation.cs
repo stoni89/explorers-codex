@@ -145,6 +145,17 @@ public sealed class AetherCurrentAutomation
     // kann).
     private Vector3? jumpRouteStartPoint;
 
+    // Siehe BeginReturnToStart/UpdateReturningToStart - das eigentliche Ziel des Rückwegs, damit ein
+    // unterbrochener Weg (Mount-Wechsel, Kampf-Treffer) am tatsächlichen Abstand statt blind an
+    // "pathIsRunning == false" erkannt und nötigenfalls neu angestoßen werden kann.
+    private Vector3? returnToStartPoint;
+
+    // Kurze Pause NACH der Ankunft am Startpunkt, bevor es zum nächsten Ziel weitergeht
+    // (Nutzeranforderung: "erst zurück an die Startposition, dann kurz warten und dann den nächsten
+    // Aether Current machen").
+    private static readonly TimeSpan PostReturnToStartSettleDelay = TimeSpan.FromSeconds(2);
+    private DateTime? returnToStartArrivedAt;
+
     // Kurze Wartezeit nach dem Abmounten (wie DismountSettleDelay in anderen Automationen) - ein
     // Sprung-Versuch mitten in der Absteige-Animation greift nicht.
     private static readonly TimeSpan JumpDismountSettleDelay = TimeSpan.FromSeconds(1);
@@ -216,6 +227,8 @@ public sealed class AetherCurrentAutomation
         hasIntentionallyDismounted = false;
         activeJumpRoute = null;
         jumpRouteStartPoint = null;
+        returnToStartPoint = null;
+        returnToStartArrivedAt = null;
         StatusText = Loc.T("Automation gestartet...", "Automation started...");
     }
 
@@ -231,6 +244,8 @@ public sealed class AetherCurrentAutomation
         RestorePathTolerance();
         activeJumpRoute = null;
         jumpRouteStartPoint = null;
+        returnToStartPoint = null;
+        returnToStartArrivedAt = null;
     }
 
     public void MarkUnavailable()
@@ -980,6 +995,8 @@ public sealed class AetherCurrentAutomation
         attemptCounts.Remove(currentTargetEntry!.Id);
         currentTargetEntry = null;
         jumpRouteStartPoint = null;
+        returnToStartPoint = null;
+        returnToStartArrivedAt = null;
         state = State.Idle;
     }
 
@@ -991,6 +1008,8 @@ public sealed class AetherCurrentAutomation
     private void BeginReturnToStart(Vector3 startPoint)
     {
         SetExactPathTolerance(false);
+        returnToStartPoint = startPoint;
+        returnToStartArrivedAt = null;
         if (!pathfindAndMoveCloseTo.InvokeFunc(startPoint, false, ArrivalTolerance))
         {
             // vnavmesh lehnt ab (z.B. schon am Startpunkt) - kein Problem, einfach direkt fertig.
@@ -1011,7 +1030,9 @@ public sealed class AetherCurrentAutomation
     {
         // Der Rückweg ist bewusst zu Fuß (Nutzeranforderung: "zu Fuß zurück an die Startposition,
         // dann aufmounten") - manche Spiel-/Mount-Einstellungen mounten sonst während eines langen
-        // Laufauftrags automatisch wieder auf, einfach jeden Frame dagegen absteigen.
+        // Laufauftrags automatisch wieder auf. Nur absteigen und DIESEN Frame abwarten - der Weg
+        // selbst wird unten über die tatsächliche Distanz (nicht blind pathIsRunning) neu angestoßen,
+        // falls das Absteigen ihn unterbrochen hat.
         if (Plugin.Condition[ConditionFlag.Mounted])
         {
             Plugin.TryDismount();
@@ -1027,6 +1048,29 @@ public sealed class AetherCurrentAutomation
                 FinishCurrent();
             }
 
+            return;
+        }
+
+        // pathIsRunning==false heißt nicht zwingend "angekommen" - ein Mount-Wechsel (siehe oben)
+        // oder ein Treffer im Kampf (Nutzeranforderung: während des Rückwegs soll NICHT gekämpft
+        // werden, siehe UpdateDefendingSelf, das außerhalb von State.Interacting bewusst nichts tut)
+        // kann den vnavmesh-Weg vorher abbrechen. Tatsächliche Distanz zum Startpunkt prüfen, bevor
+        // wirklich fertig gemeldet wird - sonst würde ein nur UNTERBROCHENER Weg fälschlich als
+        // "angekommen" gelten und sofort das nächste (im Simulations-Modus oft wieder dasselbe) Ziel
+        // angefangen werden (Nutzer-Report: "fängt den gleichen von vorne an").
+        var playerPos = Plugin.ObjectTable.LocalPlayer?.Position;
+        if (returnToStartPoint is { } point && playerPos is { } pos && Vector3.Distance(pos, point) > ArrivalTolerance)
+        {
+            pathfindAndMoveCloseTo.InvokeFunc(point, false, ArrivalTolerance);
+            return;
+        }
+
+        returnToStartArrivedAt ??= DateTime.UtcNow;
+        if (DateTime.UtcNow - returnToStartArrivedAt.Value < PostReturnToStartSettleDelay)
+        {
+            StatusText = Loc.T(
+                $"Am Startpunkt, kurze Pause nach: {currentTargetEntry?.Name}...",
+                $"At the start point, brief pause after: {currentTargetEntry?.Name}...");
             return;
         }
 
