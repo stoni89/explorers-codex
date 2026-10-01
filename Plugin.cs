@@ -2289,11 +2289,14 @@ public sealed class Plugin : IDalamudPlugin
             },
             DismountAtStart: true),
         [2162755] = new( // The Nail
-            new Vector3(206.82593f, 311.81625f, 425.82074f),
+            new Vector3(205.26137f, 307.8622f, 426.19162f),
             new[]
             {
-                new SightseeingPuzzleStep(new Vector3(200.36482f, 310.83673f, 420.21234f), Jump: false, Fly: true), // Punkt 2 (Sightseeing-Punkt) - hinfliegen, dort abmounten
-            }),
+                new SightseeingPuzzleStep(new Vector3(204.75603f, 307.8623f, 425.35046f), Jump: false),            // Punkt 1
+                new SightseeingPuzzleStep(new Vector3(202.6492f, 309.5727f, 422.6516f), Jump: true, RunUp: true),   // Punkt 2 - mit Anlauf ab Punkt 1
+                new SightseeingPuzzleStep(new Vector3(200.88103f, 310.83673f, 420.2911f), Jump: true),              // Punkt 3 (Sightseeing-Punkt)
+            },
+            DismountAtStart: true),
         [2162756] = new( // The Observatorium
             new Vector3(187.42712f, 234.38025f, 403.59232f),
             new[]
