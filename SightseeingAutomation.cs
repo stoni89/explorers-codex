@@ -126,6 +126,15 @@ public sealed class SightseeingAutomation
     private readonly FallDetector fallDetector = new(); // siehe Plugin.FallDetector - erkennt Abstürze beim Zufuß-Anflug (UpdateMoving)
     private readonly FlightPathUpgrade flightUpgrade = new(); // siehe Plugin.FlightPathUpgrade (Flugverbots-Bereiche)
     private bool hasSentEmote;
+
+    // Siehe UpdateWaitingForUnlock-Kommentar zum Freischalten: ein sitzender/liegender Emote (z.B.
+    // "/sit", "/doze") lässt den Charakter danach bewegungsunfähig wirken - vnavmesh-Laufbefehle
+    // greifen dort nicht, bis eine ECHTE Bewegung den Emote beendet (Nutzeranforderung: "kann sich
+    // der Charakter danach nicht bewegen... durch einen Mini-Step abbrechen").
+    private bool hasCanceledSitEmote;
+    private DateTime? emoteCancelIssuedAt;
+    private static readonly TimeSpan EmoteCancelSettleDelay = TimeSpan.FromMilliseconds(500);
+
     private bool didFinalApproach;
     private DateTime? interWaypointPauseStartedAt;
     private DateTime? districtTravelFinishedAt;
@@ -614,6 +623,8 @@ public sealed class SightseeingAutomation
 
         currentTargetEntry = entry;
         hasSentEmote = false;
+        hasCanceledSitEmote = false;
+        emoteCancelIssuedAt = null;
         didFinalApproach = false;
         interWaypointPauseStartedAt = null;
         dismountedAt = null;
@@ -1303,6 +1314,24 @@ public sealed class SightseeingAutomation
 
         if (Plugin.IsAdventureComplete(currentTargetEntry.Id))
         {
+            // Ein sitzender/liegender Emote (siehe hasCanceledSitEmote-Kommentar) lässt den
+            // Charakter oft bewegungsunfähig wirken - bevor zum nächsten Punkt weitergegangen wird,
+            // einen winzigen Laufbefehl absetzen, der genau DAS zuverlässig abbricht, dann kurz die
+            // Steh-auf-Animation abwarten.
+            if (hasSentEmote && !string.IsNullOrEmpty(currentTargetEntry.RequiredEmoteCommand) && !hasCanceledSitEmote)
+            {
+                var playerPos = Plugin.ObjectTable.LocalPlayer?.Position;
+                if (playerPos is { } pos)
+                    moveToPath.InvokeAction(new List<Vector3> { pos + new Vector3(0.3f, 0f, 0f) }, false);
+
+                hasCanceledSitEmote = true;
+                emoteCancelIssuedAt = DateTime.UtcNow;
+                return;
+            }
+
+            if (emoteCancelIssuedAt is { } issuedAt && DateTime.UtcNow - issuedAt < EmoteCancelSettleDelay)
+                return;
+
             Plugin.Log.Info($"[SightseeingAutomation] UpdateWaitingForUnlock({currentTargetEntry.Name}): freigeschaltet.");
             TryWalkOutOrFinish(entries);
             return;
