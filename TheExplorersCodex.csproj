@@ -31,5 +31,21 @@
     <None Include="Data\triadcards.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="Data\aethercurrents.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="Data\icon.png" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Schriften für das neue Codex-Design (siehe NewDesign/DESIGN_SPEC.md Abschnitt 3) - Google
+         Fonts, SIL Open Font License, dürfen mit dem Plugin ausgeliefert werden (Lizenztexte liegen
+         jeweils daneben). -->
+    <None Include="Data\Fonts\Cinzel.ttf" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Echte statische Bold-Variante (Google Fonts CDN liefert sie trotz variablem Haupt-Font auch
+         einzeln aus) - die variable Cinzel.ttf lädt ohne Achsen-Auswahl nur in ihrem Standardgewicht,
+         nie wirklich fett (Nutzer-Report: Titel sollte Bold sein). -->
+    <None Include="Data\Fonts\Cinzel-Bold.ttf" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Data\Fonts\Alegreya.ttf" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Data\Fonts\AlegreyaItalic.ttf" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Data\Fonts\AlegreyaSans-Regular.ttf" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Data\Fonts\AlegreyaSans-Medium.ttf" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Data\Fonts\AlegreyaSans-Bold.ttf" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Data\Fonts\OFL-Cinzel.txt" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Data\Fonts\OFL-Alegreya.txt" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Data\Fonts\OFL-AlegreyaSans.txt" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

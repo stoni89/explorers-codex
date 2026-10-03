@@ -1535,6 +1535,7 @@ public class MainWindow : Window
                 (Loc.T("Ätherströmungen (aktuelle Zone)", "Aether currents (current zone)"), Plugin.DumpAetherCurrentDebugInfo),
                 (Loc.T("Ätherströmungen (alle Zonen)", "Aether currents (all zones)"), Plugin.DumpAetherCurrentDebugInfoAllZones),
                 ("\"Protecting What's Important\"", () => plugin.DumpQuestAcceptabilityDebugInfo("Protecting What's Important")),
+                ("\"Open and Inviting\"", () => plugin.DumpQuestAcceptabilityDebugInfo("Open and Inviting")),
             });
             ModernUi.EndCard();
         }

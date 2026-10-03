@@ -1453,7 +1453,7 @@ public class CompactOverlayWindow : Window
         ImGui.Spacing();
     }
 
-    private static string GetCurrencyLabel(string currencyText)
+    internal static string GetCurrencyLabel(string currencyText)
     {
         var t = Regex.Replace(currencyText, @"^\s*[\d,]+\s*", "");
         t = Regex.Replace(t, @"\s*\([^)]*\)\s*$", "");
@@ -1526,7 +1526,8 @@ public class CompactOverlayWindow : Window
     private static bool IsTripleTriadNpcFight(CollectibleEntry entry) =>
         entry.Category == Plugin.TripleTriadNpcCategory && entry.CurrencyItemId == 0 && !string.IsNullOrEmpty(entry.Currency);
 
-    private static IEnumerable<(string Label, uint IconId)> GetAllCurrencies(CollectibleEntry entry)
+    /// <summary>Auch von <see cref="CodexOverlayWindow"/> genutzt (siehe dessen Währungsfilter-Kommentar) - dieselbe Kanonisierung sorgt dafür, dass Configuration.HiddenCurrencies in beiden Overlays dieselben Einträge meint.</summary>
+    internal static IEnumerable<(string Label, uint IconId)> GetAllCurrencies(CollectibleEntry entry)
     {
         // Triple-Triad-NPC-Kämpfe tragen statt eines Preises den Gegner-Namen im Currency-Feld (siehe
         // Plugin.GetTripleTriadNpcEntries) - für den Currency-Filter alle zu EINEM Eintrag
@@ -1550,7 +1551,7 @@ public class CompactOverlayWindow : Window
         }
     }
 
-    private static IEnumerable<string> GetAllCurrencyLabels(CollectibleEntry entry) => GetAllCurrencies(entry).Select(c => c.Label);
+    internal static IEnumerable<string> GetAllCurrencyLabels(CollectibleEntry entry) => GetAllCurrencies(entry).Select(c => c.Label);
 
     // Suchtext im "Currencys filtern"-Popup - bleibt über mehrere Frames erhalten (Popup öffnen,
     // tippen, wieder schließen), wird beim erneuten Öffnen bewusst NICHT zurückgesetzt.
