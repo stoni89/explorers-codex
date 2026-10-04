@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Numerics;
-using System.Text.RegularExpressions;
 using Dalamud.Interface;
 using Dalamud.Interface.Textures;
 using Dalamud.Interface.Utility;
@@ -250,7 +249,7 @@ public class CodexOverlayWindow : Window
     /// geöffneter Bügel seitlich übersteht) sichtbar ab (Nutzer-Report). Das Icon selbst darf hier
     /// über den Knopfrand hinausragen, bleibt aber mittig zentriert.
     /// </summary>
-    private static bool DrawHeaderIconButton(FontAwesomeIcon icon, string id, Vector2 size, string? tooltip = null, Vector4? iconColor = null)
+    internal static bool DrawHeaderIconButton(FontAwesomeIcon icon, string id, Vector2 size, string? tooltip = null, Vector4? iconColor = null)
     {
         var cursor = ImGui.GetCursorScreenPos();
         var clicked = ImGui.InvisibleButton(id, size);
@@ -306,7 +305,7 @@ public class CodexOverlayWindow : Window
 
     // ---- Abschnitt 5.2: Auto-Knöpfe ----
 
-    private static string AutoButtonLabel(string key) => key switch
+    internal static string AutoButtonLabel(string key) => key switch
     {
         "quest" => Loc.T("Auto-Quest", "Auto Quest"),
         "sight" => Loc.T("Auto-Erkundung", "Auto Sightseeing"),
@@ -318,19 +317,21 @@ public class CodexOverlayWindow : Window
         _ => key,
     };
 
-    private static readonly Vector4 RunningCountFg = new(0.227f, 0.165f, 0.063f, 1f); // #3A2A10
+    internal static readonly Vector4 RunningCountFg = new(0.227f, 0.165f, 0.063f, 1f); // #3A2A10
 
     // Exakte Maße laut Nutzervorgabe (Pixel, vor Skalierung): 8px Innenabstand links, 10px rechts,
     // 9x9px Symbol mit 6px Abstand zum Text, 6px Abstand Text-zu-Zahl, 6px Abstand zwischen Knöpfen
     // (waagerecht wie senkrecht beim Umbruch), 28px feste Höhe, 3px Eckenrundung.
-    private const float AutoButtonPaddingLeft = 8f;
-    private const float AutoButtonPaddingRight = 10f;
-    private const float AutoButtonIconSize = 9f;
-    private const float AutoButtonIconGap = 6f;
-    private const float AutoButtonCountGap = 6f;
-    private const float AutoButtonGap = 6f;
-    private const float AutoButtonHeight = 28f;
-    private const float AutoButtonRounding = 3f;
+    // Internal statt private: wird auch von CodexMenuWindow.DrawOverlayPreviewWindow wiederverwendet,
+    // damit die Overlay-Vorschau die exakt gleichen Maße wie das echte Overlay benutzt.
+    internal const float AutoButtonPaddingLeft = 8f;
+    internal const float AutoButtonPaddingRight = 10f;
+    internal const float AutoButtonIconSize = 9f;
+    internal const float AutoButtonIconGap = 6f;
+    internal const float AutoButtonCountGap = 6f;
+    internal const float AutoButtonGap = 6f;
+    internal const float AutoButtonHeight = 28f;
+    internal const float AutoButtonRounding = 3f;
 
     /// <summary>Abschnitt 5.2 - Knopfreihe mit den drei "endgültigen" Auto-Funktionen (siehe Plugin.GetZoneAutomationButtons).</summary>
     private void DrawAutoButtonsRow(float scale, uint territoryId)
@@ -364,7 +365,7 @@ public class CodexOverlayWindow : Window
                 }
 
                 ImGui.SetCursorPos(new Vector2(cursorX, cursorY));
-                DrawAutoButton(button, label, new Vector2(width, buttonHeight), anyRunning, scale);
+                DrawAutoButton(button, label, new Vector2(width, buttonHeight), anyRunning, scale, shadowActive);
 
                 cursorX += width + AutoButtonGap * scale;
             }
@@ -374,7 +375,7 @@ public class CodexOverlayWindow : Window
         ImGui.Unindent(14f * scale);
     }
 
-    private float MeasureAutoButton(string label, int count, float scale)
+    internal static float MeasureAutoButton(string label, int count, float scale)
     {
         var labelWidth = ImGui.CalcTextSize(label).X;
         float countWidth;
@@ -385,8 +386,13 @@ public class CodexOverlayWindow : Window
                + labelWidth + countWidth;
     }
 
-    /// <summary>Zeichnet EINEN Auto-Knopf im passenden Zustand (Abschnitt 5.2-Tabelle: Bereit/Läuft/Gesperrt).</summary>
-    private void DrawAutoButton(Plugin.ZoneAutomationButton button, string label, Vector2 size, bool anyRunning, float scale)
+    /// <summary>
+    /// Zeichnet EINEN Auto-Knopf im passenden Zustand (Abschnitt 5.2-Tabelle: Bereit/Läuft/Gesperrt).
+    /// Internal statt private und mit explizitem "shadow"-Parameter statt des Instanzfelds
+    /// shadowActive: wird auch von CodexMenuWindow.DrawOverlayPreviewWindow (Dummy-Vorschau im neuen
+    /// Einstellungsmenü) wiederverwendet, damit die Vorschau exakt wie das echte Overlay aussieht.
+    /// </summary>
+    internal static void DrawAutoButton(Plugin.ZoneAutomationButton button, string label, Vector2 size, bool anyRunning, float scale, bool shadow)
     {
         var locked = anyRunning && !button.IsActive;
 
@@ -404,7 +410,7 @@ public class CodexOverlayWindow : Window
             // Abschnitt 5.9: Knöpfe "ohne eigene Füllung" (hier: ganz ohne Hintergrund) bekommen ab
             // ~70% Transparenz einen leicht deckenden Hintergrund, sonst wären sie auf dem fast
             // unsichtbaren Fensterhintergrund kaum noch lesbar.
-            bg = shadowActive ? CodexTheme.TranslucentButtonBg : new Vector4(0f, 0f, 0f, 0f);
+            bg = shadow ? CodexTheme.TranslucentButtonBg : new Vector4(0f, 0f, 0f, 0f);
             border = CodexTheme.LineDisabled;
             fg = CodexTheme.TextDisabled;
             countFg = CodexTheme.TextDisabled;
@@ -412,7 +418,7 @@ public class CodexOverlayWindow : Window
         }
         else
         {
-            bg = shadowActive ? CodexTheme.TranslucentButtonBg : CodexTheme.BgSelected;
+            bg = shadow ? CodexTheme.TranslucentButtonBg : CodexTheme.BgSelected;
             border = CodexTheme.LineControl;
             fg = CodexTheme.TextPrimary;
             countFg = CodexTheme.TextTertiary;
@@ -449,7 +455,7 @@ public class CodexOverlayWindow : Window
         }
 
         var labelSize = ImGui.CalcTextSize(label);
-        CodexTheme.DrawTextShadowed(drawList, contentCursor + new Vector2(0f, (size.Y - labelSize.Y) / 2f), fg, label, shadowActive);
+        CodexTheme.DrawTextShadowed(drawList, contentCursor + new Vector2(0f, (size.Y - labelSize.Y) / 2f), fg, label, shadow);
         contentCursor.X += labelSize.X + AutoButtonCountGap * scale;
 
         // Zahl: gleiche Schriftgröße wie das Label, aber normale Stärke statt Bold (Nutzervorgabe).
@@ -457,7 +463,7 @@ public class CodexOverlayWindow : Window
         {
             var countText = button.Count.ToString();
             var countSize = ImGui.CalcTextSize(countText);
-            CodexTheme.DrawTextShadowed(drawList, contentCursor + new Vector2(0f, (size.Y - countSize.Y) / 2f), countFg, countText, shadowActive);
+            CodexTheme.DrawTextShadowed(drawList, contentCursor + new Vector2(0f, (size.Y - countSize.Y) / 2f), countFg, countText, shadow);
         }
 
         if (locked)
@@ -689,9 +695,11 @@ public class CodexOverlayWindow : Window
         var zoneCount = plugin.GetZoneOverlayItems(territoryId).Count;
         var todoCount = plugin.GetToDoOverlayItems().Count;
 
-        DrawTab(Loc.T("Zone", "Zone"), zoneCount, OverlayView.Zone, scale);
+        if (DrawTab("zone", Loc.T("Zone", "Zone"), zoneCount, activeView == OverlayView.Zone, scale, shadowActive))
+            activeView = OverlayView.Zone;
         ImGui.SameLine(0f, 18f * scale);
-        DrawTab(Loc.T("ToDo-Liste", "To-do list"), todoCount, OverlayView.ToDo, scale);
+        if (DrawTab("todo", Loc.T("ToDo-Liste", "To-do list"), todoCount, activeView == OverlayView.ToDo, scale, shadowActive))
+            activeView = OverlayView.ToDo;
 
         var config = plugin.Configuration;
         var rawItems = CurrentRawItems(territoryId);
@@ -750,23 +758,32 @@ public class CodexOverlayWindow : Window
         // desselben Überlappungs-Bugs.
         var rightEdge = ImGui.GetWindowContentRegionMax().X - 10f * scale;
         ImGui.SameLine(rightEdge - typeWidth - currencyWidth - 6f * scale);
-        var typeButtonRect = DrawFilterButton("type", typeLabel, typeActive, typeWidth, scale);
+        var (typeButtonMin, typeButtonSize, typeClicked) = DrawFilterButton("type", typeLabel, typeActive, typeWidth, scale, shadowActive);
+        if (typeClicked)
+            openFilterPopup = openFilterPopup == "type" ? null : "type";
         ImGui.SameLine(0f, 6f * scale);
-        var currencyButtonRect = DrawFilterButton("cur", currencyLabel, currencyActive, currencyWidth, scale);
+        var (currencyButtonMin, currencyButtonSize, currencyClicked) = DrawFilterButton("cur", currencyLabel, currencyActive, currencyWidth, scale, shadowActive);
+        if (currencyClicked)
+            openFilterPopup = openFilterPopup == "cur" ? null : "cur";
 
         if (openFilterPopup == "type")
-            DrawTypeFilterPopup(config, typesInList, typeButtonRect);
+            DrawTypeFilterPopup(config, typesInList, (typeButtonMin, typeButtonSize));
         else if (openFilterPopup == "cur")
-            DrawCurrencyFilterPopup(config, currenciesInList, currencyButtonRect);
+            DrawCurrencyFilterPopup(config, currenciesInList, (currencyButtonMin, currencyButtonSize));
 
         ImGui.Unindent(14f * scale);
         if (!shadowActive)
             ImGui.Separator();
     }
 
-    private void DrawTab(string label, int count, OverlayView view, float scale)
+    /// <summary>
+    /// Internal statt private, "selected" als Parameter statt des Vergleichs mit dem Instanzfeld
+    /// activeView: wird auch von CodexMenuWindow.DrawOverlayPreviewWindow wiederverwendet. Gibt true
+    /// zurück, wenn der Reiter gerade angeklickt wurde - der Aufrufer entscheidet selbst, was das
+    /// bedeutet (im echten Overlay: activeView umschalten, in der Vorschau: nichts).
+    /// </summary>
+    internal static bool DrawTab(string id, string label, int count, bool selected, float scale, bool shadow)
     {
-        var selected = activeView == view;
         var countText = count.ToString();
 
         float labelWidth, labelHeight, countWidth, countHeight;
@@ -785,28 +802,33 @@ public class CodexOverlayWindow : Window
         var size = new Vector2(totalWidth + 4f * scale, MathF.Max(labelHeight, ImGui.GetFrameHeight()));
         var cursor = ImGui.GetCursorScreenPos();
 
-        if (ImGui.InvisibleButton($"##CodexTab_{view}", size))
-            activeView = view;
+        var clicked = ImGui.InvisibleButton($"##CodexTab_{id}", size);
 
         var drawList = ImGui.GetWindowDrawList();
         using (CodexTheme.FontTabLabel.Push())
-            CodexTheme.DrawTextShadowed(drawList, cursor, selected ? CodexTheme.TextHeading : CodexTheme.TextTertiary, label + " ", shadowActive);
+            CodexTheme.DrawTextShadowed(drawList, cursor, selected ? CodexTheme.TextHeading : CodexTheme.TextTertiary, label + " ", shadow);
         // Auf der Grundlinie des (größeren) Label-Texts ausgerichtet, statt oben - sonst wirkt die
         // kleinere Zahl bei unterschiedlichen Schriftgrößen visuell zu hoch.
         using (CodexTheme.FontTabRow.Push())
-            CodexTheme.DrawTextShadowed(drawList, cursor + new Vector2(labelWidth, labelHeight - countHeight), selected ? CodexTheme.Accent : CodexTheme.TextDim, countText, shadowActive);
+            CodexTheme.DrawTextShadowed(drawList, cursor + new Vector2(labelWidth, labelHeight - countHeight), selected ? CodexTheme.Accent : CodexTheme.TextDim, countText, shadow);
 
         if (selected)
         {
             var lineY = cursor.Y + size.Y - 1f;
             drawList.AddLine(new Vector2(cursor.X, lineY), new Vector2(cursor.X + totalWidth, lineY), ImGui.GetColorU32(CodexTheme.Accent), 2f);
         }
+
+        return clicked;
     }
 
-    private (Vector2 Min, Vector2 Size) DrawFilterButton(string key, string label, bool active, float width, float scale)
+    /// <summary>
+    /// Internal statt private, ohne Zugriff auf das Instanzfeld openFilterPopup (der Aufrufer
+    /// entscheidet selbst anhand von "Clicked", was ein Klick bedeutet) - wird auch von
+    /// CodexMenuWindow.DrawOverlayPreviewWindow wiederverwendet, damit die Vorschau exakt dieselben
+    /// Filter-Knöpfe wie das echte Overlay zeigt.
+    /// </summary>
+    internal static (Vector2 Min, Vector2 Size, bool Clicked) DrawFilterButton(string key, string label, bool active, float width, float scale, bool shadow)
     {
-        var open = openFilterPopup == key;
-
         float labelHeight;
         using (CodexTheme.FontFilterButton.Push())
             labelHeight = ImGui.GetFontSize();
@@ -816,15 +838,14 @@ public class CodexOverlayWindow : Window
         var size = new Vector2(width, labelHeight + paddingY * 2f + 3f * scale);
         var cursor = ImGui.GetCursorScreenPos();
 
-        if (ImGui.InvisibleButton($"##CodexFilter_{key}", size))
-            openFilterPopup = open ? null : key;
+        var clicked = ImGui.InvisibleButton($"##CodexFilter_{key}", size);
 
         // Nutzerspezifikation: 1px Rahmen #5A4A33 (CodexTheme.LineControl) IMMER, keine Füllung ohne
         // aktiven Filter - nur bei aktivem Filter eine Füllung (BgSelectedStrong). Der Popup-"offen"-
         // Zustand bekommt bewusst keine eigene Hervorhebung mehr (vorher Accent-Rahmen/BgSelected).
         // Abschnitt 5.9: ab ~70% Overlay-Transparenz bekommt der sonst leere Hintergrund einen leicht
         // deckenden Ton, damit der Knopf auf dem fast unsichtbaren Fenster lesbar bleibt.
-        var bg = active ? CodexTheme.BgSelectedStrong : shadowActive ? CodexTheme.TranslucentButtonBg : new Vector4(0f, 0f, 0f, 0f);
+        var bg = active ? CodexTheme.BgSelectedStrong : shadow ? CodexTheme.TranslucentButtonBg : new Vector4(0f, 0f, 0f, 0f);
         var fg = active ? CodexTheme.TextHeading : CodexTheme.TextPrimary;
 
         var drawList = ImGui.GetWindowDrawList();
@@ -841,7 +862,7 @@ public class CodexOverlayWindow : Window
         }
 
         using (CodexTheme.FontFilterButton.Push())
-            CodexTheme.DrawTextShadowed(drawList, contentCursor, fg, label, shadowActive);
+            CodexTheme.DrawTextShadowed(drawList, contentCursor, fg, label, shadow);
 
         using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
         {
@@ -850,7 +871,7 @@ public class CodexOverlayWindow : Window
             drawList.AddText(cursor + new Vector2(size.X - caretSize.X - 6f * scale, (size.Y - caretSize.Y) / 2f), ImGui.GetColorU32(fg), caret);
         }
 
-        return (cursor, size);
+        return (cursor, size, clicked);
     }
 
     /// <summary>Dynamisch aus den Typen der aktuellen Liste aufgebaut (Nutzeranforderung "alle Items integrieren") - analog zum Währungsfilter, statt der vorher fest auf Reittier/Begleiter beschränkten Checkboxen.</summary>
@@ -950,25 +971,6 @@ public class CodexOverlayWindow : Window
     // ---- Abschnitt 5.6: Item-Liste ----
 
     /// <summary>
-    /// Entfernt einen erklärenden Klammerzusatz am Ende von CollectibleEntry.Currency (z.B.
-    /// "21,000 MGP (only available during the \"The Make It Rain Campaign\" event)" -> "21,000 MGP") -
-    /// Nutzeranforderung: solche Zusätze gehören nicht direkt in die Zeile, sondern nur in einen
-    /// Tooltip (siehe Aufrufer). Gleiches Muster wie CompactOverlayWindow.GetCurrencyLabel, das aber
-    /// zusätzlich auch den Betrag selbst entfernt (dort wird nur der reine Währungsname gebraucht).
-    /// Kürzt außerdem jede Währung mit "Irregular Tomestone" im Namen (z.B. "Irregular Tomestone of
-    /// Astronomy II" -> "Irr. Tomestone Astronomy II") - nur die Anzeige in dieser Zeile, der volle
-    /// Name bleibt per Tooltip abrufbar (siehe Aufrufer). Nutzeranforderung: gilt für ALLE Tomestones
-    /// mit "Irregular" im Namen, nicht nur Astronomy II.
-    /// </summary>
-    private static string GetInlineCurrencyText(string currencyText)
-    {
-        var text = Regex.Replace(currencyText, @"\s*\([^)]*\)\s*$", "").Trim();
-        text = Regex.Replace(text, @"Irregular Tomestone of ", "Irr. Tomestone ");
-        text = Regex.Replace(text, @"Irregular Tomestone", "Irr. Tomestone");
-        return text;
-    }
-
-    /// <summary>
     /// Hintergrund-/Textfarbe des Typ-Etiketts (Abschnitt 2 "Typ-Etiketten" definiert nur Reittier/
     /// Begleiter als eigenes Bg/Fg-Paar). Für alle übrigen Typen (Nutzeranforderung "alle Items
     /// integrieren") wird ein zur bereits im alten Overlay gepflegten Typfarbe
@@ -978,7 +980,7 @@ public class CodexOverlayWindow : Window
     /// einzigen generischen dunklen Hintergrund zu teilen. Der Skalierungsfaktor (~22%) entspricht in
     /// etwa dem Verhältnis von MinionBadgeBg zu dessen TypeColors-Wert.
     /// </summary>
-    private static (Vector4 Bg, Vector4 Fg) GetTypeBadgeColors(CollectibleType type)
+    internal static (Vector4 Bg, Vector4 Fg) GetTypeBadgeColors(CollectibleType type)
     {
         if (type == CollectibleType.Mount)
             return (CodexTheme.MountBadgeBg, CodexTheme.MountBadgeFg);
@@ -995,7 +997,7 @@ public class CodexOverlayWindow : Window
     /// nicht für Loc.TypeName allgemein (Filter-Popups, altes Overlay, Menü zeigen weiterhin den
     /// vollen Namen).
     /// </summary>
-    private static string GetBadgeLabel(CollectibleType type) => type switch
+    internal static string GetBadgeLabel(CollectibleType type) => type switch
     {
         CollectibleType.Orchestrion => Loc.T("Orchestrion", "Orchestrion"),
         CollectibleType.TripleTriadCard => Loc.T("TT-Karte", "TT Card"),
@@ -1119,26 +1121,33 @@ public class CodexOverlayWindow : Window
                 DrawGateLockButton(item, lockSize, scale);
             }
 
-            // 4. Währung (Preis+Name bereits in EINEM String, z.B. "500,000 Gil" - siehe
-            // CollectibleEntry.Currency) - rechtsbündig. WICHTIG: mit der Fließtext-Schrift messen UND
-            // zeichnen, NICHT mit der Icon-Schrift (die deckt keine normalen Ziffern/Buchstaben ab) -
-            // vorher lagen beide im selben Icon-Schrift-Block, was zu falschen Breiten und
-            // unsichtbarem/falschem Text führte (Nutzer-Report: Zeile fehlt). Zusätzlich stand der
-            // Preis vorher noch EIN ZWEITES Mal separat davor (aus item.CurrencyAmount berechnet) -
-            // item.Currency enthält Betrag+Name aber bereits komplett, das führte zu doppelt
-            // angezeigten Beträgen (Nutzer-Report). Manche Einträge (z.B. "Senorita Sabotender")
-            // hängen zusätzlich einen erklärenden Klammerzusatz an (z.B. "(only available during ...
-            // event)") - der gehört laut Nutzeranforderung NICHT direkt in die Zeile, sondern nur in
-            // den Tooltip (wie beim Schloss-Symbol): GetInlineCurrencyText entfernt ihn für die
-            // Zeilenanzeige, der volle Text bleibt beim Hover über den Preis abrufbar.
-            var currencyDisplayText = GetInlineCurrencyText(item.Currency);
-            var currencyWidth = ImGui.CalcTextSize(currencyDisplayText).X;
+            // 4. Währung - Nutzeranforderung: statt des ausgeschriebenen Namens (z.B. "500,000 Gil")
+            // nur noch Betrag + 16x16-Icon aus den Spieldaten (ITextureProvider.GetFromGameIcon,
+            // dasselbe Vorbild wie CompactOverlayWindow.DrawCurrencyRequirement), 4px Abstand
+            // dazwischen, rechtsbündig. Beide in EINER Gruppe (BeginGroup/EndGroup), damit EIN
+            // zusammenhängender Hover-Bereich den Tooltip mit Betrag + vollem Währungsnamen
+            // (item.Currency) auslöst - auch bei aktivem Textschatten (Abschnitt 5.9), wo TextShadowed
+            // sonst keinen eigenen, per IsItemHovered() abfragbaren Treffer hinterlässt.
+            if (item.CurrencyItemId != 0)
+            {
+                var culture = CultureInfo.GetCultureInfo(Loc.T("de-DE", "en-US"));
+                var amountText = item.CurrencyAmount.ToString("N0", culture);
+                var amountWidth = ImGui.CalcTextSize(amountText).X;
+                var iconSize = 16f * scale;
+                var totalWidth = amountWidth + 4f * scale + iconSize;
 
-            ImGui.SameLine(ImGui.GetWindowContentRegionMax().X - currencyWidth - 2f * scale);
-            ImGui.AlignTextToFramePadding();
-            CodexTheme.TextShadowed(currencyDisplayText, isGated ? CodexTheme.TextDim : CodexTheme.TextMuted, shadowActive);
-            if (currencyDisplayText != item.Currency && ImGui.IsItemHovered())
-                ShowTooltip(item.Currency);
+                ImGui.SameLine(ImGui.GetWindowContentRegionMax().X - totalWidth - 3f * scale);
+                ImGui.AlignTextToFramePadding();
+                ImGui.BeginGroup();
+                CodexTheme.TextShadowed(amountText, isGated ? CodexTheme.TextDim : CodexTheme.TextMuted, shadowActive);
+                ImGui.SameLine(0f, 4f * scale);
+                var icon = Plugin.TextureProvider.GetFromGameIcon(new GameIconLookup(item.CurrencyIconId)).GetWrapOrEmpty();
+                ImGui.Image(icon.Handle, new Vector2(iconSize));
+                ImGui.EndGroup();
+
+                if (ImGui.IsItemHovered())
+                    ShowTooltip(item.Currency);
+            }
         }
 
         // Nutzer-Report: die letzte Zeile wirkte unten abgeschnitten, da sich bis ganz nach unten
@@ -1219,7 +1228,7 @@ public class CodexOverlayWindow : Window
         return ImGui.Selectable(label);
     }
 
-    private static void CenteredText(string text, Vector2 areaSize, Vector4 color, bool shadow)
+    internal static void CenteredText(string text, Vector2 areaSize, Vector4 color, bool shadow)
     {
         using (CodexTheme.FontTypeBadge.Push())
         {

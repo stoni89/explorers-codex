@@ -1569,9 +1569,12 @@ public class MainWindow : Window
     // Group: Plugins derselben Gruppe sind gegeneinander austauschbar - "Required" ist dann schon
     // erfüllt, sobald EINES davon installiert ist (siehe IsDependencySatisfied), z.B. die beiden
     // Kampf-Plugins (siehe CombatPluginBridge).
-    private const string CombatDependencyGroup = "Combat";
+    internal const string CombatDependencyGroup = "Combat";
 
-    private static readonly (string InternalName, string DisplayName, string DescriptionDe, string DescriptionEn, bool Required, string? Group)[] Dependencies =
+    // Internal statt private: wird auch von Windows.CodexMenuWindow.DrawPluginsPage wiederverwendet
+    // (Nutzeranforderung: eigene, neu gestaltete Plugins-Seite im neuen Menü, OHNE die bestehende
+    // Prüf-/Install-Logik zu duplizieren).
+    internal static readonly (string InternalName, string DisplayName, string DescriptionDe, string DescriptionEn, bool Required, string? Group)[] Dependencies =
     {
         (CombatPluginBridge.RotationSolverInternalName, "RotationSolver Reborn",
             "Kampf-Plugin: übernimmt den Kampf bei der Hunting-Log-Kill-Automation, bei kampfpflichtigen Schritten während der Quest-Automation, und wehrt unterwegs angreifende Gegner während der Sightseeing-Automation ab. Alternativ zu Wrath Combo - eines der beiden wird benötigt.",
@@ -1618,11 +1621,11 @@ public class MainWindow : Window
     internal static bool HasMissingRequiredDependency() =>
         Dependencies.Any(d => d.Required && !IsDependencySatisfied(d.InternalName, d.Group));
 
-    private static bool IsPluginLoaded(string internalName) =>
+    internal static bool IsPluginLoaded(string internalName) =>
         Plugin.PluginInterface.InstalledPlugins.Any(p => p.InternalName == internalName && p.IsLoaded);
 
     /// <summary>Installiert - oder (bei einer Gruppe, siehe CombatDependencyGroup) ein anderes Plugin derselben Gruppe.</summary>
-    private static bool IsDependencySatisfied(string internalName, string? group) =>
+    internal static bool IsDependencySatisfied(string internalName, string? group) =>
         group == null
             ? IsPluginLoaded(internalName)
             : Dependencies.Any(d => d.Group == group && IsPluginLoaded(d.InternalName));

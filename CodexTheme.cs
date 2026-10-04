@@ -77,6 +77,7 @@ public static class CodexTheme
 
     public static readonly Vector4 OkFg = Hex("#9BD3A2");
     public static readonly Vector4 OkBg = Hex("#1C2A1D");
+    public static readonly Vector4 OkLine = Hex("#35513A");
     public static readonly Vector4 WarnFg = Hex("#E9C46A");
     public static readonly Vector4 WarnBg = Hex("#30271A");
     public static readonly Vector4 WarnLine = Hex("#5C4A26");
@@ -201,6 +202,11 @@ public static class CodexTheme
     /// <summary>Kleine Fließtext-Labels (z.B. Zonen-Id neben dem Zonennamen) - Alegreya Sans, 14px (im Spiel angepasst statt 11px).</summary>
     public static IFontHandle FontBodySmall => alegreyaSansSmall ??= BuildHandle("AlegreyaSans-Regular.ttf", 14f);
 
+    private static IFontHandle? alegreyaSansDropdownCaption;
+
+    /// <summary>Erklärtext unter einem BeginDropdownRow-Label (Nutzervorgabe: +3px gegenüber FontBodySmall) - Alegreya Sans, 17px.</summary>
+    public static IFontHandle FontDropdownCaption => alegreyaSansDropdownCaption ??= BuildHandle("AlegreyaSans-Regular.ttf", 17f);
+
     /// <summary>Fließtext/Knöpfe/Listen Medium - Alegreya Sans 18px (Abschnitt 3, im Spiel für den Menü-Navigationspunkt von 13px erhöht).</summary>
     public static IFontHandle FontBodyMedium => alegreyaSansMedium ??= BuildHandle("AlegreyaSans-Medium.ttf", 18f);
 
@@ -242,6 +248,36 @@ public static class CodexTheme
     /// <summary>Beschriftung der Filter-Knöpfe "Typen"/"Währungen" - Alegreya Sans Medium, 13px (im Spiel von 11px erhöht, bewusst von FontTabRow gelöst, da die Reiter-Anzahl bei 11px bleiben soll).</summary>
     public static IFontHandle FontFilterButton => alegreyaFilterButtonMedium ??= BuildHandle("AlegreyaSans-Medium.ttf", 13f);
 
+    private static IFontHandle? alegreyaBadgeSmall;
+
+    /// <summary>Kompakte Badges auf der Plugins-Seite (z.B. "ONE REQUIRED", "5 / 5") - Alegreya Sans Bold, 16px (ursprünglich 11px, +5px auf Nutzerwunsch).</summary>
+    public static IFontHandle FontBadgeSmall => alegreyaBadgeSmall ??= BuildHandle("AlegreyaSans-Bold.ttf", 16f);
+
+    private static IFontHandle? cinzelPluginGroupLabel;
+
+    /// <summary>Gruppen-Überschriften auf der Plugins-Seite ("Combat plugin"/"Required"/"Optional") - Cinzel 22px (von FontSectionLabel +5px gelöst, da dessen 17px z.B. auch für die Sidebar-Labels gebraucht werden).</summary>
+    public static IFontHandle FontPluginGroupLabel => cinzelPluginGroupLabel ??= BuildHandle("Cinzel.ttf", 22f);
+
+    private static IFontHandle? alegreyaPluginName;
+
+    /// <summary>Plugin-Name in einer Plugins-Zeile - Alegreya Sans Bold, 21px (von FontBodyBold +3px, dann +3px, dann wieder -3px gelöst, das auch für Item-Namen im Overlay gebraucht wird).</summary>
+    public static IFontHandle FontPluginName => alegreyaPluginName ??= BuildHandle("AlegreyaSans-Bold.ttf", 21f);
+
+    private static IFontHandle? alegreyaPluginDescription;
+
+    /// <summary>Beschreibung unter dem Plugin-Namen - Alegreya Sans Regular, 15px (von FontBody +2px gelöst, das u.a. auch für die Status-Zeile oben gebraucht wird).</summary>
+    public static IFontHandle FontPluginDescription => alegreyaPluginDescription ??= BuildHandle("AlegreyaSans-Regular.ttf", 15f);
+
+    private static IFontHandle? alegreyaPluginStatusRest;
+
+    /// <summary>Zweiter Teil der Statuszeile auf der Plugins-Seite (z.B. "7 of 8 plugins installed...") - Alegreya Sans Medium, 17px (-1px gegenüber FontBodyMedium, das auch anderswo gebraucht wird).</summary>
+    public static IFontHandle FontPluginStatusRest => alegreyaPluginStatusRest ??= BuildHandle("AlegreyaSans-Medium.ttf", 17f);
+
+    private static IFontHandle? alegreyaPluginInstalledLabel;
+
+    /// <summary>"Installed"-Label einer Plugin-Zeile - Alegreya Sans Bold, 17px (von FontAutoButtonLabel +3px gelöst, das auch für die Auto-Knöpfe im Overlay gebraucht wird).</summary>
+    public static IFontHandle FontPluginInstalledLabel => alegreyaPluginInstalledLabel ??= BuildHandle("AlegreyaSans-Bold.ttf", 17f);
+
     private static IFontHandle? alegreyaCurrencyValue;
     private static IFontHandle? alegreyaCurrencyName;
 
@@ -276,6 +312,7 @@ public static class CodexTheme
         _ = FontSectionLabel;
         _ = FontBody;
         _ = FontBodySmall;
+        _ = FontDropdownCaption;
         _ = FontBodyMedium;
         _ = FontBodyBold;
         _ = FontSubtitleItalic;
@@ -288,6 +325,12 @@ public static class CodexTheme
         _ = FontCurrencyName;
         _ = FontTabRow;
         _ = FontFilterButton;
+        _ = FontBadgeSmall;
+        _ = FontPluginGroupLabel;
+        _ = FontPluginName;
+        _ = FontPluginDescription;
+        _ = FontPluginStatusRest;
+        _ = FontPluginInstalledLabel;
         _ = FontTabLabel;
         _ = FontTypeBadge;
         _ = FontSidebarBrandSmall;
@@ -322,11 +365,22 @@ public static class CodexTheme
         ImGui.PushStyleColor(ImGuiCol.ScrollbarGrab, LineFrame);
         ImGui.PushStyleColor(ImGuiCol.ScrollbarGrabHovered, Accent);
         ImGui.PushStyleColor(ImGuiCol.ScrollbarGrabActive, Accent);
+
+        // Nutzervorgabe: der aktuell ausgewählte Eintrag in Dropdown-/Auswahllisten (ImGui.Selectable
+        // mit selected=true, z.B. in BeginDropdownRow-Comboboxen) soll golden (Accent) markiert sein
+        // statt im (fast schwarzen) ImGui-Standardton.
+        ImGui.PushStyleColor(ImGuiCol.Header, new Vector4(Accent.X, Accent.Y, Accent.Z, 0.35f));
+        ImGui.PushStyleColor(ImGuiCol.HeaderHovered, new Vector4(Accent.X, Accent.Y, Accent.Z, 0.55f));
+        ImGui.PushStyleColor(ImGuiCol.HeaderActive, Accent);
+
+        // Golden statt der ImGui-Standardfarbe für Schieberegler (z.B. Deckkraft-Slider, Abschnitt 8).
+        ImGui.PushStyleColor(ImGuiCol.SliderGrab, Accent);
+        ImGui.PushStyleColor(ImGuiCol.SliderGrabActive, Accent);
     }
 
     public static void PopStyle()
     {
-        ImGui.PopStyleColor(14);
+        ImGui.PopStyleColor(19);
         ImGui.PopStyleVar(5);
     }
 
@@ -452,6 +506,42 @@ public static class CodexTheme
         return clicked;
     }
 
+    /// <summary>
+    /// Schieberegler 0..1 mit golden einfärbendem Füllbalken (Nutzervorgabe: "soll sich gold füllen,
+    /// bei 100% komplett gold") - ImGui.SliderFloat zeigt stattdessen nur einen schmalen Griff auf
+    /// flachem Hintergrund ohne Füllbalken, daher wie Toggle() komplett selbst gezeichnet
+    /// (InvisibleButton + manuelles Rechteck, per Maus-X-Position beim Ziehen aktualisiert). Gibt true
+    /// zurück, wenn der Wert sich gerade geändert hat.
+    /// </summary>
+    public static bool OpacitySlider(string id, ref float value01, Vector2 size)
+    {
+        value01 = Math.Clamp(value01, 0f, 1f);
+        var cursor = ImGui.GetCursorScreenPos();
+        ImGui.InvisibleButton(id, size);
+        var changed = false;
+
+        if (ImGui.IsItemActive() && ImGui.IsMouseDown(ImGuiMouseButton.Left))
+        {
+            var fraction = Math.Clamp((ImGui.GetMousePos().X - cursor.X) / size.X, 0f, 1f);
+            if (MathF.Abs(fraction - value01) > 0.0001f)
+            {
+                value01 = fraction;
+                changed = true;
+            }
+        }
+
+        var drawList = ImGui.GetWindowDrawList();
+        var rounding = size.Y / 2f;
+        drawList.AddRectFilled(cursor, cursor + size, ImGui.GetColorU32(BgInput), rounding);
+
+        var fillWidth = size.X * value01;
+        if (fillWidth > 0.5f)
+            drawList.AddRectFilled(cursor, cursor + new Vector2(fillWidth, size.Y), ImGui.GetColorU32(Accent), rounding);
+
+        drawList.AddRect(cursor, cursor + size, ImGui.GetColorU32(LineControl), rounding);
+        return changed;
+    }
+
     // Siehe BeginCard/EndCard - Karten haben beliebig viele Zeilen (Schalter/Combos), eine feste oder
     // per BeginChild "AutoResizeY" (das dieses ältere ImGui-Binding nicht kennt, siehe fehlendes
     // ImGuiChildFlags) automatisch mitwachsende Höhe gibt es hier nicht. Stattdessen das verbreitete
@@ -464,14 +554,23 @@ public static class CodexTheme
     private static float cardWidth;
     private static float cardPaddingX;
     private static float cardPaddingY;
+    private static bool cardAccentBar;
 
-    /// <summary>Karte im Menü (Abschnitt 6) - BgCard-Hintergrund, LineCard-Rahmen, Innenabstand, Höhe passt sich dem Inhalt an. Mit EndCard() beenden.</summary>
-    public static void BeginCard(float scale)
+    /// <summary>
+    /// Karte im Menü (Abschnitt 6) - BgCard-Hintergrund, LineCard-Rahmen, Innenabstand, Höhe passt
+    /// sich dem Inhalt an. Mit EndCard() beenden. "accentBar" (Nutzeranforderung, Plugins-Seite:
+    /// ausgewähltes Kampf-Plugin) zeichnet einen 2px goldenen Strich ganz links an der Karte, über die
+    /// VOLLE Kartenhöhe (inkl. Innenabstand oben/unten) - deshalb erst in EndCard gezeichnet, wenn die
+    /// tatsächliche Höhe feststeht, nicht vom Aufrufer selbst (der kennt nur die Zeilenhöhe, nicht die
+    /// der ganzen Karte).
+    /// </summary>
+    public static void BeginCard(float scale, bool accentBar = false)
     {
         cardPaddingX = 16f * scale;
         cardPaddingY = 14f * scale;
         cardOrigin = ImGui.GetCursorScreenPos();
         cardWidth = ImGui.GetContentRegionAvail().X;
+        cardAccentBar = accentBar;
 
         var drawList = ImGui.GetWindowDrawList();
         drawList.ChannelsSplit(2);
@@ -493,6 +592,8 @@ public static class CodexTheme
         drawList.ChannelsSetCurrent(0);
         drawList.AddRectFilled(min, max, ImGui.GetColorU32(BgCard), RoundingCard);
         drawList.AddRect(min, max, ImGui.GetColorU32(LineCard), RoundingCard);
+        if (cardAccentBar)
+            drawList.AddRectFilled(min, new Vector2(min.X + 2f, max.Y), ImGui.GetColorU32(Accent));
         drawList.ChannelsMerge();
     }
 
@@ -523,27 +624,42 @@ public static class CodexTheme
     }
 
     /// <summary>
-    /// Eine Einstellungszeile: Label links, Schalter rechtsbündig, optionaler Tooltip beim Hover über
-    /// die ganze Zeile. Gibt true zurück, wenn der Schalter gerade umgeschaltet wurde.
+    /// Eine Einstellungszeile: Label links, Schalter rechtsbündig, optionaler Erklärtext darunter
+    /// (immer sichtbar, kein Hover-Tooltip mehr - Nutzeranforderung, Vorbild: BeginDropdownRow.caption).
+    /// Gibt true zurück, wenn der Schalter gerade umgeschaltet wurde.
     /// </summary>
-    public static bool ToggleRow(string id, string label, ref bool value, float scale, string? tooltip = null)
+    public static bool ToggleRow(string id, string label, ref bool value, float scale, string? caption = null)
     {
+        var toggleHeight = 22f * scale;
+        var toggleWidth = 42f * scale;
+
         var rowStartY = ImGui.GetCursorPosY();
-        using (FontBodyMedium.Push())
+        using (FontMenuFieldLabel.Push())
             ImGui.TextColored(TextPrimary, label);
+
+        // Umbruch 5px vor dem Toggle-Knopf (Nutzervorgabe), damit lange Erklärtexte nicht unter den
+        // Knopf selbst laufen.
+        if (!string.IsNullOrEmpty(caption))
+        {
+            var wrapX = ImGui.GetWindowContentRegionMax().X - toggleWidth - 25f * scale - 5f * scale;
+            using (FontDropdownCaption.Push())
+            {
+                ImGui.PushTextWrapPos(wrapX);
+                ImGui.TextColored(TextTertiary, caption);
+                ImGui.PopTextWrapPos();
+            }
+        }
+
         var textBottomY = ImGui.GetCursorPosY();
         var textHeight = textBottomY - rowStartY;
 
-        var toggleHeight = 22f * scale;
-        var toggleWidth = 42f * scale;
         var toggleY = rowStartY + (textHeight - toggleHeight) / 2f;
-        var rightX = ImGui.GetWindowContentRegionMax().X - toggleWidth;
+        // Derselbe rechte Randabstand wie bei den Dropdowns (siehe BeginDropdownRow rightMargin,
+        // Nutzervorgabe).
+        var rightX = ImGui.GetWindowContentRegionMax().X - toggleWidth - 25f * scale;
 
         ImGui.SetCursorPos(new Vector2(rightX, toggleY));
         var changed = Toggle(id, ref value, scale);
-
-        if (!string.IsNullOrEmpty(tooltip) && ImGui.IsItemHovered())
-            ImGui.SetTooltip(tooltip);
 
         ImGui.SetCursorPosY(MathF.Max(textBottomY, toggleY + toggleHeight));
         return changed;
@@ -564,16 +680,33 @@ public static class CodexTheme
     /// übernimmt EndDropdownRow intern).
     /// </summary>
     public static bool BeginDropdownRow(string label, string currentValueLabel, string comboId, float scale,
-        string? tooltip = null, bool disabled = false, float width = 205f, float rightMargin = 25f)
+        string? tooltip = null, string? caption = null, bool disabled = false, float width = 205f, float rightMargin = 25f)
     {
+        var comboWidth = width * scale;
+
         var rowStartY = ImGui.GetCursorPosY();
         using (FontMenuFieldLabel.Push())
             ImGui.TextColored(disabled ? TextDisabled : TextPrimary, label);
         if (!string.IsNullOrEmpty(tooltip) && ImGui.IsItemHovered(disabled ? ImGuiHoveredFlags.AllowWhenDisabled : ImGuiHoveredFlags.None))
             ImGui.SetTooltip(tooltip);
-        var textBottomY = ImGui.GetCursorPosY();
 
-        var comboWidth = width * scale;
+        // Optionaler, immer sichtbarer Erklärtext unter dem Label (Nutzeranforderung, Vorbild:
+        // Erklärtext unter "Währungen anzeigen") - anders als "tooltip" (nur beim Hover sichtbar).
+        // Zählt mit in die Zeilenhöhe, die Combobox zentriert sich dadurch automatisch über
+        // Label+caption zusammen. Umbruch 5px vor der Combobox (Nutzervorgabe), damit lange Texte
+        // nicht unter die Combobox selbst laufen.
+        if (!string.IsNullOrEmpty(caption))
+        {
+            var wrapX = ImGui.GetWindowContentRegionMax().X - comboWidth - rightMargin * scale - 5f * scale;
+            using (FontDropdownCaption.Push())
+            {
+                ImGui.PushTextWrapPos(wrapX);
+                ImGui.TextColored(TextTertiary, caption);
+                ImGui.PopTextWrapPos();
+            }
+        }
+
+        var textBottomY = ImGui.GetCursorPosY();
         ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(10f * scale, 9f * scale));
         ImGui.PushStyleVar(ImGuiStyleVar.FrameBorderSize, 1f * scale);
         ImGui.PushStyleColor(ImGuiCol.Border, LineCard);
@@ -591,9 +724,18 @@ public static class CodexTheme
         if (disabled)
             ImGui.BeginDisabled();
 
+        // Nutzervorgabe: der Hover-Effekt soll nicht auf dem kleinen Pfeil-Knopf der Combobox
+        // erscheinen (der intern dieselben ImGuiCol.Button-Farben wie echte Knöpfe nutzt, siehe
+        // PushStyle) - hier lokal auf "keine Füllung" zurückgesetzt, nur für den BeginCombo-Aufruf
+        // selbst (der Pfeil wird ausschließlich darin gezeichnet).
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0f, 0f, 0f, 0f));
+        ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0f, 0f, 0f, 0f));
         var open = ImGui.BeginCombo(comboId, currentValueLabel);
+        ImGui.PopStyleColor(2);
+
         if (open)
-            ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(5f * scale, 5f * scale));
+            // +2px Innenabstand oben/unten (Nutzervorgabe) auf die bisherigen 5px.
+            ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(5f * scale, 7f * scale));
         return open;
     }
 
@@ -617,11 +759,11 @@ public static class CodexTheme
     }
 
     /// <summary>
-    /// Wie BeginDropdownRow, aber gibt zusätzlich den rechten Rand der Combo zurück (Fensterkoordinate,
-    /// VOR dem Zeichnen) - für CardGroupLabel(lineWidth:), damit die Trennlinie unter dem Kartentitel
-    /// exakt dort endet, wo die Combo dieser Zeile endet (Nutzervorgabe, siehe Sprachkarte).
+    /// Für CardGroupLabel(lineWidth:) - damit die Trennlinie unter dem Kartentitel exakt dort endet,
+    /// wo ToggleRow/BeginDropdownRow ihr Steuerelement enden lassen (beide nutzen denselben 25px
+    /// rechten Randabstand, Nutzervorgabe), statt über die volle Kartenbreite zu gehen.
     /// </summary>
-    public static float DropdownRowLineWidth(float scale, float rightMargin = 25f) =>
+    public static float CardFieldLineWidth(float scale, float rightMargin = 25f) =>
         ImGui.GetContentRegionAvail().X - rightMargin * scale;
 
     /// <summary>Feine Trennlinie innerhalb einer Karte (Abschnitt 2 "LineSubtle"), mit etwas vertikalem Abstand.</summary>

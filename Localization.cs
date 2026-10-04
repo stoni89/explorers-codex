@@ -5,10 +5,13 @@ namespace TheExplorersCodex;
 /// <summary>
 /// Sehr einfache Übersetzungshilfe: Deutsch und Englisch, ausgewählt anhand der
 /// im Spielclient eingestellten Sprache (alle anderen Sprachen fallen auf Englisch zurück) -
-/// AUSSER innerhalb eines aktiven Menü-Sprachüberschreibens (siehe MenuLanguageOverride), das NUR
-/// von Windows.MainWindow.Draw() gesetzt wird (dort auf dessen komplette Laufzeit begrenzt, siehe
-/// try/finally dort) und deshalb weder das kompakte Overlay noch Automation-Statustexte
-/// beeinflusst - beide setzen diese Umgebungsvariable nie.
+/// AUSSER innerhalb eines aktiven Menü-Sprachüberschreibens (siehe MenuLanguageOverride), das von
+/// Windows.MainWindow.Draw() für dessen komplette Laufzeit gesetzt wird (per try/finally begrenzt).
+/// Windows.CodexMenuWindow.DrawOverlayPreview setzt es ebenfalls, aber gezielt auf null (statt auf
+/// einen eigenen Wert) - die Overlay-Vorschau soll IMMER der tatsächlichen Spielsprache folgen, auch
+/// wenn gerade ein Menüsprachen-Override aktiv ist (Nutzeranforderung, analog zum echten Overlay, das
+/// ebenfalls stets der Spielsprache folgt). Weder das kompakte noch das neue Overlay selbst, noch
+/// Automation-Statustexte, setzen diese Umgebungsvariable sonst jemals.
 /// </summary>
 public static class Loc
 {
