@@ -90,6 +90,18 @@ public class Configuration : IPluginConfiguration
     // 0 = undurchsichtig, 1 = vollständig transparent
     public float CompactTransparency { get; set; } = 1f;
 
+    // Zeilenhöhe der Item-Liste im neuen Overlay (siehe Windows.CodexOverlayWindow.DrawList), in
+    // Design-Pixeln (vor Skalierung) - 34 (Standard/Maximum) entspricht der bisherigen, ungeänderten
+    // Zeilenhöhe, 20 der kompaktesten Einstellung.
+    public float OverlayRowHeight { get; set; } = 34f;
+
+    // Zuletzt vom Nutzer per Drag gesetzte Fensterposition von Windows.CodexMenuWindow bzw.
+    // Windows.CodexOverlayWindow (Nutzeranforderung: "soll immer dort bleiben, wo man es
+    // hingeschoben hat") - null, solange der Nutzer das jeweilige Fenster noch nie verschoben hat
+    // (dann entscheidet ImGui/Dalamud selbst, siehe deren PreDraw-Kommentar).
+    public Vector2? MenuWindowPosition { get; set; }
+    public Vector2? OverlayWindowPosition { get; set; }
+
     // Kompaktes Overlay (nur aktuelle Zone)
     public bool ShowCompactOverlay { get; set; } = false;
     public bool ShowCurrencyWallet { get; set; } = true;

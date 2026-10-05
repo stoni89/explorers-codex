@@ -94,8 +94,9 @@ public sealed class Plugin : IDalamudPlugin
     public static bool SimulateAetherCurrentAutomation => instance.Configuration.SimulateAetherCurrentAutomation;
 
     public readonly WindowSystem WindowSystem = new("TheExplorersCodex");
-    private MainWindow MainWindow { get; init; }
-    public CompactOverlayWindow CompactOverlayWindow { get; init; }
+
+    public CodexOverlayWindow CodexOverlayWindow { get; init; }
+    public CodexMenuWindow CodexMenuWindow { get; init; }
     public NavigationArrowWindow NavigationArrowWindow { get; init; }
     public QuestAutomation QuestAutomation { get; init; }
     public AetheryteAutomation AetheryteAutomation { get; init; }
@@ -163,6 +164,9 @@ public sealed class Plugin : IDalamudPlugin
         instance.Configuration.Save();
         blacklistIndex = null;
         toDoIndex = null;
+        // Ein frisch geblacklisteter Eintrag soll sofort aus dem Overlay verschwinden, nicht erst
+        // nach bis zu 250ms (siehe GetZoneOverlayItems-Cache-Kommentar).
+        instance.zoneOverlayItemsCache = null;
     }
 
     public static void RemoveFromBlacklist(CollectibleType type, uint id)
@@ -172,6 +176,7 @@ public sealed class Plugin : IDalamudPlugin
 
         instance.Configuration.Save();
         blacklistIndex = null;
+        instance.zoneOverlayItemsCache = null;
     }
 
     // Wie BlacklistIndex, aber für Configuration.ToDoList (siehe IsOnToDoList/AddToToDoList/RemoveFromToDoList).
@@ -250,6 +255,101 @@ public sealed class Plugin : IDalamudPlugin
         config.Save();
     }
 
+    // ---- Begleit-Plugin-Abhängigkeiten (Nutzeranforderung: altes Menü/Overlay vollständig entfernt -
+    // diese Mitglieder lebten vorher in Windows.MainWindow, werden aber auch von
+    // Windows.CodexMenuWindow.DrawPluginsPage gebraucht, daher hierher verschoben statt dupliziert).
+
+    // Group: Plugins derselben Gruppe sind gegeneinander austauschbar - "Required" ist dann schon
+    // erfüllt, sobald EINES davon installiert ist (siehe IsDependencySatisfied), z.B. die beiden
+    // Kampf-Plugins (siehe CombatPluginBridge).
+    public const string CombatDependencyGroup = "Combat";
+
+    public static readonly (string InternalName, string DisplayName, string DescriptionDe, string DescriptionEn, bool Required, string? Group)[] Dependencies =
+    {
+        (CombatPluginBridge.RotationSolverInternalName, "RotationSolver Reborn",
+            "Kampf-Plugin: übernimmt den Kampf bei der Hunting-Log-Kill-Automation, bei kampfpflichtigen Schritten während der Quest-Automation, und wehrt unterwegs angreifende Gegner während der Sightseeing-Automation ab. Alternativ zu Wrath Combo - eines der beiden wird benötigt.",
+            "Combat plugin: drives combat for the hunting log kill automation, for combat-required steps during the quest automation, and fends off attackers encountered while the sightseeing automation is traveling. Alternative to Wrath Combo - one of the two is required.",
+            true, CombatDependencyGroup),
+        (CombatPluginBridge.WrathComboInternalName, "Wrath Combo",
+            "Kampf-Plugin: übernimmt den Kampf bei der Hunting-Log-Kill-Automation, bei kampfpflichtigen Schritten während der Quest-Automation, und wehrt unterwegs angreifende Gegner während der Sightseeing-Automation ab. Alternativ zu RotationSolver Reborn - eines der beiden wird benötigt.",
+            "Combat plugin: drives combat for the hunting log kill automation, for combat-required steps during the quest automation, and fends off attackers encountered while the sightseeing automation is traveling. Alternative to RotationSolver Reborn - one of the two is required.",
+            true, CombatDependencyGroup),
+        ("vnavmesh", "vnavmesh",
+            "Für das Laufen bei allen Automationen (Aetheryte, Quest, Hunting Log, \"Hinlaufen\").",
+            "For pathfinding/walking in every automation (aetheryte, quest, hunting log, \"go to\").",
+            true, null),
+        ("Questionable", "Questionable",
+            "Lässt die Quest-Automation Quests automatisch annehmen und abschließen.",
+            "Drives the quest automation to accept and complete quests automatically.",
+            true, null),
+        ("Lifestream", "Lifestream",
+            "Für Reisen zwischen Bezirken einer geteilten Hauptstadt während der Automation.",
+            "For traveling between districts of a split capital city during automation.",
+            true, null),
+        ("Saucy", "Saucy",
+            "Spielt bei der Triple-Triad-Automation die Partien gegen NPC-Gegner, bis alle ihre Karten gedroppt sind.",
+            "Plays the matches against NPC opponents during the Triple Triad automation until all of their cards have dropped.",
+            true, null),
+        ("TextAdvance", "TextAdvance",
+            "Klickt automatisch durch Dialoge/Cutscenes während der Quest-Automation.",
+            "Automatically clicks through dialogue/cutscenes during the quest automation.",
+            true, null),
+        ("InventoryTools", "Allagan Tools",
+            "Aktiviert die Allagan-Tools-Integration für dieses Plugin.",
+            "Enable Allagan Tools Integration for this Plugin.",
+            false, null),
+    };
+
+    /// <summary>
+    /// Ob mindestens ein als "Required" markiertes Plugin aktuell nicht installiert/geladen ist -
+    /// wird für den Warn-Badge/roten Punkt am Plugins-Icon in der Seitenleiste UND zum Ausgrauen
+    /// sämtlicher Automations-Knöpfe im Overlay gebraucht - bewusst pauschal für JEDES fehlende
+    /// Required-Plugin, nicht nur das von der jeweiligen Automation tatsächlich genutzte, damit
+    /// nicht pro Knopf einzeln nachvollzogen werden muss, welches Plugin wofür gebraucht wird.
+    /// </summary>
+    public static bool HasMissingRequiredDependency() =>
+        Dependencies.Any(d => d.Required && !IsDependencySatisfied(d.InternalName, d.Group));
+
+    public static bool IsPluginLoaded(string internalName) =>
+        PluginInterface.InstalledPlugins.Any(p => p.InternalName == internalName && p.IsLoaded);
+
+    /// <summary>Installiert - oder (bei einer Gruppe, siehe CombatDependencyGroup) ein anderes Plugin derselben Gruppe.</summary>
+    public static bool IsDependencySatisfied(string internalName, string? group) =>
+        group == null
+            ? IsPluginLoaded(internalName)
+            : Dependencies.Any(d => d.Group == group && IsPluginLoaded(d.InternalName));
+
+    // Nur die Typen, die als globale (zonenunabhängige) Liste über CollectionData.GetAllEntries
+    // verfügbar sind - Quest/Aetheryte/HuntingLog/Sightseeing werden nur pro Zone live berechnet und
+    // haben deshalb keine sinnvolle "Gesamt"-Zahl. Für Windows.CodexMenuWindow.DrawStatisticsPage.
+    public static readonly CollectibleType[] StatisticsTypes =
+    {
+        CollectibleType.Mount, CollectibleType.Minion, CollectibleType.Orchestrion, CollectibleType.Barding,
+        CollectibleType.Emote, CollectibleType.Facewear, CollectibleType.FashionAccessory, CollectibleType.TripleTriadCard,
+        CollectibleType.FrameKit, CollectibleType.AetherCurrent, CollectibleType.Achievement,
+    };
+
+    // Alle Kategorien, für die es eine zonenunabhängige Gesamtliste gibt (siehe GetDatabaseEntries) -
+    // Aetheryte/HuntingLog fehlen bewusst, dafür gibt es (anders als Quest/Sightseeing) keine fertige
+    // globale Liste, sondern nur pro-Zone berechnete Ausschnitte (siehe StatisticsTypes-Kommentar).
+    // Für Windows.CodexMenuWindow.DrawDatabasePage.
+    public static readonly CollectibleType[] DatabaseTypes =
+    {
+        CollectibleType.Mount, CollectibleType.Minion, CollectibleType.Orchestrion, CollectibleType.Barding,
+        CollectibleType.Emote, CollectibleType.Facewear, CollectibleType.FashionAccessory, CollectibleType.TripleTriadCard,
+        CollectibleType.FrameKit, CollectibleType.Hairstyle, CollectibleType.AetherCurrent, CollectibleType.Chocobokeep,
+        CollectibleType.Achievement, CollectibleType.Quest, CollectibleType.Sightseeing,
+    };
+
+    // Für diese Typen macht weder eine Preisangabe noch ein Anbieter/Questgeber Sinn (Errungenschaften/
+    // Chocobokeep/Quests/Sightseeing haben keine Kaufwährung, Ätherströmungen ohnehin nie - und "Von"
+    // wäre dort ebenso leer bzw. bedeutungslos).
+    public static readonly HashSet<CollectibleType> DatabaseTypesWithoutVendorInfo = new()
+    {
+        CollectibleType.Achievement, CollectibleType.Chocobokeep, CollectibleType.Quest,
+        CollectibleType.Sightseeing, CollectibleType.AetherCurrent,
+    };
+
     public Plugin()
     {
         instance = this;
@@ -277,11 +377,19 @@ public sealed class Plugin : IDalamudPlugin
         TripleTriadAutomation = new TripleTriadAutomation();
         NoFlyAreaExit = new NoFlyAreaExit();
 
-        MainWindow = new MainWindow(this);
-        WindowSystem.AddWindow(MainWindow);
+        // Nutzeranforderung: altes Menü (MainWindow) und altes Overlay (CompactOverlayWindow)
+        // vollständig entfernt - CodexMenuWindow/CodexOverlayWindow sind jetzt die einzigen Fenster,
+        // CodexOverlayWindow übernimmt daher auch Configuration.ShowCompactOverlay (Feldname aus
+        // Kompatibilitätsgründen beibehalten, damit bestehende gespeicherte Configs weiter gelten).
+        CodexOverlayWindow = new CodexOverlayWindow(this) { IsOpen = Configuration.ShowCompactOverlay };
+        WindowSystem.AddWindow(CodexOverlayWindow);
 
-        CompactOverlayWindow = new CompactOverlayWindow(this) { IsOpen = Configuration.ShowCompactOverlay };
-        WindowSystem.AddWindow(CompactOverlayWindow);
+        CodexMenuWindow = new CodexMenuWindow(this) { IsOpen = false };
+        WindowSystem.AddWindow(CodexMenuWindow);
+
+        // Font-Atlas-Bau schon jetzt anstoßen (nicht erst beim ersten Öffnen von CodexOverlayWindow) -
+        // siehe CodexTheme.PreloadFonts-Kommentar.
+        CodexTheme.PreloadFonts();
 
         NavigationArrowWindow = new NavigationArrowWindow(this) { IsOpen = true };
         WindowSystem.AddWindow(NavigationArrowWindow);
@@ -296,10 +404,7 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.OpenConfigUi += ToggleMainUI;
     }
 
-    private void OnCommand(string command, string args)
-    {
-        MainWindow.IsOpen = !MainWindow.IsOpen;
-    }
+    private void OnCommand(string command, string args) => CodexMenuWindow.IsOpen = !CodexMenuWindow.IsOpen;
 
     private void DrawUI()
     {
@@ -307,9 +412,9 @@ public sealed class Plugin : IDalamudPlugin
         WindowSystem.Draw();
     }
 
-    private void ToggleMainUI() => MainWindow.IsOpen = !MainWindow.IsOpen;
+    private void ToggleMainUI() => CodexMenuWindow.IsOpen = !CodexMenuWindow.IsOpen;
 
-    public void OpenOptions() => MainWindow.IsOpen = true;
+    public void OpenOptions() => CodexMenuWindow.IsOpen = true;
 
     /// <summary>
     /// Prüft, ob der Spieler ein bestimmtes Sammelobjekt bereits besitzt.
@@ -3626,6 +3731,14 @@ public sealed class Plugin : IDalamudPlugin
         ("Final Fantasy XV Collaboration",
             new DateTime(2026, 9, 24, 8, 0, 0, DateTimeKind.Utc),
             new DateTime(2026, 10, 13, 14, 59, 0, DateTimeKind.Utc)),
+        // "Yo-kai Watch: Gather One, Gather All!" (2026, bereits die fünfte Wiederkehr) - offiziell
+        // Di. 04.08.2026 01:00 bis Mo. 05.10.2026 07:59 (jeweils PDT/UTC-7), Quelle: offizielle
+        // SQUARE ENIX-/Lodestone-Ankündigung. Vorher stand Yo-kai Watch fälschlich dauerhaft in
+        // CollaborationGatedItems als "einmaliges Event (2016/2017), nicht zurückgekehrt" - das war
+        // überholt, das Event lief zum Zeitpunkt des Nutzer-Reports tatsächlich gerade (Nutzer-Report).
+        ("Yo-kai Watch Collaboration",
+            new DateTime(2026, 8, 4, 8, 0, 0, DateTimeKind.Utc),
+            new DateTime(2026, 10, 5, 14, 59, 0, DateTimeKind.Utc)),
     };
 
     // Offizielle Zeitfenster von Events, die (wie Kollaborationen) nicht über GameMain.ActiveFestivals
@@ -3968,13 +4081,10 @@ public sealed class Plugin : IDalamudPlugin
 
     /// <summary>
     /// Lokalisierte Standardtexte für CollaborationGatedItems - ein Cross-Game-Kollaborations-Event
-    /// als Voraussetzung, das (anders als "Final Fantasy XV Collaboration", siehe
-    /// KnownCollaborationWindows) kein verlässlich bekanntes, aktuelles Zeitfenster hat.
+    /// als Voraussetzung, das (anders als "Final Fantasy XV Collaboration"/"Yo-kai Watch
+    /// Collaboration", siehe KnownCollaborationWindows) kein verlässlich bekanntes, aktuelles
+    /// Zeitfenster hat.
     /// </summary>
-    private static readonly (string De, string En) YoKaiWatchCollaborationReason = (
-        "Nur während der einmaligen Yo-kai-Watch-Kollaboration (2016/2017) erhältlich - dieses Event ist seither nicht zurückgekehrt, die \"Yo-kai Medals\" sind nicht mehr erhältlich.",
-        "Only available during the one-time Yo-kai Watch crossover event (2016/2017) - this event hasn't returned since, and Yo-kai Medals are no longer obtainable.");
-
     private static readonly (string De, string En) FallGuysCollaborationReason = (
         "Nur während des wiederkehrenden Fall-Guys-Kollaborations-Events (\"Blunderville\") erhältlich, das gerade nicht läuft.",
         "Only available during the recurring Fall Guys crossover event (\"Blunderville\"), which isn't currently running.");
@@ -4006,27 +4116,10 @@ public sealed class Plugin : IDalamudPlugin
     /// </summary>
     private static readonly Dictionary<(CollectibleType Type, string Name), (string De, string En)> CollaborationGatedItems = new()
     {
-        // Yo-kai Watch Collaboration (2016/2017).
-        [(CollectibleType.Minion, "Damona")] = YoKaiWatchCollaborationReason,
-        [(CollectibleType.Minion, "Zazel")] = YoKaiWatchCollaborationReason,
-        [(CollectibleType.Minion, "Lord Ananta")] = YoKaiWatchCollaborationReason,
-        [(CollectibleType.Minion, "Lord Enma")] = YoKaiWatchCollaborationReason,
-        [(CollectibleType.Minion, "USApyon")] = YoKaiWatchCollaborationReason,
-        [(CollectibleType.Minion, "Robonyan F-type")] = YoKaiWatchCollaborationReason,
-        [(CollectibleType.Minion, "Hovernyan")] = YoKaiWatchCollaborationReason,
-        [(CollectibleType.Minion, "Shogunyan")] = YoKaiWatchCollaborationReason,
-        [(CollectibleType.Minion, "Venoct")] = YoKaiWatchCollaborationReason,
-        [(CollectibleType.Minion, "Noko")] = YoKaiWatchCollaborationReason,
-        [(CollectibleType.Minion, "Manjimutt")] = YoKaiWatchCollaborationReason,
-        [(CollectibleType.Minion, "Komajiro")] = YoKaiWatchCollaborationReason,
-        [(CollectibleType.Minion, "Kyubi")] = YoKaiWatchCollaborationReason,
-        [(CollectibleType.Minion, "Blizzaria")] = YoKaiWatchCollaborationReason,
-        [(CollectibleType.Minion, "Whisper")] = YoKaiWatchCollaborationReason,
-        [(CollectibleType.Minion, "Komasan")] = YoKaiWatchCollaborationReason,
-        [(CollectibleType.Minion, "Jibanyan")] = YoKaiWatchCollaborationReason,
-        [(CollectibleType.Mount, "Whisper-go")] = YoKaiWatchCollaborationReason,
-        [(CollectibleType.Mount, "Whisper A-go-go")] = YoKaiWatchCollaborationReason,
-        [(CollectibleType.Mount, "Jibanyan Couch")] = YoKaiWatchCollaborationReason,
+        // Yo-kai Watch Collaboration - hat seit dem 2026er Durchlauf ("Gather One, Gather All!") ein
+        // bekanntes Zeitfenster (siehe KnownCollaborationWindows) und läuft daher über die generische
+        // Saisonevent-Prüfung, NICHT mehr hier (Nutzer-Report: Tooltip behauptete "läuft gerade
+        // nicht", obwohl das Event zum Zeitpunkt des Reports tatsächlich lief).
 
         // Fall Guys Collaboration ("Blunderville", wiederkehrend - MGF bleibt zwischen den
         // Durchläufen erhalten, aber ohne bekanntes aktuelles Zeitfenster gerade nicht aktiv).
@@ -5294,6 +5387,36 @@ public sealed class Plugin : IDalamudPlugin
                      $"PreviousQuest=[{prevStatus}], QuestLock=[{lockStatus}], InstanceContent=[{instanceStatus}], " +
                      $"IsQuestComplete={QuestManager.IsQuestComplete((ushort)row.RowId)}, " +
                      $"IsQuestCurrentlyAcceptable={IsQuestCurrentlyAcceptable(row, playerLevel)}");
+
+            // Zusätzlich: warum die Quest ggf. trotz IsQuestCurrentlyAcceptable=true nicht in
+            // GetLiveZoneEntries (und damit nicht in missingQuests der Automation) der AKTUELLEN Zone
+            // auftaucht - prüft dieselbe matchesPlace-Logik wie ComputeLiveZoneEntries, plus IsOwned/
+            // IsAchievementOrRankGated und die tatsächliche Mitgliedschaft im GetLiveZoneEntries-
+            // Ergebnis (Nutzer-Report: "Open and Inviting" im Gold Saucer trotz
+            // IsQuestCurrentlyAcceptable=true nicht von Auto-Quest aufgenommen).
+            var currentTerritoryId = ClientState.TerritoryType;
+            var effectiveTerritoryId = ResolveEffectiveTerritoryId(currentTerritoryId);
+            var territorySheet = DataManager.GetExcelSheet<Lumina.Excel.Sheets.TerritoryType>();
+            if (territorySheet != null && territorySheet.TryGetRow(effectiveTerritoryId, out var territoryRow))
+            {
+                var acceptablePlaceNameIds = new HashSet<uint> { territoryRow.PlaceName.RowId };
+                if (GenericCityPlaceNames.TryGetValue(effectiveTerritoryId, out var genericIds))
+                    acceptablePlaceNameIds.UnionWith(genericIds);
+                var acceptableQuestIssuerTerritoryIds = SplitCityTerritories.TryGetValue(effectiveTerritoryId, out var questSiblingIds)
+                    ? questSiblingIds.ToHashSet()
+                    : new HashSet<uint> { effectiveTerritoryId };
+
+                var matchesPlace = acceptablePlaceNameIds.Contains(row.PlaceName.RowId)
+                    || (string.IsNullOrEmpty(placeName) && acceptableQuestIssuerTerritoryIds.Contains(issuerTerritory));
+
+                var entryStub = new CollectibleEntry { Id = row.RowId, Name = row.Name.ToString(), Type = CollectibleType.Quest };
+                var inLiveZoneEntries = GetLiveZoneEntries(effectiveTerritoryId).Any(e => e.Type == CollectibleType.Quest && e.Id == row.RowId);
+
+                Log.Info($"[QuestDebug]   Aktuelle Zone {currentTerritoryId} (effektiv {effectiveTerritoryId}, Zonen-PlaceName #{territoryRow.PlaceName.RowId}): " +
+                         $"acceptablePlaceNameIds=[{string.Join(",", acceptablePlaceNameIds)}], acceptableQuestIssuerTerritoryIds=[{string.Join(",", acceptableQuestIssuerTerritoryIds)}], " +
+                         $"matchesPlace={matchesPlace}, IsOwned={IsOwned(entryStub)}, IsAchievementOrRankGated={IsAchievementOrRankGated(entryStub)}, " +
+                         $"InGetLiveZoneEntries={inLiveZoneEntries}");
+            }
         }
     }
 
@@ -5352,6 +5475,24 @@ public sealed class Plugin : IDalamudPlugin
 
     /// <summary>Nur die Ids - siehe GetAllTrackedQuestEntries.</summary>
     public List<uint> GetAllTrackedQuestIds() => GetAllTrackedQuestEntries().Select(e => e.Id).ToList();
+
+    /// <summary>Für die neue Statistics-Seite (siehe Windows.CodexMenuWindow.DrawStatisticsPage) - feste Zuordnung der Statistik-Kategorien (MainWindow.StatisticsTypes + Quest) zu einer von zwei Gruppen ("Sammlungen"/"Fortschritt"). Eine neue Kategorie ohne Eintrag hier landet automatisch in Collections (siehe GetStatisticsGroup).</summary>
+    public enum StatisticsGroup
+    {
+        Collections,
+        Progress,
+    }
+
+    private static readonly Dictionary<CollectibleType, StatisticsGroup> StatisticsGroupByType = new()
+    {
+        [CollectibleType.AetherCurrent] = StatisticsGroup.Progress,
+        [CollectibleType.Achievement] = StatisticsGroup.Progress,
+        [CollectibleType.Quest] = StatisticsGroup.Progress,
+        [CollectibleType.Sightseeing] = StatisticsGroup.Progress,
+    };
+
+    public static StatisticsGroup GetStatisticsGroup(CollectibleType type) =>
+        StatisticsGroupByType.GetValueOrDefault(type, StatisticsGroup.Collections);
 
     private static List<CollectibleEntry>? globalEntriesCache;
 
@@ -5959,6 +6100,261 @@ public sealed class Plugin : IDalamudPlugin
 
         return "Unbekannt";
     }
+
+    // Per ImGui-Framezähler dedupliziert (siehe UpdateZoneAutomations) - ImGui.GetFrameCount() statt
+    // eines eigenen Zählers, da es exakt einmal pro gezeichnetem Frame hochzählt, unabhängig davon,
+    // welches der beiden Overlay-Fenster zuerst zeichnet.
+    private int automationsUpdatedForFrame = -1;
+
+    /// <summary>
+    /// Lässt alle Auto-Funktionen für die aktuelle Zone einen Schritt fortschreiten
+    /// (Automation.Update()) - bisher rief ausschließlich CompactOverlayWindow.DrawContent diese
+    /// Update()-Methoden auf, wodurch eine über GetZoneAutomationButtons im NEUEN Overlay gestartete
+    /// Automation stehen blieb, solange das alte Overlay nicht ebenfalls offen war (Nutzer-Report:
+    /// "Klick macht nichts"). Dieselbe Grund-Filterlogik wie GetZoneAutomationButtons/
+    /// GetZoneOverlayItems, zusätzlich 1:1 aus CompactOverlayWindow.DrawContent übernommen (inkl.
+    /// NoFlyAreaExit-Sonderfall "The Eight Sentinels"). Von BEIDEN Overlays aus aufrufbar - der
+    /// Framezähler verhindert doppeltes Fortschreiten, falls ausnahmsweise beide gleichzeitig offen
+    /// sind (sonst liefen Automationen doppelt so schnell/könnten sich gegenseitig stören).
+    /// </summary>
+    public void UpdateZoneAutomations(uint currentTerritoryId)
+    {
+        var frame = ImGui.GetFrameCount();
+        if (frame == automationsUpdatedForFrame)
+            return;
+        automationsUpdatedForFrame = frame;
+
+        var config = Configuration;
+        var effectiveTerritoryId = ResolveEffectiveTerritoryId(currentTerritoryId);
+        var siblingTerritories = GetSplitCityTerritories(effectiveTerritoryId);
+        var allForZone = CollectionData.GetAllEntries()
+            .Concat(GetLiveZoneEntries(effectiveTerritoryId))
+            .Concat(GetHuntingLogEntries(currentTerritoryId))
+            .Where(e => siblingTerritories.Contains(e.TerritoryTypeId))
+            .Where(e => !IsBlacklisted(e))
+            .Where(e => config.ShowAllItems || e.Type == CollectibleType.HuntingLog || !IsAchievementOrRankGated(e))
+            .ToList();
+
+        var missingQuests = allForZone
+            .Where(e => e.Type == CollectibleType.Quest && !IsOwned(e) && !IsAchievementOrRankGated(e))
+            .ToList();
+        QuestAutomation.RefreshSupportStatus(missingQuests);
+        var toDoQuestEntries = ResolveToDoEntries().Where(e => e.Type == CollectibleType.Quest).ToList();
+        QuestAutomation.Update(missingQuests, effectiveTerritoryId, toDoQuestEntries);
+
+        var exitingNoFlyArea = NoFlyAreaExit.Update(new (Func<bool> IsActive, System.Action Restart)[]
+        {
+            (() => AetheryteAutomation.IsActive, () => { AetheryteAutomation.Stop(); AetheryteAutomation.Start(); }),
+            (() => HuntingLogAutomation.IsActive, () => { HuntingLogAutomation.Stop(); HuntingLogAutomation.Start(); }),
+            (() => AetherCurrentAutomation.IsActive, () => { AetherCurrentAutomation.Stop(); AetherCurrentAutomation.Start(); }),
+            (() => SightseeingAutomation.IsActive, () => { SightseeingAutomation.Stop(); SightseeingAutomation.Start(); }),
+            (() => ChocobokeepAutomation.IsActive, () => { ChocobokeepAutomation.Stop(); ChocobokeepAutomation.Start(); }),
+            (() => TripleTriadAutomation.IsActive, () => { TripleTriadAutomation.Stop(); TripleTriadAutomation.Start(); }),
+            (() => GoToAutomation.ActiveEntry != null, () => { if (GoToAutomation.ActiveEntry is { } goToEntry) GoToAutomation.GoTo(goToEntry); }),
+        });
+
+        var missingAetherytesCity = allForZone
+            .Where(e => e.Type == CollectibleType.Aetheryte && (config.SimulateAetheryteAutomation || !IsOwned(e)))
+            .ToList();
+        if (!exitingNoFlyArea)
+            AetheryteAutomation.Update(missingAetherytesCity);
+
+        var missingHuntingLogInZone = allForZone
+            .Where(e => e.Type == CollectibleType.HuntingLog && !IsAchievementOrRankGated(e))
+            .ToList();
+        if (!exitingNoFlyArea)
+            HuntingLogAutomation.Update(missingHuntingLogInZone);
+
+        var missingAetherCurrentsInZone = allForZone
+            .Where(e => e.Type == CollectibleType.AetherCurrent && (config.SimulateAetherCurrentAutomation || !IsOwned(e)) && !IsAchievementOrRankGated(e))
+            .ToList();
+        if (!exitingNoFlyArea)
+            AetherCurrentAutomation.Update(missingAetherCurrentsInZone);
+
+        var missingSightseeingInZone = GetLiveZoneEntries(effectiveTerritoryId)
+            .Where(e => e.Type == CollectibleType.Sightseeing && siblingTerritories.Contains(e.TerritoryTypeId))
+            .Where(e => !IsBlacklisted(e))
+            .Where(e => (!IsSightseeingUnsupportedByAutomation(e.Id)
+                         || (config.SimulateSightseeingAutomation && TryGetSightseeingJumpingPuzzle(e.Id, out _)))
+                        && !IsSightseeingBlockedByFlying(e))
+            .Where(e => config.SimulateSightseeingAutomation || (!IsOwned(e) && IsSightseeingBookAccessible(e)))
+            .ToList();
+        var pendingSightseeingInZone = GetLiveZoneEntries(effectiveTerritoryId)
+            .Where(e => e.Type == CollectibleType.Sightseeing && siblingTerritories.Contains(e.TerritoryTypeId))
+            .Where(e => !IsBlacklisted(e) && !IsOwned(e) && IsSightseeingOnlyTemporarilyUnavailable(e))
+            .ToList();
+        if (!exitingNoFlyArea)
+            SightseeingAutomation.Update(missingSightseeingInZone, pendingSightseeingInZone);
+
+        var missingChocobokeepsInZone = allForZone
+            .Where(e => e.Type == CollectibleType.Chocobokeep && (config.SimulateChocobokeepAutomation || !IsOwned(e)))
+            .ToList();
+        if (!exitingNoFlyArea)
+            ChocobokeepAutomation.Update(missingChocobokeepsInZone);
+
+        var missingNpcCardsInZone = allForZone
+            .Where(e => e.Type == CollectibleType.TripleTriadCard && e.Category == TripleTriadNpcCategory && e.EventNpcId != 0)
+            .Where(e => !IsOwned(e) && !IsAchievementOrRankGated(e))
+            .ToList();
+        if (!exitingNoFlyArea)
+            TripleTriadAutomation.Update(missingNpcCardsInZone);
+
+        if (!exitingNoFlyArea)
+            GoToAutomation.Update();
+    }
+
+    /// <summary>Ein Auto-Knopf der Overlay-Knopfreihe (siehe GetZoneAutomationButtons) - Abschnitt 5.2 der neuen Design-Spezifikation.</summary>
+    public readonly record struct ZoneAutomationButton(string Key, int Count, bool IsActive, bool HasActionable, System.Action Start, System.Action Stop);
+
+    /// <summary>
+    /// Nur-Lese-Zusammenfassung ALLER Auto-Knöpfe (Nutzeranforderung: nicht nur die drei laut
+    /// Design-Spezifikation Abschnitt 5.2 als "bekannt" genannten, sondern alle sieben, die es im
+    /// Plugin tatsächlich gibt - Quest, Ätheryt, Hunting Log, Ätherströmung, Erkundung,
+    /// Chocobokeep, Triple Triad) für das neue Overlay-Design (siehe Windows.CodexOverlayWindow).
+    /// Absichtlich EIGENSTÄNDIG und schreibend NUR auf Start()/Stop() beschränkt (keine
+    /// Automation.Update()-Aufrufe, kein QuestAutomation.RefreshSupportStatus) - das eigentliche
+    /// Fortschreiten der Automationen läuft separat über UpdateZoneAutomations (von
+    /// CodexOverlayWindow aufgerufen; CompactOverlayWindow.DrawContent tickt weiterhin über seine
+    /// eigene, unverändert gebliebene Inline-Logik), das dafür zusätzlich den vollen
+    /// Zonen-Eintrags-Filter (Typ-/Währungsfilter, Blacklist, geteilte Hauptstädte, ...) durchläuft.
+    /// Nur Knöpfe mit Count &gt; 0 ODER die gerade laufen gehören in die Liste (Abschnitt 5.2:
+    /// "Ausblenden").
+    /// </summary>
+    public List<ZoneAutomationButton> GetZoneAutomationButtons(uint currentTerritoryId)
+    {
+        var config = Configuration;
+        var effectiveTerritoryId = ResolveEffectiveTerritoryId(currentTerritoryId);
+        var siblingTerritories = GetSplitCityTerritories(effectiveTerritoryId);
+
+        var allForZone = CollectionData.GetAllEntries()
+            .Concat(GetLiveZoneEntries(effectiveTerritoryId))
+            .Concat(GetHuntingLogEntries(currentTerritoryId))
+            .Where(e => siblingTerritories.Contains(e.TerritoryTypeId))
+            .Where(e => !IsBlacklisted(e))
+            .ToList();
+
+        var missingQuests = allForZone
+            .Where(e => e.Type == CollectibleType.Quest && !IsOwned(e) && !IsAchievementOrRankGated(e))
+            .ToList();
+        var questCount = missingQuests.Count(q => !QuestAutomation.IsKnownUnsupported(q.Id));
+
+        var aetheryteCount = allForZone
+            .Count(e => e.Type == CollectibleType.Aetheryte && (config.SimulateAetheryteAutomation || !IsOwned(e)));
+
+        var sightseeingCount = GetLiveZoneEntries(effectiveTerritoryId)
+            .Count(e => e.Type == CollectibleType.Sightseeing && siblingTerritories.Contains(e.TerritoryTypeId)
+                        && !IsBlacklisted(e)
+                        && (!IsSightseeingUnsupportedByAutomation(e.Id) || (config.SimulateSightseeingAutomation && TryGetSightseeingJumpingPuzzle(e.Id, out _)))
+                        && !IsSightseeingBlockedByFlying(e)
+                        && (config.SimulateSightseeingAutomation || (!IsOwned(e) && IsSightseeingBookAccessible(e))));
+
+        // Bewusst NICHT stadtweit (siehe allForZone-Filterung oben, die über siblingTerritories
+        // geht) - Hunting-Log-Monster gibt es nur in genau der aktuellen Zone, kein Bezirkswechsel.
+        var huntingLogCount = allForZone
+            .Count(e => e.Type == CollectibleType.HuntingLog && !IsAchievementOrRankGated(e) && e.WorldPosition.HasValue);
+
+        var aetherCurrentCount = allForZone
+            .Count(e => e.Type == CollectibleType.AetherCurrent && (config.SimulateAetherCurrentAutomation || !IsOwned(e))
+                        && !IsAchievementOrRankGated(e) && e.HasGoToTarget);
+
+        var chocobokeepCount = allForZone
+            .Count(e => e.Type == CollectibleType.Chocobokeep && (config.SimulateChocobokeepAutomation || !IsOwned(e)) && e.HasGoToTarget);
+
+        var tripleTriadCount = allForZone
+            .Count(e => e.Type == CollectibleType.TripleTriadCard && e.Category == TripleTriadNpcCategory && e.EventNpcId != 0
+                        && !IsOwned(e) && !IsAchievementOrRankGated(e));
+
+        var result = new List<ZoneAutomationButton>();
+        void Add(string key, int count, bool isActive, System.Action start, System.Action stop)
+        {
+            if (count > 0 || isActive)
+                result.Add(new ZoneAutomationButton(key, count, isActive, count > 0, start, stop));
+        }
+
+        Add("quest", questCount, QuestAutomation.IsActive, () => QuestAutomation.Start(effectiveTerritoryId), QuestAutomation.Stop);
+        Add("sight", sightseeingCount, SightseeingAutomation.IsActive, () => SightseeingAutomation.Start(), SightseeingAutomation.Stop);
+        Add("aeth", aetheryteCount, AetheryteAutomation.IsActive, () => AetheryteAutomation.Start(), AetheryteAutomation.Stop);
+        Add("huntinglog", huntingLogCount, HuntingLogAutomation.IsActive, () => HuntingLogAutomation.Start(), HuntingLogAutomation.Stop);
+        Add("aethercurrent", aetherCurrentCount, AetherCurrentAutomation.IsActive, () => AetherCurrentAutomation.Start(), AetherCurrentAutomation.Stop);
+        Add("chocobokeep", chocobokeepCount, ChocobokeepAutomation.IsActive, () => ChocobokeepAutomation.Start(), ChocobokeepAutomation.Stop);
+        Add("tripletriad", tripleTriadCount, TripleTriadAutomation.IsActive, () => TripleTriadAutomation.Start(), TripleTriadAutomation.Stop);
+        return result;
+    }
+
+    /// <summary>
+    /// Noch fehlende Sammelobjekte JEDES Typs (Quests, Reittiere, Begleiter, ...) der aktuellen Zone
+    /// (inkl. geteilter Hauptstadt-Bezirke) für das neue Overlay-Design (siehe
+    /// Windows.CodexOverlayWindow) - Nutzeranforderung "alle Items integrieren", nicht mehr nur
+    /// Reittier/Begleiter wie in einer früheren Zwischenstufe. Dieselbe Grundmenge wie
+    /// GetZoneAutomationButtons (CollectionData + live Zoneneinträge + Hunting-Log), zusätzlich um
+    /// den Triple-Triad-Dublettenfilter ergänzt (siehe CompactOverlayWindow.DrawContent-Vorbild: eine
+    /// Karte taucht sonst sowohl generisch aus der JSON-Datei als auch live je NPC-Gegner auf).
+    /// Achievement-/Rang-gesperrte Einträge bleiben wie im alten Overlay bei aktiviertem
+    /// Configuration.ShowAllItems (Standard) sichtbar (Nutzer-Report: z.B. Gil-Preise fehlten im neuen
+    /// Overlay, weil diese Einträge komplett ausgeblendet wurden, obwohl das alte Overlay sie zeigt) -
+    /// eine optische "gesperrt"-Markierung dafür kommt erst in Abschnitt 5.7.
+    /// </summary>
+    // Nutzer-Report "Rendern dauert extrem lange": GetZoneOverlayItems wertet CollectionData.
+    // GetAllEntries() (~3100 Einträge) per Where/IsOwned/IsAchievementOrRankGated/OrderBy JEDES MAL
+    // komplett neu aus - wird aber pro Frame mehrfach aufgerufen (Währungsübersicht, Item-Liste,
+    // reine Anzahl für die Reiterbeschriftung, siehe CodexOverlayWindow). Jetzt pro Zone gecacht,
+    // höchstens alle 250ms neu berechnet (Besitz-/Freischalt-Status ändert sich ohnehin nur durch
+    // Spielaktionen, nicht durch UI-Interaktion) - bei Zonenwechsel sofort neu.
+    private List<CollectibleEntry>? zoneOverlayItemsCache;
+    private uint zoneOverlayItemsCacheTerritoryId;
+    private long zoneOverlayItemsCacheTime;
+
+    public List<CollectibleEntry> GetZoneOverlayItems(uint currentTerritoryId)
+    {
+        var now = Environment.TickCount64;
+        if (zoneOverlayItemsCache != null && zoneOverlayItemsCacheTerritoryId == currentTerritoryId && now - zoneOverlayItemsCacheTime < 250)
+            return zoneOverlayItemsCache;
+
+        zoneOverlayItemsCache = ComputeZoneOverlayItems(currentTerritoryId);
+        zoneOverlayItemsCacheTerritoryId = currentTerritoryId;
+        zoneOverlayItemsCacheTime = now;
+        return zoneOverlayItemsCache;
+    }
+
+    private List<CollectibleEntry> ComputeZoneOverlayItems(uint currentTerritoryId)
+    {
+        var config = Configuration;
+        var effectiveTerritoryId = ResolveEffectiveTerritoryId(currentTerritoryId);
+        var siblingTerritories = GetSplitCityTerritories(effectiveTerritoryId);
+
+        var allForZone = CollectionData.GetAllEntries()
+            .Concat(GetLiveZoneEntries(effectiveTerritoryId))
+            .Concat(GetHuntingLogEntries(currentTerritoryId))
+            .Where(e => siblingTerritories.Contains(e.TerritoryTypeId))
+            .Where(e => !IsBlacklisted(e))
+            .ToList();
+
+        var tripleTriadIdsWithLiveNpc = allForZone
+            .Where(e => e.Type == CollectibleType.TripleTriadCard && e.EventNpcId != 0)
+            .Select(e => e.Id)
+            .ToHashSet();
+
+        return allForZone
+            .Where(e => e.Type != CollectibleType.TripleTriadCard || e.EventNpcId != 0 || !tripleTriadIdsWithLiveNpc.Contains(e.Id))
+            .Where(e => !IsOwned(e))
+            .Where(e => config.ShowAllItems || e.Type == CollectibleType.HuntingLog || !IsAchievementOrRankGated(e))
+            // Quests, die Questionable nach einem Versuch als nicht automatisierbar markiert hat
+            // (siehe QuestAutomation.IsKnownUnsupported) zählen auch nicht in GetZoneAutomationButtons'
+            // questCount - ohne diesen Filter hier zeigte die Liste in der Zone z.B. 2 Quests, der
+            // Auto-Quest-Knopf aber nur 1 (Nutzer-Report, Gold Saucer). Der Knopf macht ohnehin nur die
+            // tatsächlich machbaren, die Liste soll dasselbe zeigen.
+            .Where(e => e.Type != CollectibleType.Quest || !QuestAutomation.IsKnownUnsupported(e.Id))
+            // Dieselbe benutzerdefinierte Typ-Reihenfolge wie im alten Overlay (Einstellungsmenü ->
+            // Anzeige -> "Reihenfolge", config.TypeOrder) statt einer festen alphabetischen Sortierung
+            // nach Typname (Nutzeranforderung) - siehe CompactOverlayWindow.DrawContent-Vorbild.
+            .OrderBy(e => config.TypeOrder.IndexOf(e.Type))
+            .ThenBy(e => e.Vendor)
+            .ThenBy(e => e.Name)
+            .ToList();
+    }
+
+    /// <summary>ToDo-Listen-Einträge für das neue Overlay-Design - alle Typen (siehe GetZoneOverlayItems-Kommentar).</summary>
+    public List<CollectibleEntry> GetToDoOverlayItems() => ResolveToDoEntries();
 
     /// <summary>
     /// Liefert für jedes sichtbare, echte native Spielfenster (z.B. Währungs-, Inventar- oder
@@ -8157,8 +8553,6 @@ public sealed class Plugin : IDalamudPlugin
     public void Dispose()
     {
         WindowSystem.RemoveAllWindows();
-        MainWindow.Dispose();
-        CompactOverlayWindow.Dispose();
         NavigationArrowWindow.Dispose();
         QuestAutomation.Dispose();
         CombatPluginInstance.Dispose();
