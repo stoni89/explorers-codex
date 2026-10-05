@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Numerics;
+using System.Text.RegularExpressions;
 using Dalamud.Interface;
 using Dalamud.Interface.Textures;
 using Dalamud.Interface.Utility;
@@ -66,6 +67,14 @@ public class CodexOverlayWindow : Window
 
     public override void PreDraw()
     {
+        // Nutzeranforderung: Fenster bleibt dort, wo es zuletzt hingeschoben wurde - siehe
+        // CodexMenuWindow.PreDraw-Kommentar (gleiches Vorgehen).
+        if (plugin.Configuration.OverlayWindowPosition is { } savedOverlayPosition)
+        {
+            Position = savedOverlayPosition;
+            PositionCondition = ImGuiCond.FirstUseEver;
+        }
+
         var transparency = plugin.Configuration.CompactTransparency;
         shadowActive = transparency >= 0.7f;
 
@@ -127,7 +136,24 @@ public class CodexOverlayWindow : Window
             CodexTheme.CornerLenOverlay * scale,
             CodexTheme.CornerThickOverlay * scale,
             CodexTheme.CornerInsetOverlay * scale);
+
+        // Nutzeranforderung: Position persistieren - kein config.Save() bei jedem Frame während des
+        // Ziehens (siehe CodexMenuWindow.Draw-Kommentar, dasselbe "database is locked"-Problem).
+        var windowPos = ImGui.GetWindowPos();
+        var config = plugin.Configuration;
+        if (config.OverlayWindowPosition is not { } savedPos || Vector2.DistanceSquared(savedPos, windowPos) > 0.25f)
+        {
+            config.OverlayWindowPosition = windowPos;
+            overlayPositionDirty = true;
+        }
+        if (overlayPositionDirty && ImGui.IsMouseReleased(ImGuiMouseButton.Left))
+        {
+            config.Save();
+            overlayPositionDirty = false;
+        }
     }
+
+    private bool overlayPositionDirty;
 
     /// <summary>
     /// Abschnitt 5.1 - Kompass-Symbol, Titel, drei Symbol-Knöpfe, Trennlinie. Icon/Titel/Knöpfe haben
@@ -589,7 +615,7 @@ public class CodexOverlayWindow : Window
     private void DrawCurrencyCell(CollectibleCurrency currency, CultureInfo culture, float scale)
     {
         var amount = plugin.GetCurrencyAmount(currency.CurrencyItemId);
-        var name = CompactOverlayWindow.GetCurrencyLabel(currency.Currency);
+        var name = GetCurrencyLabel(currency.Currency);
         var valueText = amount.ToString("N0", culture);
         var valueColor = amount == 0 ? CodexTheme.TextDim : CodexTheme.TextPrimary;
 
@@ -718,7 +744,7 @@ public class CodexOverlayWindow : Window
         // Vorbild wie CompactOverlayWindow.DrawCurrencyFilterPopupContent).
         var currenciesInList = rawItems
             .Where(e => config.ShowType.GetValueOrDefault(e.Type, true))
-            .SelectMany(CompactOverlayWindow.GetAllCurrencies)
+            .SelectMany(GetAllCurrencies)
             .Where(c => !string.IsNullOrEmpty(c.Label))
             .GroupBy(c => c.Label)
             .Select(g => (Label: g.Key, IconId: g.Select(c => c.IconId).FirstOrDefault(id => id != 0)))
@@ -987,10 +1013,145 @@ public class CodexOverlayWindow : Window
         if (type == CollectibleType.Minion)
             return (CodexTheme.MinionBadgeBg, CodexTheme.MinionBadgeFg);
 
-        var fg = CompactOverlayWindow.TypeColors.GetValueOrDefault(type, CodexTheme.TextSecondary);
+        var fg = TypeColors.GetValueOrDefault(type, CodexTheme.TextSecondary);
         var bg = new Vector4(fg.X * 0.22f, fg.Y * 0.22f, fg.Z * 0.22f, 1f);
         return (bg, fg);
     }
+
+    // ---- Währungs-/Typfarben-Hilfsmittel (Nutzeranforderung: altes Overlay vollständig entfernt -
+    // diese Mitglieder lebten vorher in Windows.CompactOverlayWindow, werden aber auch hier
+    // gebraucht, daher hierher verschoben statt dupliziert).
+
+    internal static readonly Dictionary<CollectibleType, Vector4> TypeColors = new()
+    {
+        [CollectibleType.Mount] = new(0.85f, 0.45f, 0.05f, 1f),
+        [CollectibleType.Minion] = new(0.75f, 0.6f, 1f, 1f),
+        [CollectibleType.Orchestrion] = new(0.4f, 0.9f, 0.85f, 1f),
+        [CollectibleType.Barding] = new(0.85f, 0.65f, 0.45f, 1f),
+        [CollectibleType.Emote] = new(1f, 0.55f, 0.75f, 1f),
+        [CollectibleType.Facewear] = new(0.55f, 0.75f, 1f, 1f),
+        [CollectibleType.FashionAccessory] = new(0.75f, 0.9f, 0.45f, 1f),
+        [CollectibleType.TripleTriadCard] = new(0.25f, 0.6f, 1f, 1f),
+        [CollectibleType.FrameKit] = new(0.55f, 0.55f, 0.95f, 1f),
+        [CollectibleType.Hairstyle] = new(0.9f, 0.7f, 0.9f, 1f),
+        [CollectibleType.Aetheryte] = new(0.6f, 1f, 0.75f, 1f),
+        [CollectibleType.Quest] = new(1f, 0.9f, 0.5f, 1f),
+        [CollectibleType.HuntingLog] = new(0.68f, 0.45f, 0.95f, 1f),
+        [CollectibleType.AetherCurrent] = new(0.65f, 0.95f, 1f, 1f),
+        [CollectibleType.Sightseeing] = new(0.3f, 0.8f, 0.45f, 1f),
+        [CollectibleType.Chocobokeep] = new(0.95f, 0.85f, 0.2f, 1f),
+        [CollectibleType.Achievement] = new(0.95f, 0.6f, 0.3f, 1f),
+    };
+
+    // Typen, deren Name tatsächlich einem echten Item-Sheet-Eintrag entspricht, den Allagan Tools'
+    // "/moreinfo"-Befehl (siehe Plugin.OpenAllaganToolsItemInfo) per Namenssuche finden kann - für
+    // SHIFT + Linksklick. Quest/Sightseeing/Aetheryte/HuntingLog/AetherCurrent/Chocobokeep sind keine
+    // Items. FrameKit/Hairstyle tragen zwar nur den Namen des Rahmens/der Frisur, werden aber über
+    // Plugin.ResolveUnlockItemId auf das freischaltende Item (Framer's Kit bzw. "Modern Aesthetics"-
+    // Buch) aufgelöst.
+    internal static readonly HashSet<CollectibleType> AllaganToolsEligibleTypes = new()
+    {
+        CollectibleType.Mount,
+        CollectibleType.Minion,
+        CollectibleType.Orchestrion,
+        CollectibleType.Barding,
+        CollectibleType.Emote,
+        CollectibleType.Facewear,
+        CollectibleType.FashionAccessory,
+        CollectibleType.TripleTriadCard,
+        CollectibleType.FrameKit,
+        CollectibleType.Hairstyle,
+    };
+
+    internal static string GetCurrencyLabel(string currencyText)
+    {
+        var t = Regex.Replace(currencyText, @"^\s*[\d,]+\s*", "");
+        t = Regex.Replace(t, @"\s*\([^)]*\)\s*$", "");
+        return t.Trim();
+    }
+
+    /// <summary>Triple-Triad-NPC-Kampf (siehe Plugin.GetTripleTriadNpcEntries) - Currency enthält dort den Gegner-Namen statt eines Preises.</summary>
+    private static bool IsTripleTriadNpcFight(CollectibleEntry entry) =>
+        entry.Category == Plugin.TripleTriadNpcCategory && entry.CurrencyItemId == 0 && !string.IsNullOrEmpty(entry.Currency);
+
+    // Manche Roh-Quelldaten schreiben dieselbe Währung uneinheitlich mal im Singular, mal im Plural
+    // (z.B. "Bicolor Gemstone" vs. "Bicolor Gemstones") - ohne Abgleich taucht sie im "Currencys
+    // filtern"-Popup fälschlich zweimal auf UND ein Ausblenden über die eine Schreibweise würde
+    // Einträge mit der jeweils anderen gar nicht erfassen (siehe CanonicalizeCurrencyLabel). Reiner
+    // Vergleichsschlüssel (nicht die Anzeige) - entfernt ein einzelnes anhängendes "s" (aber nicht
+    // "ss", z.B. bei "Skybuilders' Scrips" oder generell Wörtern, die schon auf "ss" enden).
+    private static string NormalizeCurrencyLabelKey(string label)
+    {
+        var lower = label.ToLowerInvariant();
+        return lower.Length > 1 && lower.EndsWith('s') && !lower.EndsWith("ss") ? lower[..^1] : lower;
+    }
+
+    // Je Vergleichsschlüssel (siehe NormalizeCurrencyLabelKey) DIE Schreibweise, die unter allen
+    // bekannten Einträgen am häufigsten vorkommt (bei Gleichstand die kürzere, meist die
+    // Singular-Form) - einmalig aus der kompletten Sammlung aufgebaut, da Spielinhalte sich zur
+    // Laufzeit nicht ändern.
+    private static Dictionary<string, string>? currencyLabelCanonicalCache;
+
+    private static string CanonicalizeCurrencyLabel(string rawLabel)
+    {
+        if (string.IsNullOrEmpty(rawLabel))
+            return rawLabel;
+
+        currencyLabelCanonicalCache ??= CollectionData.GetAllEntries()
+            .SelectMany(GetRawCurrencyLabels)
+            .Where(l => !string.IsNullOrEmpty(l))
+            .GroupBy(NormalizeCurrencyLabelKey)
+            .ToDictionary(
+                g => g.Key,
+                g => g.GroupBy(l => l, StringComparer.Ordinal)
+                    .OrderByDescending(gg => gg.Count())
+                    .ThenBy(gg => gg.Key.Length)
+                    .First().Key);
+
+        var key = NormalizeCurrencyLabelKey(rawLabel);
+        return currencyLabelCanonicalCache.TryGetValue(key, out var canonical) ? canonical : rawLabel;
+    }
+
+    private static IEnumerable<string> GetRawCurrencyLabels(CollectibleEntry entry)
+    {
+        if (!string.IsNullOrEmpty(entry.Currency))
+            yield return GetCurrencyLabel(entry.Currency);
+
+        if (entry.AdditionalCurrencies != null)
+        {
+            foreach (var additional in entry.AdditionalCurrencies)
+            {
+                if (!string.IsNullOrEmpty(additional.Currency))
+                    yield return GetCurrencyLabel(additional.Currency);
+            }
+        }
+    }
+
+    internal static IEnumerable<(string Label, uint IconId)> GetAllCurrencies(CollectibleEntry entry)
+    {
+        // Triple-Triad-NPC-Kämpfe tragen statt eines Preises den Gegner-Namen im Currency-Feld (siehe
+        // Plugin.GetTripleTriadNpcEntries) - für den Currency-Filter alle zu EINEM Eintrag
+        // zusammenfassen, statt jeden der über 100 Gegner einzeln aufzulisten.
+        if (IsTripleTriadNpcFight(entry))
+        {
+            yield return (Loc.T("NPC-Kampf", "NPC Fight"), 0);
+            yield break;
+        }
+
+        if (!string.IsNullOrEmpty(entry.Currency))
+            yield return (CanonicalizeCurrencyLabel(GetCurrencyLabel(entry.Currency)), entry.CurrencyIconId);
+
+        if (entry.AdditionalCurrencies != null)
+        {
+            foreach (var additional in entry.AdditionalCurrencies)
+            {
+                if (!string.IsNullOrEmpty(additional.Currency))
+                    yield return (CanonicalizeCurrencyLabel(GetCurrencyLabel(additional.Currency)), additional.CurrencyIconId);
+            }
+        }
+    }
+
+    internal static IEnumerable<string> GetAllCurrencyLabels(CollectibleEntry entry) => GetAllCurrencies(entry).Select(c => c.Label);
 
     /// <summary>
     /// Kurzform für das Typ-Etikett in der Item-Liste (Nutzeranforderung) - NUR für dieses Etikett,
@@ -1011,7 +1172,7 @@ public class CodexOverlayWindow : Window
         var config = plugin.Configuration;
         var list = CurrentRawItems(territoryId)
             .Where(e => config.ShowType.GetValueOrDefault(e.Type, true))
-            .Where(e => !CompactOverlayWindow.GetAllCurrencyLabels(e).Any(config.HiddenCurrencies.Contains))
+            .Where(e => !GetAllCurrencyLabels(e).Any(config.HiddenCurrencies.Contains))
             .ToList();
 
         ImGui.Dummy(new Vector2(0f, 2f * scale));
@@ -1034,6 +1195,16 @@ public class CodexOverlayWindow : Window
         ImGui.BeginChild("##CodexOverlayList", new Vector2(0f, 290f * scale), false);
         ImGui.Indent(8f * scale);
 
+        // Zeilenhöhe (Nutzeranforderung, Display-Karte im neuen Menü) - die Badge-Höhe (fester
+        // Schriftbestandteil, immer gleich groß) definiert die MINDESTENS sichtbare Zeilenhöhe; der
+        // Rest von config.OverlayRowHeight wird als Innenabstand oben/unten um diesen Inhalt verteilt,
+        // sodass sich die Gesamthöhe einer Zeile (Abstand + Inhalt + Abstand) tatsächlich sichtbar
+        // ändert, statt nur der (vorher sehr kleinen, kaum wahrnehmbaren) Trennlinien-Lücke.
+        float rowContentHeight;
+        using (CodexTheme.FontTypeBadge.Push())
+            rowContentHeight = ImGui.GetFontSize() + 4f * scale;
+        var rowGap = MathF.Max(0f, (config.OverlayRowHeight * scale - rowContentHeight) / 2f);
+
         for (var itemIndex = 0; itemIndex < list.Count; itemIndex++)
         {
             var item = list[itemIndex];
@@ -1041,10 +1212,10 @@ public class CodexOverlayWindow : Window
             if (itemIndex == 0)
                 ImGui.SetCursorPosY(ImGui.GetCursorPosY() - 8f * scale);
             else
-                ImGui.Dummy(new Vector2(0f, CodexTheme.OverlayRowGap * scale));
+                ImGui.Dummy(new Vector2(0f, rowGap));
             if (itemIndex > 0 && !shadowActive)
                 ImGui.Separator();
-            ImGui.Dummy(new Vector2(0f, CodexTheme.OverlayRowGap * scale));
+            ImGui.Dummy(new Vector2(0f, rowGap));
 
             // Abschnitt 5.7 - Voraussetzung nicht erfüllt (z.B. Errungenschaft/Rang fehlt): Etikett
             // abgedunkelt, Name und Preis gedämpft, zusätzliches Schloss-Symbol mit Tooltip. Nur
@@ -1089,6 +1260,14 @@ public class CodexOverlayWindow : Window
             var nameColor = isGated ? CodexTheme.TextMuted : isLinked ? CodexTheme.Accent : CodexTheme.TextPrimary;
             using (CodexTheme.FontBodyBold.Push())
                 CodexTheme.TextShadowed(item.Name, nameColor, shadowActive);
+            // Strg+Shift+Klick auf den Namen setzt den Eintrag direkt auf die Blacklist (Nutzeranforderung
+            // für die neue Blacklist-Seite, die dieses Tastenkürzel in einer Hinweis-Karte bewirbt - gab
+            // es vorher nirgends im Code, weder hier noch im alten Overlay, nur den Rechtsklick-Menüpunkt
+            // unten in DrawEntryContextMenu). Hat Vorrang vor dem normalen Linksklick (Karte/Achievement).
+            var isBlacklistShortcut = ImGui.IsItemClicked() && ImGui.GetIO().KeyCtrl && ImGui.GetIO().KeyShift;
+            if (isBlacklistShortcut)
+                Plugin.AddToBlacklist(item);
+
             if (hasGoToTarget)
             {
                 if (ImGui.IsItemHovered())
@@ -1098,7 +1277,7 @@ public class CodexOverlayWindow : Window
                         ShowTooltip(Loc.T($"Bei {item.Vendor}", $"From {item.Vendor}"));
                 }
 
-                if (ImGui.IsItemClicked())
+                if (ImGui.IsItemClicked() && !isBlacklistShortcut)
                     Plugin.OpenEntryMap(item);
             }
             else if (isAchievementLink)
@@ -1106,7 +1285,7 @@ public class CodexOverlayWindow : Window
                 if (ImGui.IsItemHovered())
                     ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
 
-                if (ImGui.IsItemClicked())
+                if (ImGui.IsItemClicked() && !isBlacklistShortcut)
                     Plugin.OpenAchievementWindow(item.Name);
             }
 
@@ -1170,7 +1349,8 @@ public class CodexOverlayWindow : Window
     /// kurz enthalten, wurde aber auf Nutzerwunsch vorerst wieder entfernt. Die Karte bleibt
     /// weiterhin per Linksklick auf den Namen selbst erreichbar (Plugin.OpenEntryMap).
     /// </summary>
-    private void DrawEntryContextMenu(CollectibleEntry item)
+    /// <summary>Internal statt private: wird auch von Windows.CodexMenuWindow.DrawDatabaseTable wiederverwendet (Nutzeranforderung: "dasselbe Rechtsklick-Menü wie im Overlay" für Datenbank-Einträge).</summary>
+    internal void DrawEntryContextMenu(CollectibleEntry item)
     {
         var popupId = $"##CodexEntryMenu{item.Type}{item.Id}";
         ImGui.OpenPopupOnItemClick(popupId, ImGuiPopupFlags.MouseButtonRight);
@@ -1188,7 +1368,7 @@ public class CodexOverlayWindow : Window
 
         var allaganToolsEnabled = plugin.Configuration.EnableAllaganToolsIntegration
                                    && Plugin.IsAllaganToolsAvailable()
-                                   && CompactOverlayWindow.AllaganToolsEligibleTypes.Contains(item.Type)
+                                   && AllaganToolsEligibleTypes.Contains(item.Type)
                                    && (item.Type is not (CollectibleType.FrameKit or CollectibleType.Hairstyle) || Plugin.HasUnlockItem(item));
 
         if (allaganToolsEnabled && DrawEntryMenuItem(FontAwesomeIcon.InfoCircle, Loc.T("Mehr Informationen", "More information")))
@@ -1209,11 +1389,21 @@ public class CodexOverlayWindow : Window
             Plugin.AddToToDoList(item);
         }
 
+        // Bugfix (Nutzer-Report): zeigte bisher IMMER "Auf die Blacklist setzen" und rief immer
+        // AddToBlacklist auf, auch für bereits geblacklistete Einträge - jetzt wie beim ToDo-Eintrag
+        // darüber je nach aktuellem Status umgeschaltet.
+        var isBlacklisted = Plugin.IsBlacklisted(item);
         ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(0.9f, 0.35f, 0.35f, 1f));
-        var blacklistClicked = DrawEntryMenuItem(FontAwesomeIcon.Ban, Loc.T("Auf die Blacklist setzen", "Add to blacklist"));
+        var blacklistClicked = DrawEntryMenuItem(FontAwesomeIcon.Ban,
+            isBlacklisted ? Loc.T("Von der Blacklist entfernen", "Remove from blacklist") : Loc.T("Auf die Blacklist setzen", "Add to blacklist"));
         ImGui.PopStyleColor();
         if (blacklistClicked)
-            Plugin.AddToBlacklist(item);
+        {
+            if (isBlacklisted)
+                Plugin.RemoveFromBlacklist(item.Type, item.Id);
+            else
+                Plugin.AddToBlacklist(item);
+        }
 
         ImGui.EndPopup();
         ImGui.PopStyleVar();

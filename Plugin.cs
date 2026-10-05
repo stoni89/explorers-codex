@@ -94,11 +94,7 @@ public sealed class Plugin : IDalamudPlugin
     public static bool SimulateAetherCurrentAutomation => instance.Configuration.SimulateAetherCurrentAutomation;
 
     public readonly WindowSystem WindowSystem = new("TheExplorersCodex");
-    private MainWindow MainWindow { get; init; }
-    public CompactOverlayWindow CompactOverlayWindow { get; init; }
 
-    // Neues Overlay-Design (siehe NewDesign/DESIGN_SPEC.md), im Aufbau - per "/exc newdesign"
-    // umschaltbar, läuft komplett eigenständig neben CompactOverlayWindow.
     public CodexOverlayWindow CodexOverlayWindow { get; init; }
     public CodexMenuWindow CodexMenuWindow { get; init; }
     public NavigationArrowWindow NavigationArrowWindow { get; init; }
@@ -168,6 +164,9 @@ public sealed class Plugin : IDalamudPlugin
         instance.Configuration.Save();
         blacklistIndex = null;
         toDoIndex = null;
+        // Ein frisch geblacklisteter Eintrag soll sofort aus dem Overlay verschwinden, nicht erst
+        // nach bis zu 250ms (siehe GetZoneOverlayItems-Cache-Kommentar).
+        instance.zoneOverlayItemsCache = null;
     }
 
     public static void RemoveFromBlacklist(CollectibleType type, uint id)
@@ -177,6 +176,7 @@ public sealed class Plugin : IDalamudPlugin
 
         instance.Configuration.Save();
         blacklistIndex = null;
+        instance.zoneOverlayItemsCache = null;
     }
 
     // Wie BlacklistIndex, aber für Configuration.ToDoList (siehe IsOnToDoList/AddToToDoList/RemoveFromToDoList).
@@ -255,6 +255,101 @@ public sealed class Plugin : IDalamudPlugin
         config.Save();
     }
 
+    // ---- Begleit-Plugin-Abhängigkeiten (Nutzeranforderung: altes Menü/Overlay vollständig entfernt -
+    // diese Mitglieder lebten vorher in Windows.MainWindow, werden aber auch von
+    // Windows.CodexMenuWindow.DrawPluginsPage gebraucht, daher hierher verschoben statt dupliziert).
+
+    // Group: Plugins derselben Gruppe sind gegeneinander austauschbar - "Required" ist dann schon
+    // erfüllt, sobald EINES davon installiert ist (siehe IsDependencySatisfied), z.B. die beiden
+    // Kampf-Plugins (siehe CombatPluginBridge).
+    public const string CombatDependencyGroup = "Combat";
+
+    public static readonly (string InternalName, string DisplayName, string DescriptionDe, string DescriptionEn, bool Required, string? Group)[] Dependencies =
+    {
+        (CombatPluginBridge.RotationSolverInternalName, "RotationSolver Reborn",
+            "Kampf-Plugin: übernimmt den Kampf bei der Hunting-Log-Kill-Automation, bei kampfpflichtigen Schritten während der Quest-Automation, und wehrt unterwegs angreifende Gegner während der Sightseeing-Automation ab. Alternativ zu Wrath Combo - eines der beiden wird benötigt.",
+            "Combat plugin: drives combat for the hunting log kill automation, for combat-required steps during the quest automation, and fends off attackers encountered while the sightseeing automation is traveling. Alternative to Wrath Combo - one of the two is required.",
+            true, CombatDependencyGroup),
+        (CombatPluginBridge.WrathComboInternalName, "Wrath Combo",
+            "Kampf-Plugin: übernimmt den Kampf bei der Hunting-Log-Kill-Automation, bei kampfpflichtigen Schritten während der Quest-Automation, und wehrt unterwegs angreifende Gegner während der Sightseeing-Automation ab. Alternativ zu RotationSolver Reborn - eines der beiden wird benötigt.",
+            "Combat plugin: drives combat for the hunting log kill automation, for combat-required steps during the quest automation, and fends off attackers encountered while the sightseeing automation is traveling. Alternative to RotationSolver Reborn - one of the two is required.",
+            true, CombatDependencyGroup),
+        ("vnavmesh", "vnavmesh",
+            "Für das Laufen bei allen Automationen (Aetheryte, Quest, Hunting Log, \"Hinlaufen\").",
+            "For pathfinding/walking in every automation (aetheryte, quest, hunting log, \"go to\").",
+            true, null),
+        ("Questionable", "Questionable",
+            "Lässt die Quest-Automation Quests automatisch annehmen und abschließen.",
+            "Drives the quest automation to accept and complete quests automatically.",
+            true, null),
+        ("Lifestream", "Lifestream",
+            "Für Reisen zwischen Bezirken einer geteilten Hauptstadt während der Automation.",
+            "For traveling between districts of a split capital city during automation.",
+            true, null),
+        ("Saucy", "Saucy",
+            "Spielt bei der Triple-Triad-Automation die Partien gegen NPC-Gegner, bis alle ihre Karten gedroppt sind.",
+            "Plays the matches against NPC opponents during the Triple Triad automation until all of their cards have dropped.",
+            true, null),
+        ("TextAdvance", "TextAdvance",
+            "Klickt automatisch durch Dialoge/Cutscenes während der Quest-Automation.",
+            "Automatically clicks through dialogue/cutscenes during the quest automation.",
+            true, null),
+        ("InventoryTools", "Allagan Tools",
+            "Aktiviert die Allagan-Tools-Integration für dieses Plugin.",
+            "Enable Allagan Tools Integration for this Plugin.",
+            false, null),
+    };
+
+    /// <summary>
+    /// Ob mindestens ein als "Required" markiertes Plugin aktuell nicht installiert/geladen ist -
+    /// wird für den Warn-Badge/roten Punkt am Plugins-Icon in der Seitenleiste UND zum Ausgrauen
+    /// sämtlicher Automations-Knöpfe im Overlay gebraucht - bewusst pauschal für JEDES fehlende
+    /// Required-Plugin, nicht nur das von der jeweiligen Automation tatsächlich genutzte, damit
+    /// nicht pro Knopf einzeln nachvollzogen werden muss, welches Plugin wofür gebraucht wird.
+    /// </summary>
+    public static bool HasMissingRequiredDependency() =>
+        Dependencies.Any(d => d.Required && !IsDependencySatisfied(d.InternalName, d.Group));
+
+    public static bool IsPluginLoaded(string internalName) =>
+        PluginInterface.InstalledPlugins.Any(p => p.InternalName == internalName && p.IsLoaded);
+
+    /// <summary>Installiert - oder (bei einer Gruppe, siehe CombatDependencyGroup) ein anderes Plugin derselben Gruppe.</summary>
+    public static bool IsDependencySatisfied(string internalName, string? group) =>
+        group == null
+            ? IsPluginLoaded(internalName)
+            : Dependencies.Any(d => d.Group == group && IsPluginLoaded(d.InternalName));
+
+    // Nur die Typen, die als globale (zonenunabhängige) Liste über CollectionData.GetAllEntries
+    // verfügbar sind - Quest/Aetheryte/HuntingLog/Sightseeing werden nur pro Zone live berechnet und
+    // haben deshalb keine sinnvolle "Gesamt"-Zahl. Für Windows.CodexMenuWindow.DrawStatisticsPage.
+    public static readonly CollectibleType[] StatisticsTypes =
+    {
+        CollectibleType.Mount, CollectibleType.Minion, CollectibleType.Orchestrion, CollectibleType.Barding,
+        CollectibleType.Emote, CollectibleType.Facewear, CollectibleType.FashionAccessory, CollectibleType.TripleTriadCard,
+        CollectibleType.FrameKit, CollectibleType.AetherCurrent, CollectibleType.Achievement,
+    };
+
+    // Alle Kategorien, für die es eine zonenunabhängige Gesamtliste gibt (siehe GetDatabaseEntries) -
+    // Aetheryte/HuntingLog fehlen bewusst, dafür gibt es (anders als Quest/Sightseeing) keine fertige
+    // globale Liste, sondern nur pro-Zone berechnete Ausschnitte (siehe StatisticsTypes-Kommentar).
+    // Für Windows.CodexMenuWindow.DrawDatabasePage.
+    public static readonly CollectibleType[] DatabaseTypes =
+    {
+        CollectibleType.Mount, CollectibleType.Minion, CollectibleType.Orchestrion, CollectibleType.Barding,
+        CollectibleType.Emote, CollectibleType.Facewear, CollectibleType.FashionAccessory, CollectibleType.TripleTriadCard,
+        CollectibleType.FrameKit, CollectibleType.Hairstyle, CollectibleType.AetherCurrent, CollectibleType.Chocobokeep,
+        CollectibleType.Achievement, CollectibleType.Quest, CollectibleType.Sightseeing,
+    };
+
+    // Für diese Typen macht weder eine Preisangabe noch ein Anbieter/Questgeber Sinn (Errungenschaften/
+    // Chocobokeep/Quests/Sightseeing haben keine Kaufwährung, Ätherströmungen ohnehin nie - und "Von"
+    // wäre dort ebenso leer bzw. bedeutungslos).
+    public static readonly HashSet<CollectibleType> DatabaseTypesWithoutVendorInfo = new()
+    {
+        CollectibleType.Achievement, CollectibleType.Chocobokeep, CollectibleType.Quest,
+        CollectibleType.Sightseeing, CollectibleType.AetherCurrent,
+    };
+
     public Plugin()
     {
         instance = this;
@@ -282,13 +377,11 @@ public sealed class Plugin : IDalamudPlugin
         TripleTriadAutomation = new TripleTriadAutomation();
         NoFlyAreaExit = new NoFlyAreaExit();
 
-        MainWindow = new MainWindow(this);
-        WindowSystem.AddWindow(MainWindow);
-
-        CompactOverlayWindow = new CompactOverlayWindow(this) { IsOpen = Configuration.ShowCompactOverlay };
-        WindowSystem.AddWindow(CompactOverlayWindow);
-
-        CodexOverlayWindow = new CodexOverlayWindow(this) { IsOpen = false };
+        // Nutzeranforderung: altes Menü (MainWindow) und altes Overlay (CompactOverlayWindow)
+        // vollständig entfernt - CodexMenuWindow/CodexOverlayWindow sind jetzt die einzigen Fenster,
+        // CodexOverlayWindow übernimmt daher auch Configuration.ShowCompactOverlay (Feldname aus
+        // Kompatibilitätsgründen beibehalten, damit bestehende gespeicherte Configs weiter gelten).
+        CodexOverlayWindow = new CodexOverlayWindow(this) { IsOpen = Configuration.ShowCompactOverlay };
         WindowSystem.AddWindow(CodexOverlayWindow);
 
         CodexMenuWindow = new CodexMenuWindow(this) { IsOpen = false };
@@ -303,8 +396,7 @@ public sealed class Plugin : IDalamudPlugin
 
         CommandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
-            HelpMessage = Loc.T("Öffnet The Explorer's Codex. Mit \"newdesign\" schaltet man das neue Overlay-Design um.",
-                "Opens The Explorer's Codex. Use \"newdesign\" to toggle the new overlay design.")
+            HelpMessage = Loc.T("Öffnet The Explorer's Codex.", "Opens The Explorer's Codex.")
         });
 
         PluginInterface.UiBuilder.Draw += DrawUI;
@@ -312,22 +404,7 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.OpenConfigUi += ToggleMainUI;
     }
 
-    private void OnCommand(string command, string args)
-    {
-        if (string.Equals(args.Trim(), "newdesign", StringComparison.OrdinalIgnoreCase))
-        {
-            CodexOverlayWindow.IsOpen = !CodexOverlayWindow.IsOpen;
-            return;
-        }
-
-        if (string.Equals(args.Trim(), "newmenu", StringComparison.OrdinalIgnoreCase))
-        {
-            CodexMenuWindow.IsOpen = !CodexMenuWindow.IsOpen;
-            return;
-        }
-
-        MainWindow.IsOpen = !MainWindow.IsOpen;
-    }
+    private void OnCommand(string command, string args) => CodexMenuWindow.IsOpen = !CodexMenuWindow.IsOpen;
 
     private void DrawUI()
     {
@@ -335,9 +412,9 @@ public sealed class Plugin : IDalamudPlugin
         WindowSystem.Draw();
     }
 
-    private void ToggleMainUI() => MainWindow.IsOpen = !MainWindow.IsOpen;
+    private void ToggleMainUI() => CodexMenuWindow.IsOpen = !CodexMenuWindow.IsOpen;
 
-    public void OpenOptions() => MainWindow.IsOpen = true;
+    public void OpenOptions() => CodexMenuWindow.IsOpen = true;
 
     /// <summary>
     /// Prüft, ob der Spieler ein bestimmtes Sammelobjekt bereits besitzt.
@@ -5399,6 +5476,24 @@ public sealed class Plugin : IDalamudPlugin
     /// <summary>Nur die Ids - siehe GetAllTrackedQuestEntries.</summary>
     public List<uint> GetAllTrackedQuestIds() => GetAllTrackedQuestEntries().Select(e => e.Id).ToList();
 
+    /// <summary>Für die neue Statistics-Seite (siehe Windows.CodexMenuWindow.DrawStatisticsPage) - feste Zuordnung der Statistik-Kategorien (MainWindow.StatisticsTypes + Quest) zu einer von zwei Gruppen ("Sammlungen"/"Fortschritt"). Eine neue Kategorie ohne Eintrag hier landet automatisch in Collections (siehe GetStatisticsGroup).</summary>
+    public enum StatisticsGroup
+    {
+        Collections,
+        Progress,
+    }
+
+    private static readonly Dictionary<CollectibleType, StatisticsGroup> StatisticsGroupByType = new()
+    {
+        [CollectibleType.AetherCurrent] = StatisticsGroup.Progress,
+        [CollectibleType.Achievement] = StatisticsGroup.Progress,
+        [CollectibleType.Quest] = StatisticsGroup.Progress,
+        [CollectibleType.Sightseeing] = StatisticsGroup.Progress,
+    };
+
+    public static StatisticsGroup GetStatisticsGroup(CollectibleType type) =>
+        StatisticsGroupByType.GetValueOrDefault(type, StatisticsGroup.Collections);
+
     private static List<CollectibleEntry>? globalEntriesCache;
 
     /// <summary>
@@ -6199,7 +6294,29 @@ public sealed class Plugin : IDalamudPlugin
     /// Overlay, weil diese Einträge komplett ausgeblendet wurden, obwohl das alte Overlay sie zeigt) -
     /// eine optische "gesperrt"-Markierung dafür kommt erst in Abschnitt 5.7.
     /// </summary>
+    // Nutzer-Report "Rendern dauert extrem lange": GetZoneOverlayItems wertet CollectionData.
+    // GetAllEntries() (~3100 Einträge) per Where/IsOwned/IsAchievementOrRankGated/OrderBy JEDES MAL
+    // komplett neu aus - wird aber pro Frame mehrfach aufgerufen (Währungsübersicht, Item-Liste,
+    // reine Anzahl für die Reiterbeschriftung, siehe CodexOverlayWindow). Jetzt pro Zone gecacht,
+    // höchstens alle 250ms neu berechnet (Besitz-/Freischalt-Status ändert sich ohnehin nur durch
+    // Spielaktionen, nicht durch UI-Interaktion) - bei Zonenwechsel sofort neu.
+    private List<CollectibleEntry>? zoneOverlayItemsCache;
+    private uint zoneOverlayItemsCacheTerritoryId;
+    private long zoneOverlayItemsCacheTime;
+
     public List<CollectibleEntry> GetZoneOverlayItems(uint currentTerritoryId)
+    {
+        var now = Environment.TickCount64;
+        if (zoneOverlayItemsCache != null && zoneOverlayItemsCacheTerritoryId == currentTerritoryId && now - zoneOverlayItemsCacheTime < 250)
+            return zoneOverlayItemsCache;
+
+        zoneOverlayItemsCache = ComputeZoneOverlayItems(currentTerritoryId);
+        zoneOverlayItemsCacheTerritoryId = currentTerritoryId;
+        zoneOverlayItemsCacheTime = now;
+        return zoneOverlayItemsCache;
+    }
+
+    private List<CollectibleEntry> ComputeZoneOverlayItems(uint currentTerritoryId)
     {
         var config = Configuration;
         var effectiveTerritoryId = ResolveEffectiveTerritoryId(currentTerritoryId);
@@ -8436,8 +8553,6 @@ public sealed class Plugin : IDalamudPlugin
     public void Dispose()
     {
         WindowSystem.RemoveAllWindows();
-        MainWindow.Dispose();
-        CompactOverlayWindow.Dispose();
         NavigationArrowWindow.Dispose();
         QuestAutomation.Dispose();
         CombatPluginInstance.Dispose();

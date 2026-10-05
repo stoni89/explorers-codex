@@ -121,18 +121,31 @@ public static class CodexTheme
         System.IO.Path.Combine(Plugin.PluginInterface.AssemblyLocation.DirectoryName!, "Data", "Fonts", fileName);
 
     /// <summary>
-    /// Baut ein Font-Handle aus einer lokalen TTF-Datei, mit Dalamuds gebündelter Noto-Sans-CJK-
-    /// Schrift als Fallback für japanische Glyphen gemergt (Abschnitt 3: "Japanisch (Fallback)") -
-    /// eigene Schriftdateien decken nur lateinische Glyphen ab. Der Merge-Schritt ist bewusst in ein
-    /// eigenes try/catch gepackt: scheitert NUR er (z.B. CJK-Asset von Dalamud gerade nicht bereit),
-    /// soll das die eigentliche lateinische Schrift nicht mit zu Fall bringen - sonst bliebe das
-    /// komplette Handle dauerhaft "nicht verfügbar" und JEDER Text fiele auf die ImGui-Standardschrift
-    /// zurück (Nutzer-Report: Schriftarten/-größen im Overlay passen nicht zum Entwurf).
+    /// Baut ein Font-Handle aus einer lokalen TTF-Datei - mergeCjk=true merged zusätzlich Dalamuds
+    /// gebündelte Noto-Sans-CJK-Schrift als Fallback für japanische Glyphen (Abschnitt 3: "Japanisch
+    /// (Fallback)"), eigene Schriftdateien decken nur lateinische Glyphen ab. Der Merge-Schritt ist
+    /// bewusst in ein eigenes try/catch gepackt: scheitert NUR er (z.B. CJK-Asset von Dalamud gerade
+    /// nicht bereit), soll das die eigentliche lateinische Schrift nicht mit zu Fall bringen - sonst
+    /// bliebe das komplette Handle dauerhaft "nicht verfügbar" und JEDER Text fiele auf die
+    /// ImGui-Standardschrift zurück (Nutzer-Report: Schriftarten/-größen im Overlay passen nicht zum
+    /// Entwurf).
+    ///
+    /// Nutzer-Report "Rendern des Menüs dauert über 1 Minute": der CJK-Merge rastert Dalamuds
+    /// komplette Noto-Sans-CJK-Schrift (mehrere tausend Glyphen) NEU, einmal PRO Handle - bei inzwischen
+    /// ~70 verschiedenen (Datei, Größe)-Kombinationen in diesem Theme war das der dominante Anteil der
+    /// Font-Atlas-Bauzeit beim Plugin-Start. mergeCjk ist daher jetzt standardmäßig AUS und wird NUR
+    /// für die Handles auf true gesetzt, die tatsächlich rohe Spieldaten anzeigen (Item-/Zonen-/
+    /// Händler-/Währungsnamen, die bei japanischem Spielclient japanische Zeichen enthalten können) -
+    /// alle reinen UI-Beschriftungen dieses Plugins kommen ausschließlich aus Loc.T(de, en)/
+    /// Loc.TypeName, sind also NIE japanisch und brauchen den Fallback nicht.
     /// </summary>
-    private static IFontHandle BuildHandle(string fileName, float sizePx) =>
+    private static IFontHandle BuildHandle(string fileName, float sizePx, bool mergeCjk = false) =>
         Atlas.NewDelegateFontHandle(e => e.OnPreBuild(tk =>
         {
             var baseFont = tk.AddFontFromFile(FontPath(fileName), new SafeFontConfig { SizePx = ScaledPx(sizePx) });
+            if (!mergeCjk)
+                return;
+
             try
             {
                 tk.AddDalamudAssetFont(Dalamud.DalamudAsset.NotoSansCjkRegular, new SafeFontConfig
@@ -189,7 +202,7 @@ public static class CodexTheme
     // dargestellt (echte statische Bold-Datei, siehe FontTitleOverlay-Kommentar) - FontCardTitle
     // bleibt bei 15px/normaler Stärke für künftige Menü-Kartentitel (Abschnitt 3).
     /// <summary>Zonenname im Overlay - Cinzel Bold, 22px (Abschnitt 3, im Spiel angepasst statt 15px).</summary>
-    public static IFontHandle FontZoneName => cinzelZoneName ??= BuildHandle("Cinzel-Bold.ttf", 22f);
+    public static IFontHandle FontZoneName => cinzelZoneName ??= BuildHandle("Cinzel-Bold.ttf", 22f, mergeCjk: true);
 
     /// <summary>Abschnitts-Labels (Versalien) - Cinzel SemiBold 17px (Abschnitt 3, im Spiel von 10px erhöht).</summary>
     public static IFontHandle FontSectionLabel => cinzelLabel ??= BuildHandle("Cinzel.ttf", 17f);
@@ -211,7 +224,7 @@ public static class CodexTheme
     public static IFontHandle FontBodyMedium => alegreyaSansMedium ??= BuildHandle("AlegreyaSans-Medium.ttf", 18f);
 
     /// <summary>Fließtext/Knöpfe/Listen Bold - Alegreya Sans 18px (Abschnitt 3, im Spiel für den Item-Namen von 13px erhöht).</summary>
-    public static IFontHandle FontBodyBold => alegreyaSansBold ??= BuildHandle("AlegreyaSans-Bold.ttf", 18f);
+    public static IFontHandle FontBodyBold => alegreyaSansBold ??= BuildHandle("AlegreyaSans-Bold.ttf", 18f, mergeCjk: true);
 
     private static IFontHandle? alegreyaAutoButtonRegular;
     private static IFontHandle? alegreyaAutoButtonBold;
@@ -278,6 +291,209 @@ public static class CodexTheme
     /// <summary>"Installed"-Label einer Plugin-Zeile - Alegreya Sans Bold, 17px (von FontAutoButtonLabel +3px gelöst, das auch für die Auto-Knöpfe im Overlay gebraucht wird).</summary>
     public static IFontHandle FontPluginInstalledLabel => alegreyaPluginInstalledLabel ??= BuildHandle("AlegreyaSans-Bold.ttf", 17f);
 
+    private static IFontHandle? cinzelDatabaseHeader;
+
+    /// <summary>Spaltennamen der Datenbank-Tabelle (NAME/PREIS/VON/ZONE/STATUS) - Cinzel SemiBold, 21px (ursprünglich 11px, +10px auf Nutzerwunsch).</summary>
+    public static IFontHandle FontDatabaseHeader => cinzelDatabaseHeader ??= BuildHandle("Cinzel.ttf", 21f);
+
+    private static IFontHandle? alegreyaDatabaseItemName;
+
+    /// <summary>Item-Name in der Datenbank-Tabelle - Alegreya Sans Bold, 21px (von FontBodyBold +3px gelöst, das auch für Item-Namen im Overlay gebraucht wird).</summary>
+    public static IFontHandle FontDatabaseItemName => alegreyaDatabaseItemName ??= BuildHandle("AlegreyaSans-Bold.ttf", 21f, mergeCjk: true);
+
+    private static IFontHandle? alegreyaDatabaseItemText;
+
+    /// <summary>Preis/Von/Zone-Text in der Datenbank-Tabelle - Alegreya Sans Regular, 18px (von FontBody +3px, dann nochmal +2px gelöst, das auch anderswo gebraucht wird).</summary>
+    public static IFontHandle FontDatabaseItemText => alegreyaDatabaseItemText ??= BuildHandle("AlegreyaSans-Regular.ttf", 18f, mergeCjk: true);
+
+    private static IFontHandle? alegreyaDatabaseStatusLabel;
+
+    /// <summary>"Besessen"/"Fehlt"-Label in der Datenbank-Tabelle - Alegreya Sans Bold, 14px (eigener, kleinerer Handle statt FontPluginInstalledLabel, das auf der Plugins-Seite 17px braucht).</summary>
+    public static IFontHandle FontDatabaseStatusLabel => alegreyaDatabaseStatusLabel ??= BuildHandle("AlegreyaSans-Bold.ttf", 14f);
+
+    private static IFontHandle? alegreyaDatabaseSearchInput;
+
+    /// <summary>Text/Platzhalter im Datenbank-Suchfeld - Alegreya Sans Regular, 15px (von FontBody +2px gelöst, das auch anderswo gebraucht wird).</summary>
+    public static IFontHandle FontDatabaseSearchInput => alegreyaDatabaseSearchInput ??= BuildHandle("AlegreyaSans-Regular.ttf", 15f);
+
+    private static IFontHandle? alegreyaDatabaseCountRow;
+
+    /// <summary>Zähler-/Sortierzeile der Datenbank-Seite ("X von Y Einträgen", "Sortiert nach ...") - Alegreya Sans Regular, 16px (von FontBody +3px gelöst, das auch anderswo gebraucht wird).</summary>
+    public static IFontHandle FontDatabaseCountRow => alegreyaDatabaseCountRow ??= BuildHandle("AlegreyaSans-Regular.ttf", 16f);
+
+    private static IFontHandle? alegreyaBlacklistTypeBadge;
+
+    /// <summary>Typ-Etikett in der Blacklist-Tabelle - Alegreya Sans Bold 13px (von FontTypeBadge, 16px, gelöst - die Blacklist-Tabelle ist insgesamt kleiner gesetzt als das Overlay; +2px Nutzervorgabe von ursprünglich 11px).</summary>
+    public static IFontHandle FontBlacklistTypeBadge => alegreyaBlacklistTypeBadge ??= BuildHandle("AlegreyaSans-Bold.ttf", 13f);
+
+    private static IFontHandle? alegreyaBlacklistBody;
+
+    /// <summary>Übrige Zellentexte (Zone, "hidden"-Hinweis, Fußzeile, Hinweis-Karte) der Blacklist-Tabelle - Alegreya Sans Regular 17px (DESIGN_SPEC-Basis 14px, +3px Nutzervorgabe).</summary>
+    public static IFontHandle FontBlacklistBody => alegreyaBlacklistBody ??= BuildHandle("AlegreyaSans-Regular.ttf", 17f);
+
+    private static IFontHandle? alegreyaBlacklistButtonLabel;
+
+    /// <summary>Rahmen-Knöpfe der Blacklist-Seite ("Restore all"/"Restore"/"Cancel" im Bestätigungs-Popup) - Alegreya Sans Medium 14px (DESIGN_SPEC).</summary>
+    public static IFontHandle FontBlacklistButtonLabel => alegreyaBlacklistButtonLabel ??= BuildHandle("AlegreyaSans-Medium.ttf", 14f);
+
+    private static IFontHandle? alegreyaShortcutKey;
+
+    /// <summary>Tasten-Kästchen in CodexWidgets.ShortcutHint ("Ctrl"/"Shift"/"Click") - Alegreya Sans Bold 14px (DESIGN_SPEC-Basis 12px, +2px Nutzervorgabe).</summary>
+    public static IFontHandle FontShortcutKey => alegreyaShortcutKey ??= BuildHandle("AlegreyaSans-Bold.ttf", 14f);
+
+    private static IFontHandle? alegreyaShortcutText;
+
+    /// <summary>Begleittext in CodexWidgets.ShortcutHint (z.B. "... setzt ihn auf die Blacklist.") - Alegreya Sans Regular 16px (DESIGN_SPEC-Basis 14px, +2px Nutzervorgabe).</summary>
+    public static IFontHandle FontShortcutText => alegreyaShortcutText ??= BuildHandle("AlegreyaSans-Regular.ttf", 16f);
+
+    private static IFontHandle? cinzelAboutCardTitle;
+
+    /// <summary>Titel der "Charted by Hand"-Karte auf der About-Seite - Cinzel SemiBold 18px (DESIGN_SPEC-Basis 16px, +2px Nutzervorgabe).</summary>
+    public static IFontHandle FontAboutCardTitle => cinzelAboutCardTitle ??= BuildHandle("Cinzel.ttf", 18f);
+
+    private static IFontHandle? alegreyaAboutBody;
+
+    /// <summary>Fließtext der "Charted by Hand"-Karte - Alegreya Sans Regular 17px (DESIGN_SPEC-Basis 15px, +2px Nutzervorgabe).</summary>
+    public static IFontHandle FontAboutBody => alegreyaAboutBody ??= BuildHandle("AlegreyaSans-Regular.ttf", 17f);
+
+    private static IFontHandle? alegreyaAboutKofiLabel;
+
+    /// <summary>"Support on Ko-fi"-Knopf auf der About-Seite - Alegreya Sans Bold 15px (DESIGN_SPEC).</summary>
+    public static IFontHandle FontAboutKofiLabel => alegreyaAboutKofiLabel ??= BuildHandle("AlegreyaSans-Bold.ttf", 15f);
+
+    private static IFontHandle? alegreyaAboutLinkButtonLabel;
+
+    /// <summary>"Report a bug"/"Suggest a feature"-Rahmen-Knöpfe auf der About-Seite - Alegreya Sans Medium 14px (DESIGN_SPEC).</summary>
+    public static IFontHandle FontAboutLinkButtonLabel => alegreyaAboutLinkButtonLabel ??= BuildHandle("AlegreyaSans-Medium.ttf", 14f);
+
+    private static IFontHandle? cinzelAboutDividerLabel;
+
+    /// <summary>"FOLLOW THE JOURNEY"-Beschriftung der Trennlinie auf der About-Seite - Cinzel SemiBold 14px (DESIGN_SPEC-Basis 11px, +3px Nutzervorgabe).</summary>
+    public static IFontHandle FontAboutDividerLabel => cinzelAboutDividerLabel ??= BuildHandle("Cinzel.ttf", 14f);
+
+    private static IFontHandle? cinzelAboutTitle;
+
+    /// <summary>Plugin-Name auf der About-Seite ("The Explorer's Codex") - Cinzel Bold 31px (von FontSidebarBrandLarge, 26px, gelöst: +5px Nutzervorgabe, betrifft NUR die About-Seite, nicht das Sidebar-Logo).</summary>
+    public static IFontHandle FontAboutTitle => cinzelAboutTitle ??= BuildHandle("Cinzel-Bold.ttf", 31f);
+
+    private static IFontHandle? alegreyaAboutSubtitle;
+
+    /// <summary>Untertitel auf der About-Seite ("Your companion for...") - Alegreya Italic 20px (von FontSubtitleItalic, 15px, gelöst: +5px Nutzervorgabe, betrifft NUR die About-Seite).</summary>
+    public static IFontHandle FontAboutSubtitle => alegreyaAboutSubtitle ??= BuildHandle("AlegreyaItalic.ttf", 20f);
+
+    private static IFontHandle? alegreyaAboutVersionBadge;
+
+    /// <summary>Versions-Etikett auf der About-Seite ("Version x.y.z") - Alegreya Sans Regular 18px (von FontBody, 13px, gelöst: +5px Nutzervorgabe, betrifft NUR die About-Seite).</summary>
+    public static IFontHandle FontAboutVersionBadge => alegreyaAboutVersionBadge ??= BuildHandle("AlegreyaSans-Regular.ttf", 18f);
+
+    private static IFontHandle? alegreyaAboutHint;
+
+    /// <summary>"Found a bug or have an idea ..."-Hinweistext auf der About-Seite - Alegreya Sans Regular 16px (von FontBodySmall, 14px, gelöst: +2px Nutzervorgabe, betrifft NUR die About-Seite).</summary>
+    public static IFontHandle FontAboutHint => alegreyaAboutHint ??= BuildHandle("AlegreyaSans-Regular.ttf", 16f);
+
+    private static IFontHandle? cinzelStatsLabel;
+
+    /// <summary>Kachel-/Gruppen-Label der Statistics-Seite ("TOTAL DISCOVERED" etc.) - Cinzel SemiBold 17px (DESIGN_SPEC-Basis 11px, +6px Nutzervorgabe).</summary>
+    public static IFontHandle FontStatsLabel => cinzelStatsLabel ??= BuildHandle("Cinzel.ttf", 17f);
+
+    private static IFontHandle? cinzelStatsBigNumber;
+
+    /// <summary>Gesamtzahl in der "Total discovered"-Kachel - Cinzel Bold 35px (DESIGN_SPEC-Basis 30px, +5px Nutzervorgabe).</summary>
+    public static IFontHandle FontStatsBigNumber => cinzelStatsBigNumber ??= BuildHandle("Cinzel-Bold.ttf", 35f);
+
+    private static IFontHandle? alegreyaStatsSuffix;
+
+    /// <summary>"/ 3,104"-Zusatz in der "Total discovered"-Kachel - Alegreya Sans Regular 15px (DESIGN_SPEC).</summary>
+    public static IFontHandle FontStatsSuffix => alegreyaStatsSuffix ??= BuildHandle("AlegreyaSans-Regular.ttf", 15f);
+
+    private static IFontHandle? alegreyaStatsPercentBig;
+
+    /// <summary>Prozentwert in der "Total discovered"-Kachel - Alegreya Sans Bold 18px (DESIGN_SPEC).</summary>
+    public static IFontHandle FontStatsPercentBig => alegreyaStatsPercentBig ??= BuildHandle("AlegreyaSans-Bold.ttf", 18f);
+
+    private static IFontHandle? cinzelStatsMediumNumber;
+
+    /// <summary>Wert in den Kacheln "Furthest along"/"Still to find" - Cinzel Bold 27px (DESIGN_SPEC-Basis 22px, +5px Nutzervorgabe).</summary>
+    public static IFontHandle FontStatsMediumNumber => cinzelStatsMediumNumber ??= BuildHandle("Cinzel-Bold.ttf", 27f);
+
+    private static IFontHandle? alegreyaStatsDetail;
+
+    /// <summary>Prozentwert je Kategorie-Zeile ("18.9 %") - Alegreya Sans Regular 16px (DESIGN_SPEC-Basis 13px, +3px Nutzervorgabe).</summary>
+    public static IFontHandle FontStatsDetail => alegreyaStatsDetail ??= BuildHandle("AlegreyaSans-Regular.ttf", 16f);
+
+    private static IFontHandle? alegreyaStatsTileDetail;
+
+    /// <summary>Detailzeile der Kacheln "Furthest along"/"Still to find" ("121 of 641 · 18.9%"/"entries across 12 categories") - Alegreya Sans Regular 15px (DESIGN_SPEC-Basis 13px, +2px Nutzervorgabe, von FontStatsDetail gelöst, das weiterhin für die Kategorie-Zeilen gebraucht wird).</summary>
+    public static IFontHandle FontStatsTileDetail => alegreyaStatsTileDetail ??= BuildHandle("AlegreyaSans-Regular.ttf", 15f);
+
+    private static IFontHandle? cinzelStatsGroupTitle;
+
+    /// <summary>Gruppen-Überschrift ("Collections"/"Progress") - Cinzel SemiBold 19px (DESIGN_SPEC-Basis 14px, +5px Nutzervorgabe).</summary>
+    public static IFontHandle FontStatsGroupTitle => cinzelStatsGroupTitle ??= BuildHandle("Cinzel.ttf", 19f);
+
+    private static IFontHandle? alegreyaStatsBadge;
+
+    /// <summary>Gruppenstand-Badge ("25 / 1,693") - Alegreya Sans Bold 16px (DESIGN_SPEC-Basis 11px, +5px Nutzervorgabe).</summary>
+    public static IFontHandle FontStatsBadge => alegreyaStatsBadge ??= BuildHandle("AlegreyaSans-Bold.ttf", 16f);
+
+    private static IFontHandle? alegreyaStatsCategoryName;
+
+    /// <summary>Kategorie-Name je Zeile ("Mount" etc.) - Alegreya Sans Bold 20px (DESIGN_SPEC-Basis 15px, +5px Nutzervorgabe).</summary>
+    public static IFontHandle FontStatsCategoryName => alegreyaStatsCategoryName ??= BuildHandle("AlegreyaSans-Bold.ttf", 20f);
+
+    private static IFontHandle? alegreyaStatsCategoryCount;
+
+    /// <summary>Zählung je Kategorie-Zeile ("5 / 192") - Alegreya Sans Regular 18px (DESIGN_SPEC-Basis 15px, +3px Nutzervorgabe).</summary>
+    public static IFontHandle FontStatsCategoryCount => alegreyaStatsCategoryCount ??= BuildHandle("AlegreyaSans-Regular.ttf", 18f);
+
+    private static IFontHandle? cinzelDebugCardTitle;
+
+    /// <summary>Kartentitel auf der Debug-Seite ("General"/"Current Status"/"Simulation"/"Debug Dumps") - Cinzel SemiBold 20px (DESIGN_SPEC-Basis 14px, +6px Nutzervorgabe).</summary>
+    public static IFontHandle FontDebugCardTitle => cinzelDebugCardTitle ??= BuildHandle("Cinzel.ttf", 20f);
+
+    private static IFontHandle? alegreyaDebugRowLabel;
+
+    /// <summary>Zeilentext neben einem Schalter auf der Debug-Seite ("Show debug info in overlay" etc.) - Alegreya Sans Medium 18px (DESIGN_SPEC-Basis 15px, +3px Nutzervorgabe).</summary>
+    public static IFontHandle FontDebugRowLabel => alegreyaDebugRowLabel ??= BuildHandle("AlegreyaSans-Medium.ttf", 18f);
+
+    private static IFontHandle? alegreyaDebugDescription;
+
+    /// <summary>Kleine Beschreibung unter einer Schalter-Zeile auf der Debug-Seite - Alegreya Sans Regular 15px (DESIGN_SPEC-Basis 12px, +3px Nutzervorgabe).</summary>
+    public static IFontHandle FontDebugDescription => alegreyaDebugDescription ??= BuildHandle("AlegreyaSans-Regular.ttf", 15f);
+
+    private static IFontHandle? alegreyaDebugButtonLabel;
+
+    /// <summary>"Copy to clipboard"/Debug-Dump-Knöpfe auf der Debug-Seite - Alegreya Sans Medium 13px (DESIGN_SPEC).</summary>
+    public static IFontHandle FontDebugButtonLabel => alegreyaDebugButtonLabel ??= BuildHandle("AlegreyaSans-Medium.ttf", 13f);
+
+    private static IFontHandle? alegreyaDebugStatusText;
+
+    /// <summary>Bezeichnung/Wert in der "Current Status"-Karte der Debug-Seite - Alegreya Sans Regular 17px (DESIGN_SPEC-Basis 14px, +3px Nutzervorgabe).</summary>
+    public static IFontHandle FontDebugStatusText => alegreyaDebugStatusText ??= BuildHandle("AlegreyaSans-Regular.ttf", 17f, mergeCjk: true);
+
+    private static IFontHandle? alegreyaDebugBadge;
+
+    /// <summary>"TESTING ONLY"/"ACTIVE"-Badge auf der Debug-Seite - Alegreya Sans Bold 15px (DESIGN_SPEC-Basis 11px, +4px Nutzervorgabe).</summary>
+    public static IFontHandle FontDebugBadge => alegreyaDebugBadge ??= BuildHandle("AlegreyaSans-Bold.ttf", 15f);
+
+    private static IFontHandle? alegreyaDebugWarningText;
+
+    /// <summary>Text im Warnkasten der "Simulation"-Karte - Alegreya Sans Regular 15px (DESIGN_SPEC-Basis 13px, +2px Nutzervorgabe).</summary>
+    public static IFontHandle FontDebugWarningText => alegreyaDebugWarningText ??= BuildHandle("AlegreyaSans-Regular.ttf", 15f);
+
+    private static IFontHandle? alegreyaDebugWarningBold;
+
+    /// <summary>Fett hervorgehobener erster Satz im Warnkasten ("Affects automation only.") - Alegreya Sans Bold 15px, dieselbe Größe wie FontDebugWarningText.</summary>
+    public static IFontHandle FontDebugWarningBold => alegreyaDebugWarningBold ??= BuildHandle("AlegreyaSans-Bold.ttf", 15f);
+
+    /// <summary>
+    /// Festbreitenschrift für Zonen-ID/Koordinaten auf der Debug-Seite - DESIGN_SPEC erlaubt
+    /// ausdrücklich den pragmatischen Fallback "Standardschrift nehmen", falls eine eigene Monospace-
+    /// Schrift zu aufwendig ist. Dalamud bringt dafür bereits eine fertige, echte Monospace-Schrift
+    /// mit (UiBuilder.MonoFontHandle) - kein eigenes .ttf nötig.
+    /// </summary>
+    public static IFontHandle FontMono12 => Plugin.PluginInterface.UiBuilder.MonoFontHandle;
+
     private static IFontHandle? alegreyaCurrencyValue;
     private static IFontHandle? alegreyaCurrencyName;
 
@@ -285,7 +501,7 @@ public static class CodexTheme
     public static IFontHandle FontCurrencyValue => alegreyaCurrencyValue ??= BuildHandle("AlegreyaSans-Bold.ttf", 19f);
 
     /// <summary>Name in der Währungsübersicht - Alegreya Sans Regular, 19px (Abschnitt 5.4, im Spiel an FontCurrencyValue angeglichen).</summary>
-    public static IFontHandle FontCurrencyName => alegreyaCurrencyName ??= BuildHandle("AlegreyaSans-Regular.ttf", 19f);
+    public static IFontHandle FontCurrencyName => alegreyaCurrencyName ??= BuildHandle("AlegreyaSans-Regular.ttf", 19f, mergeCjk: true);
 
     private static IFontHandle? cinzelSidebarBrandSmall;
     private static IFontHandle? cinzelSidebarBrandLarge;
@@ -331,10 +547,49 @@ public static class CodexTheme
         _ = FontPluginDescription;
         _ = FontPluginStatusRest;
         _ = FontPluginInstalledLabel;
+        _ = FontDatabaseHeader;
+        _ = FontDatabaseItemName;
+        _ = FontDatabaseItemText;
+        _ = FontDatabaseStatusLabel;
+        _ = FontDatabaseCountRow;
+        _ = FontDatabaseSearchInput;
         _ = FontTabLabel;
         _ = FontTypeBadge;
         _ = FontSidebarBrandSmall;
         _ = FontSidebarBrandLarge;
+        _ = FontBlacklistTypeBadge;
+        _ = FontBlacklistBody;
+        _ = FontBlacklistButtonLabel;
+        _ = FontShortcutKey;
+        _ = FontShortcutText;
+        _ = FontAboutCardTitle;
+        _ = FontAboutBody;
+        _ = FontAboutKofiLabel;
+        _ = FontAboutLinkButtonLabel;
+        _ = FontAboutDividerLabel;
+        _ = FontAboutTitle;
+        _ = FontAboutSubtitle;
+        _ = FontAboutVersionBadge;
+        _ = FontAboutHint;
+        _ = FontStatsLabel;
+        _ = FontStatsBigNumber;
+        _ = FontStatsSuffix;
+        _ = FontStatsPercentBig;
+        _ = FontStatsMediumNumber;
+        _ = FontStatsDetail;
+        _ = FontStatsTileDetail;
+        _ = FontStatsGroupTitle;
+        _ = FontStatsBadge;
+        _ = FontStatsCategoryName;
+        _ = FontStatsCategoryCount;
+        _ = FontDebugCardTitle;
+        _ = FontDebugRowLabel;
+        _ = FontDebugDescription;
+        _ = FontDebugButtonLabel;
+        _ = FontDebugStatusText;
+        _ = FontDebugBadge;
+        _ = FontDebugWarningText;
+        _ = FontDebugWarningBold;
     }
 
     /// <summary>
@@ -469,6 +724,29 @@ public static class CodexTheme
         drawList.AddText(pos, ImGui.GetColorU32(color), text);
     }
 
+    /// <summary>
+    /// Zeichnet Text mit zusätzlichem Zeichenabstand (Versalien-Spaltennamen der Datenbank-Tabelle,
+    /// ~0.08em) - ImGui kennt kein natives Letter-Spacing, daher Zeichen für Zeichen über die
+    /// Draw-List gezeichnet. Zeichnet AM AKTUELLEN Cursor (wie ein normales ImGui-Widget) und rückt
+    /// den Cursor um die tatsächlich gezeichnete Breite vor (per Dummy), erwartet also die gewünschte
+    /// Schrift bereits gepusht (siehe Aufrufer).
+    /// </summary>
+    public static void DrawSpacedText(string text, Vector4 color, float spacing)
+    {
+        var drawList = ImGui.GetWindowDrawList();
+        var pos = ImGui.GetCursorScreenPos();
+        var height = ImGui.GetTextLineHeight();
+        var x = pos.X;
+        foreach (var ch in text)
+        {
+            var s = ch.ToString();
+            drawList.AddText(new Vector2(x, pos.Y), ImGui.GetColorU32(color), s);
+            x += ImGui.CalcTextSize(s).X + spacing;
+        }
+
+        ImGui.Dummy(new Vector2(MathF.Max(0f, x - pos.X - spacing), height));
+    }
+
     /// <summary>Abschnitts-Label (Abschnitt 5.4/6 etc.) - Versalien, Cinzel SemiBold, leicht gesperrt gesetzt.</summary>
     public static void SectionLabel(string text, bool shadow = false)
     {
@@ -488,6 +766,7 @@ public static class CodexTheme
         var size = new Vector2(42f * scale, 22f * scale);
         var cursor = ImGui.GetCursorScreenPos();
         var clicked = ImGui.InvisibleButton(id, size);
+        var hovered = ImGui.IsItemHovered();
 
         var drawList = ImGui.GetWindowDrawList();
         var rounding = size.Y / 2f;
@@ -495,6 +774,10 @@ public static class CodexTheme
         drawList.AddRectFilled(cursor, cursor + size, ImGui.GetColorU32(bg), rounding);
         if (!value)
             drawList.AddRect(cursor, cursor + size, ImGui.GetColorU32(LineControl), rounding);
+
+        // Nutzervorgabe: dezenter Hover-Effekt (wie bei den Auto-Knöpfen im Overlay).
+        if (hovered)
+            drawList.AddRectFilled(cursor, cursor + size, ImGui.GetColorU32(new Vector4(1f, 1f, 1f, 0.08f)), rounding);
 
         var knobRadius = size.Y / 2f - 3f * scale;
         var knobX = value ? cursor.X + size.X - size.Y / 2f : cursor.X + size.Y / 2f;
@@ -518,6 +801,7 @@ public static class CodexTheme
         value01 = Math.Clamp(value01, 0f, 1f);
         var cursor = ImGui.GetCursorScreenPos();
         ImGui.InvisibleButton(id, size);
+        var hovered = ImGui.IsItemHovered();
         var changed = false;
 
         if (ImGui.IsItemActive() && ImGui.IsMouseDown(ImGuiMouseButton.Left))
@@ -539,6 +823,11 @@ public static class CodexTheme
             drawList.AddRectFilled(cursor, cursor + new Vector2(fillWidth, size.Y), ImGui.GetColorU32(Accent), rounding);
 
         drawList.AddRect(cursor, cursor + size, ImGui.GetColorU32(LineControl), rounding);
+
+        // Nutzervorgabe: dezenter Hover-Effekt (wie beim Toggle und den Auto-Knöpfen im Overlay).
+        if (hovered)
+            drawList.AddRectFilled(cursor, cursor + size, ImGui.GetColorU32(new Vector4(1f, 1f, 1f, 0.08f)), rounding);
+
         return changed;
     }
 
@@ -564,12 +853,20 @@ public static class CodexTheme
     /// tatsächliche Höhe feststeht, nicht vom Aufrufer selbst (der kennt nur die Zeilenhöhe, nicht die
     /// der ganzen Karte).
     /// </summary>
-    public static void BeginCard(float scale, bool accentBar = false)
+    /// <summary>
+    /// "rightMargin" (Nutzervorgabe: Debug-Seite soll denselben rechten Randabstand wie die
+    /// Statistics-Seite einhalten) begrenzt die Kartenbreite optional - ohne Angabe nutzt die Karte
+    /// wie bisher die volle verfügbare Breite. "width" überschreibt die Breite komplett explizit (für
+    /// Karten, die NICHT die volle Zeilenbreite einnehmen, z.B. zwei Karten nebeneinander ohne
+    /// ImGui.BeginTable, siehe Windows.CodexMenuWindow.DrawDebugPage-Kommentar: ImGui.
+    /// GetContentRegionAvail() kennt eine solche manuell aufgeteilte Spaltenbreite nicht von selbst).
+    /// </summary>
+    public static void BeginCard(float scale, bool accentBar = false, float rightMargin = 0f, float? width = null)
     {
         cardPaddingX = 16f * scale;
         cardPaddingY = 14f * scale;
         cardOrigin = ImGui.GetCursorScreenPos();
-        cardWidth = ImGui.GetContentRegionAvail().X;
+        cardWidth = width ?? (ImGui.GetContentRegionAvail().X - rightMargin);
         cardAccentBar = accentBar;
 
         var drawList = ImGui.GetWindowDrawList();
