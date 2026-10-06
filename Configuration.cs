@@ -102,6 +102,14 @@ public class Configuration : IPluginConfiguration
     public Vector2? MenuWindowPosition { get; set; }
     public Vector2? OverlayWindowPosition { get; set; }
 
+    // Changelog (siehe ChangelogService) - leer = noch nie gesehen/benachrichtigt. Getrennte Felder,
+    // da "Seite angesehen" (steuert das NEW-Badge im Menü) und "Chat-Hinweis schon geschickt" (steuert
+    // die einmalige Login-Nachricht) unabhängig voneinander sein sollen: sonst würde das Badge schon
+    // beim bloßen Login verschwinden, bevor die Seite je geöffnet wurde.
+    public string LastSeenChangelogVersion { get; set; } = string.Empty;
+    public string LastNotifiedChangelogVersion { get; set; } = string.Empty;
+    public bool NotifyChangelogInChat { get; set; } = true;
+
     // Kompaktes Overlay (nur aktuelle Zone)
     public bool ShowCompactOverlay { get; set; } = false;
     public bool ShowCurrencyWallet { get; set; } = true;

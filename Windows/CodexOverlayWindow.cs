@@ -65,14 +65,27 @@ public class CodexOverlayWindow : Window
     public override bool DrawConditions() =>
         Plugin.ClientState.IsLoggedIn;
 
+    // Siehe CodexMenuWindow.PreDraw-Kommentar (Nutzer-Report "Position nach Neustart/Rebuild nicht
+    // gehalten") - gleicher Fix: einmal pro Plugin-Ladevorgang mit ImGuiCond.Always erzwingen statt
+    // ImGui's eigener (von dalamudUI.ini überlagerter) FirstUseEver-Verfolgung zu vertrauen.
+    private bool appliedSavedOverlayPosition;
+
     public override void PreDraw()
     {
-        // Nutzeranforderung: Fenster bleibt dort, wo es zuletzt hingeschoben wurde - siehe
-        // CodexMenuWindow.PreDraw-Kommentar (gleiches Vorgehen).
-        if (plugin.Configuration.OverlayWindowPosition is { } savedOverlayPosition)
+        // Bug (Nutzer-Report "Overlay nicht mehr verschiebbar"): siehe CodexMenuWindow.PreDraw-
+        // Kommentar - Dalamuds Window-Basisklasse ruft, solange Position einen Wert hat, JEDEN Frame
+        // erneut ImGui.SetNextWindowPos(Position, PositionCondition) auf. Mit ImGuiCond.Always ohne
+        // jemals Position wieder auf null zu setzen, wurde die Position dadurch dauerhaft erzwungen,
+        // jeder Ziehversuch des Nutzers sofort wieder zurückgesetzt.
+        if (!appliedSavedOverlayPosition && plugin.Configuration.OverlayWindowPosition is { } savedOverlayPosition)
         {
             Position = savedOverlayPosition;
-            PositionCondition = ImGuiCond.FirstUseEver;
+            PositionCondition = ImGuiCond.Always;
+            appliedSavedOverlayPosition = true;
+        }
+        else if (appliedSavedOverlayPosition)
+        {
+            Position = null;
         }
 
         var transparency = plugin.Configuration.CompactTransparency;

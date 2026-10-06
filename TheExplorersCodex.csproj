@@ -1,6 +1,6 @@
 <Project Sdk="Dalamud.NET.Sdk/15.0.0">
   <PropertyGroup>
-    <Version>2.0.0.0</Version>
+    <Version>2.1.0.0</Version>
     <!-- Manifest-Felder (siehe https://github.com/goatcorp/DalamudPackager) -->
     <Author>Stoni</Author>
     <Name>The Explorer's Codex</Name>
@@ -30,6 +30,7 @@
     <None Include="Data\fashions.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="Data\triadcards.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="Data\aethercurrents.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Data\Changelog.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="Data\icon.png" CopyToOutputDirectory="PreserveNewest" />
     <!-- Schriften für das neue Codex-Design (siehe NewDesign/DESIGN_SPEC.md Abschnitt 3) - Google
          Fonts, SIL Open Font License, dürfen mit dem Plugin ausgeliefert werden (Lizenztexte liegen

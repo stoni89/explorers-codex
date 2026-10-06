@@ -83,7 +83,18 @@ public static class CodexTheme
     public static readonly Vector4 WarnLine = Hex("#5C4A26");
     public static readonly Vector4 ErrFg = Hex("#EE9A86");
     public static readonly Vector4 ErrBg = Hex("#331C17");
+    public static readonly Vector4 ErrLine = Hex("#5A2E26");
     public static readonly Vector4 TooltipLine = Hex("#8A6E3A");
+
+    // ---- Changelog-Seite ("FIXED"-Tag - NEW/IMPROVED/REMOVED decken sich bereits exakt mit
+    // Ok/Warn/Err oben, nur FIXED (blau) kommt sonst nirgends vor). ----
+    public static readonly Vector4 InfoBg = Hex("#18242E");
+    public static readonly Vector4 InfoLine = Hex("#2C4458");
+
+    // ---- Log-Seite (Abschnitt 4/6 des Log-DESIGN_SPEC) - Info/Critical kommen in keiner anderen
+    // Seite vor, daher keine passenden Tokens oben wiederverwendbar. ----
+    public static readonly Vector4 LogInfoFg = Hex("#9CC4E4");
+    public static readonly Vector4 LogCritFg = Hex("#F06A7A");
 
     // ---- Typ-Etiketten (Abschnitt 2) ----
     public static readonly Vector4 MountBadgeBg = Hex("#3A2F1E");
@@ -494,6 +505,76 @@ public static class CodexTheme
     /// </summary>
     public static IFontHandle FontMono12 => Plugin.PluginInterface.UiBuilder.MonoFontHandle;
 
+    private static IFontHandle? cinzelLogHeader;
+
+    /// <summary>Tabellenkopf der Log-Seite (TIME/LEVEL/SOURCE/MESSAGE) - Cinzel 14px (zunächst identisch zu FontDatabaseHeader/21px gemacht, dann Nutzervorgabe: -4px, dann weitere -3px - daher ein eigener Handle statt des geteilten Database-Fonts).</summary>
+    public static IFontHandle FontLogTableHeader => cinzelLogHeader ??= BuildHandle("Cinzel.ttf", 14f);
+
+    private static IFontHandle? alegreyaLogRow;
+
+    /// <summary>Zeileninhalt der Log-Konsole (SOURCE/MESSAGE) - Alegreya Sans Regular 16px (DESIGN_SPEC-Basis 13px, +3px Nutzervorgabe), mergeCjk, da MESSAGE rohe Plugin-Log-Texte (inkl. Zonen-/Item-Namen) enthalten kann.</summary>
+    public static IFontHandle FontLogRow => alegreyaLogRow ??= BuildHandle("AlegreyaSans-Regular.ttf", 16f, mergeCjk: true);
+
+    private static IFontHandle? alegreyaLogBadge;
+
+    /// <summary>Level-Badge in der Log-Konsole (DBG/INF/WRN/ERR/CRT/VRB) - Alegreya Sans Bold 13px (DESIGN_SPEC-Basis 10px, +3px Nutzervorgabe).</summary>
+    public static IFontHandle FontLogBadge => alegreyaLogBadge ??= BuildHandle("AlegreyaSans-Bold.ttf", 13f);
+
+    private static IFontHandle? alegreyaLogMeta;
+
+    /// <summary>"{n} of {m} lines"/"Follow new lines"-Meta-Zeile unter den Level-Chips - Alegreya Sans Regular 15px (DESIGN_SPEC-Basis 12px, +3px Nutzervorgabe).</summary>
+    public static IFontHandle FontLogMeta => alegreyaLogMeta ??= BuildHandle("AlegreyaSans-Regular.ttf", 15f);
+
+    private static IFontHandle? alegreyaLogChipCount;
+
+    /// <summary>Zähler in einem Level-Chip ("Debug 98") - Alegreya Sans Regular 14px (DESIGN_SPEC-Basis 11px, +3px Nutzervorgabe), kleiner als das Chip-Label selbst (FontLogFilterLabel).</summary>
+    public static IFontHandle FontLogChipCount => alegreyaLogChipCount ??= BuildHandle("AlegreyaSans-Regular.ttf", 14f);
+
+    private static IFontHandle? alegreyaLogFilterLabel;
+
+    /// <summary>Beschriftung des "Source: ..."-Dropdowns und der Level-Chip-Labels auf der Log-Seite - Alegreya Sans Medium 16px (von FontFilterButton, 13px, gelöst: +3px Nutzervorgabe, betrifft nur diese Seite).</summary>
+    public static IFontHandle FontLogFilterLabel => alegreyaLogFilterLabel ??= BuildHandle("AlegreyaSans-Medium.ttf", 16f);
+
+    private static IFontHandle? alegreyaLogSearchInput;
+
+    /// <summary>Such-Eingabefeld der Log-Seite - Alegreya Sans Regular 18px (von FontDatabaseSearchInput, 15px, gelöst: +3px Nutzervorgabe, betrifft nur diese Seite).</summary>
+    public static IFontHandle FontLogSearchInput => alegreyaLogSearchInput ??= BuildHandle("AlegreyaSans-Regular.ttf", 18f);
+
+    private static IFontHandle? alegreyaLogGhostButton;
+
+    /// <summary>"Select lines"/"Copy all"/"Clear"-Knöpfe der Log-Seite - Alegreya Sans Medium 17px (von FontFilterButton, 13px, gelöst: +4px Nutzervorgabe, betrifft nur diese Seite).</summary>
+    public static IFontHandle FontLogGhostButton => alegreyaLogGhostButton ??= BuildHandle("AlegreyaSans-Medium.ttf", 17f);
+
+    private static IFontHandle? cinzelChangelogVersionTitle;
+
+    /// <summary>Kartentitel einer aufgeklappten Changelog-Version ("Version 1.9.0") - Cinzel Bold 22px (DESIGN_SPEC-Basis 18px, +4px Nutzervorgabe).</summary>
+    public static IFontHandle FontChangelogVersionTitle => cinzelChangelogVersionTitle ??= BuildHandle("Cinzel-Bold.ttf", 22f);
+
+    private static IFontHandle? cinzelChangelogCollapsedTitle;
+
+    /// <summary>Kartentitel einer zugeklappten Changelog-Version - Cinzel Bold 15px.</summary>
+    public static IFontHandle FontChangelogCollapsedTitle => cinzelChangelogCollapsedTitle ??= BuildHandle("Cinzel-Bold.ttf", 15f);
+
+    private static IFontHandle? alegreyaChangelogMeta;
+
+    /// <summary>Datum/"{n} changes" auf der Changelog-Seite - Alegreya Sans Regular 17px (DESIGN_SPEC-Basis 13px, +4px Nutzervorgabe).</summary>
+    public static IFontHandle FontChangelogMeta => alegreyaChangelogMeta ??= BuildHandle("AlegreyaSans-Regular.ttf", 17f);
+
+    private static IFontHandle? alegreyaChangelogChangeText;
+
+    /// <summary>Einzelner Änderungseintrag in einer Versionskarte - Alegreya Sans Regular 18px (DESIGN_SPEC-Basis 14px, +4px Nutzervorgabe), mergeCjk (kann rohe Plugin-/Spieltexte enthalten).</summary>
+    public static IFontHandle FontChangelogChangeText => alegreyaChangelogChangeText ??= BuildHandle("AlegreyaSans-Regular.ttf", 18f, mergeCjk: true);
+
+    private static IFontHandle? alegreyaChangelogTag;
+
+    /// <summary>Das "◆ NEW"-Badge im Navigationsmenü - Alegreya Sans Bold 11px. Bewusst NICHT für die Badges auf der Changelog-Seite selbst verwendet (siehe FontChangelogTagBadge), die wurden per Nutzervorgabe separat vergrößert, der kleine Sidebar-Badge sollte dabei unverändert bleiben.</summary>
+    public static IFontHandle FontChangelogTag => alegreyaChangelogTag ??= BuildHandle("AlegreyaSans-Bold.ttf", 11f);
+
+    private static IFontHandle? alegreyaChangelogTagBadge;
+
+    /// <summary>NEW/IMPROVED/FIXED/REMOVED-Tags vor einem Änderungseintrag und das "NEW"-Badge neben einem Versionstitel (beide auf der Changelog-Seite selbst) - Alegreya Sans Bold 15px (DESIGN_SPEC-Basis 11px, +4px Nutzervorgabe).</summary>
+    public static IFontHandle FontChangelogTagBadge => alegreyaChangelogTagBadge ??= BuildHandle("AlegreyaSans-Bold.ttf", 15f);
+
     private static IFontHandle? alegreyaCurrencyValue;
     private static IFontHandle? alegreyaCurrencyName;
 
@@ -590,6 +671,20 @@ public static class CodexTheme
         _ = FontDebugBadge;
         _ = FontDebugWarningText;
         _ = FontDebugWarningBold;
+        _ = FontLogTableHeader;
+        _ = FontLogRow;
+        _ = FontLogBadge;
+        _ = FontLogMeta;
+        _ = FontLogChipCount;
+        _ = FontLogFilterLabel;
+        _ = FontLogSearchInput;
+        _ = FontLogGhostButton;
+        _ = FontChangelogVersionTitle;
+        _ = FontChangelogCollapsedTitle;
+        _ = FontChangelogMeta;
+        _ = FontChangelogChangeText;
+        _ = FontChangelogTag;
+        _ = FontChangelogTagBadge;
     }
 
     /// <summary>
@@ -896,6 +991,9 @@ public static class CodexTheme
 
     /// <summary>Innerer Innenabstand der aktuell offenen Karte (siehe BeginCard) - für rechtsbündige Breiten per ImGui.SetNextItemWidth(-CardPaddingX), damit Combos auch rechts symmetrisch Abstand zum Kartenrand halten.</summary>
     public static float CardPaddingX => cardPaddingX;
+
+    /// <summary>Oberer/unterer Innenabstand der aktuell offenen Karte (siehe BeginCard) - z.B. für die Changelog-Seite, die die Y-Position der Zeitleisten-Raute auf die Kartenkopfzeile ausrichtet, bevor die Karte selbst gezeichnet wird.</summary>
+    public static float CardPaddingY => cardPaddingY;
 
     /// <summary>
     /// Kartentitel (Abschnitt 6, z.B. "SPRACHE"/"OVERLAY") - wie SectionLabel, darunter eine über die

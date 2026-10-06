@@ -358,8 +358,21 @@ public sealed class Plugin : IDalamudPlugin
         // parallel laufenden Spielclient) - einfacher Abgleich mit dem Zeitstempel der DLL.
         Log.Info($"[TheExplorersCodex] Geladen - Build {System.IO.File.GetLastWriteTime(PluginInterface.AssemblyLocation.FullName):yyyy-MM-dd HH:mm:ss}.");
 
-        Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
+        var loadedConfig = PluginInterface.GetPluginConfig() as Configuration;
+        Configuration = loadedConfig ?? new Configuration();
         Configuration.SanitizeTypeOrder();
+
+        // Erstinstallation (Nutzeranforderung): neue Nutzer sollen beim allerersten Start nie die
+        // "NEW"-Changelog-Markierung sehen - nur wer von einer Version VOR dem Changelog aktualisiert,
+        // soll sie sehen. loadedConfig == null heißt: es gab noch keine gespeicherte Configuration-Datei.
+        if (loadedConfig == null && ChangelogService.LatestVersion is { } initialLatestVersion)
+        {
+            Configuration.LastSeenChangelogVersion = initialLatestVersion.ToString();
+            Configuration.LastNotifiedChangelogVersion = initialLatestVersion.ToString();
+            Configuration.Save();
+        }
+
+        ClientState.Login += OnLoginNotifyChangelog;
 
         navigationFlagToPointQuery = PluginInterface.GetIpcSubscriber<Vector3?>("vnavmesh.Query.Mesh.FlagToPoint");
         vnavPathfindInProgress = PluginInterface.GetIpcSubscriber<bool>("vnavmesh.SimpleMove.PathfindInProgress");
@@ -415,6 +428,31 @@ public sealed class Plugin : IDalamudPlugin
     private void ToggleMainUI() => CodexMenuWindow.IsOpen = !CodexMenuWindow.IsOpen;
 
     public void OpenOptions() => CodexMenuWindow.IsOpen = true;
+
+    /// <summary>
+    /// Changelog-Chat-Hinweis (Nutzeranforderung, optional per Configuration.NotifyChangelogInChat) -
+    /// eigenständig von Configuration.LastSeenChangelogVersion (das steuert nur das NEW-Badge im Menü,
+    /// siehe ChangelogService.HasUnseenChangelog), damit der Hinweis nicht schon dadurch verschluckt
+    /// wird, dass der Nutzer die Changelog-Seite vor dem nächsten Login bereits geöffnet hatte. Genau
+    /// einmal pro Version (Configuration.LastNotifiedChangelogVersion), erst bei einem echten Login,
+    /// nicht schon beim Plugin-Laden selbst (ein Dev-Reload bei bereits eingeloggtem Charakter löst
+    /// daher absichtlich keine neue Nachricht aus).
+    /// </summary>
+    private void OnLoginNotifyChangelog()
+    {
+        if (!Configuration.NotifyChangelogInChat)
+            return;
+        if (ChangelogService.LatestVersion is not { } latest)
+            return;
+        if (Version.TryParse(Configuration.LastNotifiedChangelogVersion, out var notified) && notified >= latest)
+            return;
+
+        ChatGui.Print(Loc.T($"[Explorer's Codex] Aktualisiert auf v{latest} – Neuerungen im Changelog ansehen.",
+            $"[Explorer's Codex] Updated to v{latest} – see what's new in the Changelog."));
+
+        Configuration.LastNotifiedChangelogVersion = latest.ToString();
+        Configuration.Save();
+    }
 
     /// <summary>
     /// Prüft, ob der Spieler ein bestimmtes Sammelobjekt bereits besitzt.
@@ -8563,6 +8601,8 @@ public sealed class Plugin : IDalamudPlugin
             TripleTriadAutomation.Stop();
 
         CommandManager.RemoveHandler(CommandName);
+
+        ClientState.Login -= OnLoginNotifyChangelog;
 
         PluginInterface.UiBuilder.Draw -= DrawUI;
         PluginInterface.UiBuilder.OpenMainUi -= ToggleMainUI;
