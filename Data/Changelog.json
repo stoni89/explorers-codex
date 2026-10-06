@@ -1,0 +1,50 @@
+[
+  {
+    "version": "2.1.0",
+    "date": "2026-10-06",
+    "title": "Log & Changelog",
+    "title_de": "Log & Änderungsprotokoll",
+    "changes": [
+      { "type": "new", "text": "Added the Log page.", "text_de": "Log-Seite hinzugefügt." },
+      { "type": "new", "text": "Added the Changelog page.", "text_de": "Änderungsprotokoll-Seite hinzugefügt." }
+    ]
+  },
+  {
+    "version": "1.9.0",
+    "date": "2026-10-02",
+    "title": "The Codex Redesign",
+    "title_de": "Das Codex-Redesign",
+    "changes": [
+      { "type": "new", "text": "Explorer's Codex look for the menu and overlay: parchment colors, Cinzel headings and gold accents.", "text_de": "Explorer's-Codex-Look für Menü und Overlay: Pergamentfarben, Cinzel-Überschriften und goldene Akzente." },
+      { "type": "new", "text": "To-do list next to the zone list – add entries and track them across all zones.", "text_de": "To-do-Liste neben der Zonenliste – Einträge hinzufügen und über alle Zonen hinweg verfolgen." },
+      { "type": "new", "text": "Statistics page with totals per collection and quest progress.", "text_de": "Statistik-Seite mit Gesamtzahlen je Sammlung und Quest-Fortschritt." },
+      { "type": "improved", "text": "Auto buttons only show when something is left to do, and only one can run at a time.", "text_de": "Auto-Knöpfe erscheinen nur noch, wenn es etwas zu tun gibt, und immer nur einer gleichzeitig." },
+      { "type": "improved", "text": "Locked entries show their missing requirement in a tooltip.", "text_de": "Gesperrte Einträge zeigen die fehlende Voraussetzung in einem Tooltip." },
+      { "type": "fixed", "text": "Long item names no longer overlap the price in the overlay.", "text_de": "Lange Item-Namen überlappen die Preisanzeige im Overlay nicht mehr." }
+    ]
+  },
+  {
+    "version": "1.8.0",
+    "date": "[Date]",
+    "title": "[Placeholder - fill in]",
+    "changes": [
+      { "type": "improved", "text": "[Placeholder - fill in]" }
+    ]
+  },
+  {
+    "version": "1.7.2",
+    "date": "[Date]",
+    "title": "[Placeholder - fill in]",
+    "changes": [
+      { "type": "fixed", "text": "[Placeholder - fill in]" }
+    ]
+  },
+  {
+    "version": "1.7.0",
+    "date": "[Date]",
+    "title": "[Placeholder - fill in]",
+    "changes": [
+      { "type": "new", "text": "[Placeholder - fill in]" }
+    ]
+  }
+]

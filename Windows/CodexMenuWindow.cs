@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using System.Numerics;
 using System.Reflection;
+using System.Text;
 using System.Text.RegularExpressions;
 using Dalamud.Interface;
 using Dalamud.Interface.Textures;
@@ -12,6 +13,7 @@ using Dalamud.Interface.Windowing;
 using Dalamud.Utility;
 using Dalamud.Bindings.ImGui;
 using Lumina.Excel.Sheets;
+using Serilog.Events;
 
 namespace TheExplorersCodex.Windows;
 
@@ -43,6 +45,8 @@ public class CodexMenuWindow : Window
         Plugins,
         About,
         Debug,
+        Log,
+        Changelog,
     }
 
     private MenuPage activePage = MenuPage.General;
@@ -62,16 +66,34 @@ public class CodexMenuWindow : Window
     public override bool DrawConditions() =>
         Plugin.ClientState.IsLoggedIn;
 
+    // Nutzer-Report "Position nach Neustart/Rebuild nicht gehalten": ImGuiCond.FirstUseEver greift
+    // NUR, solange ImGui diesem Fenster (über die Lebensdauer des zugrundeliegenden ImGui-Kontexts,
+    // der Dalamud-Neustarts/Plugin-Reloads überdauert) noch gar keine eigene, selbst in dalamudUI.ini
+    // gemerkte Position zugewiesen hat - sobald dalamudUI.ini (unabhängig von unserer eigenen
+    // Configuration) irgendeine Position für dieses Fenster kennt, wird unsere per Configuration
+    // gespeicherte Position stillschweigend ignoriert. Fix: einmal pro Plugin-Ladevorgang (eigenes
+    // bool-Flag statt ImGui's eigener Verfolgung) mit ImGuiCond.Always erzwingen, danach normal frei
+    // verschiebbar (das bestehende Debounce-Save in Draw() hält Configuration weiterhin aktuell).
+    private bool appliedSavedMenuPosition;
+
     public override void PreDraw()
     {
-        // Nutzeranforderung: Fenster bleibt dort, wo es zuletzt hingeschoben wurde - FirstUseEver
-        // greift nur, solange ImGui diesem Fenster noch keine eigene (von sich aus schon per
-        // dalamudUI.ini persistierte) Position zugewiesen hat, verhindert also nicht das freie
-        // Verschieben danach.
-        if (plugin.Configuration.MenuWindowPosition is { } savedMenuPosition)
+        // Bug (Nutzer-Report "Menü nicht mehr verschiebbar"): Dalamuds Window-Basisklasse ruft, solange
+        // Position einen Wert hat, JEDEN Frame erneut ImGui.SetNextWindowPos(Position, PositionCondition)
+        // auf - mit ImGuiCond.Always bedeutet das, die Position wird auch nach dem ersten Frame
+        // unbegrenzt weiter erzwungen und jeder Ziehversuch des Nutzers sofort wieder zurückgesetzt.
+        // Position MUSS deshalb direkt nach dem einen gewünschten Frame wieder auf null gesetzt werden,
+        // damit Dalamud ab dann gar kein SetNextWindowPos mehr aufruft und ImGui/der Nutzer die
+        // Position wieder frei bestimmen.
+        if (!appliedSavedMenuPosition && plugin.Configuration.MenuWindowPosition is { } savedMenuPosition)
         {
             Position = savedMenuPosition;
-            PositionCondition = ImGuiCond.FirstUseEver;
+            PositionCondition = ImGuiCond.Always;
+            appliedSavedMenuPosition = true;
+        }
+        else if (appliedSavedMenuPosition)
+        {
+            Position = null;
         }
 
         CodexTheme.PushStyle();
@@ -189,6 +211,9 @@ public class CodexMenuWindow : Window
         if (Plugin.PluginInterface.IsDev)
             DrawNavItem(scale, MenuPage.Debug, FontAwesomeIcon.Bug, Loc.T("Debug", "Debug"));
 
+        DrawNavItem(scale, MenuPage.Log, FontAwesomeIcon.FileAlt, Loc.T("Log", "Log"));
+        DrawNavItem(scale, MenuPage.Changelog, FontAwesomeIcon.FileAlt, Loc.T("Änderungen", "Changelog"),
+            showNewBadge: ChangelogService.HasUnseenChangelog(plugin.Configuration));
         DrawNavItem(scale, MenuPage.About, FontAwesomeIcon.InfoCircle, Loc.T("Über", "About"));
 
         DrawSidebarCloseButton(scale);
@@ -222,8 +247,9 @@ public class CodexMenuWindow : Window
 
         var startY = cursor.Y + (iconSize - (smallHeight + largeHeight)) / 2f;
 
+        // Nutzervorgabe: Der Plugin-Name wird NIE übersetzt - im Deutschen und Englischen identisch.
         using (CodexTheme.FontSidebarBrandSmall.Push())
-            drawList.AddText(new Vector2(textX, startY), ImGui.GetColorU32(CodexTheme.TextSecondary), Loc.T("DER FORSCHER", "THE EXPLORER'S"));
+            drawList.AddText(new Vector2(textX, startY), ImGui.GetColorU32(CodexTheme.TextSecondary), "THE EXPLORER'S");
 
         var codexText = Loc.T("Codex", "Codex");
         var codexY = startY + smallHeight;
@@ -247,7 +273,7 @@ public class CodexMenuWindow : Window
         }
     }
 
-    private void DrawNavItem(float scale, MenuPage page, FontAwesomeIcon icon, string label)
+    private void DrawNavItem(float scale, MenuPage page, FontAwesomeIcon icon, string label, bool showNewBadge = false)
     {
         var selected = activePage == page;
 
@@ -287,8 +313,41 @@ public class CodexMenuWindow : Window
             drawList.AddText(new Vector2(contentX + iconWidth + 10f * scale, cursor.Y + (height - labelSize.Y) / 2f), ImGui.GetColorU32(fg), label);
         }
 
+        if (showNewBadge)
+            DrawNavNewBadge(scale, cursor, width, height);
+
         if (clicked)
             activePage = page;
+    }
+
+    /// <summary>"◆ NEW"-Badge rechtsbündig in einem Menüpunkt (Changelog, Nutzeranforderung) - die
+    /// Raute wird gezeichnet statt als Glyph (◆ fehlt im Ingame-Font, erscheint sonst als "?"), 12px
+    /// Abstand zum rechten Rand des Menüeintrags.</summary>
+    private static void DrawNavNewBadge(float scale, Vector2 itemCursor, float itemWidth, float itemHeight)
+    {
+        var label = Loc.T("NEU", "NEW");
+        float labelWidth, textHeight;
+        using (CodexTheme.FontChangelogTag.Push())
+        {
+            var size = ImGui.CalcTextSize(label);
+            labelWidth = size.X;
+            textHeight = size.Y;
+        }
+
+        var diamondSize = 6f * scale;
+        var diamondGap = 5f * scale;
+        var padding = new Vector2(7f * scale, 1f * scale);
+        var badgeSize = new Vector2(diamondSize + diamondGap + labelWidth + padding.X * 2f, textHeight + padding.Y * 2f);
+        var badgeCursor = new Vector2(itemCursor.X + itemWidth - 12f * scale - badgeSize.X, itemCursor.Y + (itemHeight - badgeSize.Y) / 2f);
+
+        var drawList = ImGui.GetWindowDrawList();
+        drawList.AddRectFilled(badgeCursor, badgeCursor + badgeSize, ImGui.GetColorU32(CodexTheme.Accent), 3f * scale);
+
+        var diamondCenter = new Vector2(badgeCursor.X + padding.X + diamondSize / 2f, badgeCursor.Y + badgeSize.Y / 2f);
+        CodexWidgets.Diamond(diamondCenter, diamondSize, ImGui.GetColorU32(CodexTheme.TextOnAccent), ImGui.GetColorU32(CodexTheme.TextOnAccent));
+
+        using (CodexTheme.FontChangelogTag.Push())
+            drawList.AddText(new Vector2(badgeCursor.X + padding.X + diamondSize + diamondGap, badgeCursor.Y + padding.Y), ImGui.GetColorU32(CodexTheme.TextOnAccent), label);
     }
 
     /// <summary>Abschnitt 6 - Inhaltsbereich: bisher nur der Seitenkopf (Titel + Untertitel + Trenn-Ornament) für "General", noch ohne eigentliche Einstellungen.</summary>
@@ -312,6 +371,8 @@ public class CodexMenuWindow : Window
                 MenuPage.Statistics => (Loc.T("Statistik", "Statistics"), Loc.T("Zählt nur, was der Codex selbst verfolgt – dieselben Kategorien wie im Overlay.", "Counts only what the Codex itself tracks – the same categories you see in the overlay.")),
                 MenuPage.Plugins => (Loc.T("Plugins", "Plugins"), Loc.T("Begleit-Plugins, auf die sich der Codex für Automationen stützt.", "Companion plugins the Codex relies on for automation.")),
                 MenuPage.Debug => (Loc.T("Debug", "Debug"), Loc.T("Nur relevant, wenn im Overlay etwas nicht wie erwartet angezeigt wird.", "Only relevant if something in the overlay doesn't show as expected.")),
+                MenuPage.Log => (Loc.T("Log", "Log"), Loc.T("Die eigenen Log-Zeilen dieses Plugins – durchsuchbar und nach Level filterbar, ohne /xllog zu öffnen.", "This plugin's own log lines – searchable and filterable by level, without opening /xllog.")),
+                MenuPage.Changelog => (Loc.T("Änderungsprotokoll", "Changelog"), Loc.T("Was sich im Codex geändert hat – neueste Einträge zuerst.", "What changed in the Codex – newest entries first.")),
                 _ => (Loc.T("Allgemein", "General"), Loc.T("Grundeinstellungen des Plugins.", "Basic plugin settings.")),
             };
 
@@ -352,6 +413,12 @@ public class CodexMenuWindow : Window
             case MenuPage.Debug:
                 if (Plugin.PluginInterface.IsDev)
                     DrawDebugPage(scale);
+                break;
+            case MenuPage.Log:
+                DrawLogPage(scale);
+                break;
+            case MenuPage.Changelog:
+                DrawChangelogPage(scale);
                 break;
             default:
                 DrawGeneralPage(scale);
@@ -1253,6 +1320,15 @@ public class CodexMenuWindow : Window
             ImGui.EndDisabled();
             if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
                 ImGui.SetTooltip(Loc.T("Allagan Tools ist nicht installiert.", "Allagan Tools is not installed."));
+        }
+
+        CodexTheme.CardDivider(scale);
+
+        var notifyChangelog = config.NotifyChangelogInChat;
+        if (CodexTheme.ToggleRow("##CodexNotifyChangelog", Loc.T("Nach Updates im Chat hinweisen", "Notify in chat after updates"), ref notifyChangelog, scale))
+        {
+            config.NotifyChangelogInChat = notifyChangelog;
+            config.Save();
         }
 
         CodexTheme.EndCard();
@@ -3710,7 +3786,8 @@ public class CodexMenuWindow : Window
         var statusBottom = ImGui.GetCursorPosY();
 
         ImGui.SetCursorPos(new Vector2(rowStartX, rowStartY));
-        DrawDebugGeneralCard(scale, config, colWidth, minContentHeight: statusContentHeight);
+        // Nutzervorgabe: General insgesamt 6px niedriger als Current Status (2px + 2px + weitere 2px).
+        DrawDebugGeneralCard(scale, config, colWidth, minContentHeight: statusContentHeight - 6f * scale);
         var generalBottom = ImGui.GetCursorPosY();
 
         ImGui.SetCursorPos(new Vector2(rowStartX, MathF.Max(generalBottom, statusBottom)));
@@ -4224,5 +4301,1034 @@ public class CodexMenuWindow : Window
             debugDumpConfirmedUntil.TryGetValue(label, out var until) && now < until);
 
         CodexTheme.EndCard();
+    }
+
+    // ---- Seite "Log" (Nutzeranforderung, Vorbild Anhang-Screenshot) - Neugestaltung der alten
+    // MainWindow.DrawLogPage im Codex-Theme. Logik (Puffer PluginLogStore, Quelle via SplitLogSource,
+    // Level, Clear) bleibt erhalten, nur Darstellung/Bedienung sind neu. Durchgehend Bildschirm-
+    // Koordinaten und kein ChannelsSplit (siehe DrawDebugPage-Kommentar weiter oben) - diese Seite
+    // sitzt nicht in einer BeginCard, braucht also ohnehin keinen Kartentrick.
+
+    private string logSearch = string.Empty;
+
+    private readonly HashSet<LogEventLevel> logLevelFilter = new()
+    {
+        LogEventLevel.Verbose, LogEventLevel.Debug, LogEventLevel.Information,
+        LogEventLevel.Warning, LogEventLevel.Error, LogEventLevel.Fatal,
+    };
+
+    private string? logSelectedSource;
+    private bool logSelectMode;
+    private readonly HashSet<long> logSelectedIds = new();
+    private int? logLastClickedRowIndex;
+
+    // Bei neuen Zeilen automatisch ans Ende scrollen, SOLANGE der Nutzer nicht von Hand hochgescrollt
+    // hat (wie bei tail -f) - true, sobald die Scroll-Position beim letzten Frame nah am Ende war.
+    private bool logFollowNewLines = true;
+
+    // Dirty-Flag-Cache (Performance-Vorgabe): Quellenliste/Level-Zähler/gefilterte Liste werden nur
+    // neu gebaut, wenn sich Suche, Quelle, Level-Auswahl oder der Puffer selbst (Größe oder neueste
+    // Id) seit dem letzten Frame geändert haben.
+    private List<LogEntry>? logFilteredCache;
+    private List<string>? logSourcesCache;
+    private Dictionary<LogEventLevel, int>? logLevelCountsCache;
+    private int logTotalCountCache;
+    private (string Search, string? Source, int LevelsMask, int BufferCount, long LastId) logCacheKey;
+
+    private static readonly Regex LogTokenRegex = new(@"#\d+|\b\d+/\d+\b|\b[A-Za-z_][A-Za-z0-9_]*=[^\s,;]+", RegexOptions.Compiled);
+
+    private void DrawLogPage(float scale)
+    {
+        var rightMargin = 32f * scale;
+
+        var entries = PluginLogStore.Snapshot();
+        EnsureLogFilterCache(entries);
+
+        DrawLogToolbarRow(scale, rightMargin);
+        ImGui.Dummy(new Vector2(0f, 10f * scale));
+        DrawLogLevelChipsRow(scale);
+        ImGui.Dummy(new Vector2(0f, 8f * scale));
+        DrawLogMetaRow(scale, rightMargin, logFilteredCache!.Count, logTotalCountCache);
+        ImGui.Dummy(new Vector2(0f, 6f * scale));
+        DrawLogConsole(scale, rightMargin, logFilteredCache!);
+    }
+
+    private void EnsureLogFilterCache(List<LogEntry> entries)
+    {
+        var levelsMask = 0;
+        foreach (var level in logLevelFilter)
+            levelsMask |= 1 << (int)level;
+
+        var lastId = entries.Count > 0 ? entries[^1].Id : 0L;
+        var key = (logSearch, logSelectedSource, levelsMask, entries.Count, lastId);
+        if (logFilteredCache != null && key == logCacheKey)
+            return;
+
+        logCacheKey = key;
+        logTotalCountCache = entries.Count;
+
+        // Quellen (Abschnitt "Source: All") unabhängig von Level/Suche/aktueller Auswahl - alle
+        // jemals im aktuellen Puffer vorkommenden Quellen.
+        logSourcesCache = entries
+            .Select(e => SplitLogSource(e.Message).Source)
+            .Where(s => !string.IsNullOrEmpty(s))
+            .Distinct()
+            .OrderBy(s => s, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        // Zähler je Level (Abschnitt 4): respektieren Quelle+Suche, aber NICHT den Level-Filter selbst -
+        // sonst würde ein deaktivierter Chip sofort auf 0 springen, sobald man ihn abwählt.
+        IEnumerable<LogEntry> baseFiltered = entries;
+        if (!string.IsNullOrEmpty(logSelectedSource))
+            baseFiltered = baseFiltered.Where(e => SplitLogSource(e.Message).Source == logSelectedSource);
+        if (!string.IsNullOrWhiteSpace(logSearch))
+        {
+            baseFiltered = baseFiltered.Where(e =>
+                e.Message.Contains(logSearch, StringComparison.OrdinalIgnoreCase) ||
+                e.Timestamp.ToString("HH:mm:ss").Contains(logSearch, StringComparison.OrdinalIgnoreCase));
+        }
+        var baseFilteredList = baseFiltered.ToList();
+
+        logLevelCountsCache = baseFilteredList
+            .GroupBy(e => e.Level)
+            .ToDictionary(g => g.Key, g => g.Count());
+
+        logFilteredCache = baseFilteredList.Where(e => logLevelFilter.Contains(e.Level)).ToList();
+    }
+
+    /// <summary>Werkzeugleiste Zeile 1: Suchfeld (flexible Breite) + "Source: ..."-Dropdown.</summary>
+    private void DrawLogToolbarRow(float scale, float rightMargin)
+    {
+        // Nutzer-Report "Fragezeichen": das vorherige "▾"-Zeichen fehlte in der Alegreya-Schrift und
+        // wurde als Tofu-Glyph ("?") dargestellt - daher entfernt, statt ein Fallback-Zeichen zu suchen.
+        var sourceLabel = Loc.T($"Quelle: {logSelectedSource ?? Loc.T("Alle", "All")}", $"Source: {logSelectedSource ?? "All"}");
+        float sourceTextWidth;
+        using (CodexTheme.FontLogFilterLabel.Push())
+            sourceTextWidth = ImGui.CalcTextSize(sourceLabel).X;
+
+        var sourcePadding = new Vector2(12f * scale, 7f * scale);
+        var gap = 10f * scale;
+        var searchPadding = new Vector2(12f * scale, 9f * scale);
+        var sourceMinWidth = sourceTextWidth + sourcePadding.X * 2f;
+
+        var searchWidth = ImGui.GetContentRegionAvail().X - rightMargin - sourceMinWidth - gap;
+        ImGui.PushStyleColor(ImGuiCol.FrameBg, CodexTheme.BgInput);
+        ImGui.PushStyleColor(ImGuiCol.Border, CodexTheme.LineControl);
+        ImGui.PushStyleColor(ImGuiCol.BorderShadow, new Vector4(0f, 0f, 0f, 0f));
+        ImGui.PushStyleVar(ImGuiStyleVar.FrameBorderSize, 1f * scale);
+        ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, searchPadding);
+        ImGui.SetNextItemWidth(searchWidth);
+        using (CodexTheme.FontLogSearchInput.Push())
+            ImGui.InputTextWithHint("##CodexLogSearch", Loc.T("Log durchsuchen …", "Search log …"), ref logSearch, 200);
+        var searchHeight = ImGui.GetItemRectSize().Y;
+        ImGui.PopStyleVar(2);
+        ImGui.PopStyleColor(3);
+
+        var sourceSize = new Vector2(sourceMinWidth, searchHeight);
+        ImGui.SameLine(0f, gap);
+        var sourceCursor = ImGui.GetCursorScreenPos();
+        var sourceClicked = ImGui.InvisibleButton("##CodexLogSourceFilter", sourceSize);
+        var sourceHovered = ImGui.IsItemHovered();
+
+        var drawList = ImGui.GetWindowDrawList();
+        var sourceActive = !string.IsNullOrEmpty(logSelectedSource);
+        var sourceBg = sourceActive ? CodexTheme.BgSelectedStrong : sourceHovered ? CodexTheme.BgSelected with { W = 0.5f } : new Vector4(0f, 0f, 0f, 0f);
+        var sourceBorder = sourceActive ? CodexTheme.Accent : CodexTheme.LineControl;
+        var sourceFg = sourceActive ? CodexTheme.TextHeading : CodexTheme.TextSecondary;
+        drawList.AddRectFilled(sourceCursor, sourceCursor + sourceSize, ImGui.GetColorU32(sourceBg), CodexTheme.RoundingControl);
+        drawList.AddRect(sourceCursor, sourceCursor + sourceSize, ImGui.GetColorU32(sourceBorder), CodexTheme.RoundingControl);
+        using (CodexTheme.FontLogFilterLabel.Push())
+        {
+            var textSize = ImGui.CalcTextSize(sourceLabel);
+            drawList.AddText(sourceCursor + (sourceSize - textSize) / 2f, ImGui.GetColorU32(sourceFg), sourceLabel);
+        }
+
+        if (sourceClicked)
+            ImGui.OpenPopup("##CodexLogSourcePopup");
+
+        // Nutzervorgabe: 3px Abstand zu allen vier Seiten, wie bei den anderen Dropdown-Fenstern -
+        // muss VOR BeginPopup gepusht werden, da es auf das dabei ggf. neu erzeugte Popup-Fenster wirkt.
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(3f * scale, 3f * scale));
+        if (ImGui.BeginPopup("##CodexLogSourcePopup"))
+        {
+            if (ImGui.Selectable(Loc.T("Alle", "All") + "##CodexLogSourceAll", logSelectedSource == null))
+                logSelectedSource = null;
+            foreach (var source in logSourcesCache!)
+            {
+                if (ImGui.Selectable(source + "##CodexLogSourceEntry_" + source, logSelectedSource == source))
+                    logSelectedSource = source;
+            }
+            ImGui.EndPopup();
+        }
+        ImGui.PopStyleVar();
+    }
+
+    /// <summary>Werkzeugleiste Zeile 2: Level-Chips (Toggle+Zähler) - die Select lines/Copy all/Clear-
+    /// Knöpfe sitzen seit Nutzervorgabe stattdessen rechtsbündig in der Meta-Zeile, siehe DrawLogMetaRow.</summary>
+    private void DrawLogLevelChipsRow(float scale)
+    {
+        var chipGap = 6f * scale;
+
+        DrawLogLevelChip(scale, LogEventLevel.Verbose, Loc.T("Verbose", "Verbose"), CodexTheme.TextDisabled, isFirst: true);
+        DrawLogLevelChip(scale, LogEventLevel.Debug, Loc.T("Debug", "Debug"), CodexTheme.TextMuted, isFirst: false, gap: chipGap);
+        DrawLogLevelChip(scale, LogEventLevel.Information, Loc.T("Info", "Info"), CodexTheme.LogInfoFg, isFirst: false, gap: chipGap);
+        DrawLogLevelChip(scale, LogEventLevel.Warning, Loc.T("Warnung", "Warning"), CodexTheme.WarnFg, isFirst: false, gap: chipGap);
+        DrawLogLevelChip(scale, LogEventLevel.Error, Loc.T("Fehler", "Error"), CodexTheme.ErrFg, isFirst: false, gap: chipGap);
+        DrawLogLevelChip(scale, LogEventLevel.Fatal, Loc.T("Kritisch", "Critical"), CodexTheme.LogCritFg, isFirst: false, gap: chipGap);
+    }
+
+    private void DrawLogLevelChip(float scale, LogEventLevel level, string label, Vector4 color, bool isFirst, float gap = 0f)
+    {
+        var active = logLevelFilter.Contains(level);
+        logLevelCountsCache!.TryGetValue(level, out var count);
+        var countText = count.ToString(CultureInfo.InvariantCulture);
+
+        float labelWidth, countWidth, labelHeight;
+        using (CodexTheme.FontLogFilterLabel.Push())
+        {
+            var size = ImGui.CalcTextSize("◆ " + label);
+            labelWidth = size.X;
+            labelHeight = size.Y;
+        }
+        using (CodexTheme.FontLogChipCount.Push())
+            countWidth = ImGui.CalcTextSize(countText).X;
+
+        // Nutzervorgabe: Chip 3px höher - zusätzlich zur ohnehin größeren Schrift (FontLogFilterLabel),
+        // daher 1,5px mehr Innenabstand oben/unten statt der ursprünglichen 5px.
+        var padding = new Vector2(10f * scale, 6.5f * scale);
+        var innerGap = 6f * scale;
+        var chipSize = new Vector2(labelWidth + innerGap + countWidth + padding.X * 2f, labelHeight + padding.Y * 2f);
+
+        if (!isFirst)
+            ImGui.SameLine(0f, gap);
+
+        var cursor = ImGui.GetCursorScreenPos();
+        var clicked = ImGui.InvisibleButton("##CodexLogChip_" + level, chipSize);
+        var hovered = ImGui.IsItemHovered();
+
+        var drawList = ImGui.GetWindowDrawList();
+        var bg = active ? color with { W = 0.12f } : hovered ? CodexTheme.BgSelected with { W = 0.5f } : new Vector4(0f, 0f, 0f, 0f);
+        var border = active ? color with { W = 0.45f } : CodexTheme.LineDisabled;
+        var fg = active ? color : CodexTheme.TextDisabled;
+        drawList.AddRectFilled(cursor, cursor + chipSize, ImGui.GetColorU32(bg), CodexTheme.RoundingControl);
+        drawList.AddRect(cursor, cursor + chipSize, ImGui.GetColorU32(border), CodexTheme.RoundingControl);
+
+        var textY = cursor.Y + padding.Y;
+        using (CodexTheme.FontLogFilterLabel.Push())
+            drawList.AddText(new Vector2(cursor.X + padding.X, textY), ImGui.GetColorU32(fg), "◆ " + label);
+        using (CodexTheme.FontLogChipCount.Push())
+        {
+            var countY = cursor.Y + (chipSize.Y - ImGui.CalcTextSize(countText).Y) / 2f;
+            drawList.AddText(new Vector2(cursor.X + padding.X + labelWidth + innerGap, countY), ImGui.GetColorU32(fg), countText);
+        }
+
+        if (hovered)
+            ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
+        if (clicked)
+        {
+            if (!logLevelFilter.Remove(level))
+                logLevelFilter.Add(level);
+        }
+    }
+
+    /// <summary>Transparenter Knopf mit Rahmen (Select lines/Copy all/Clear) - Hover BgSelected, aktiv (Select-Modus) Accent-Rahmen statt LineControl.</summary>
+    private static bool DrawLogGhostButton(float scale, string id, string label, float width, bool active, Vector4? textColor = null)
+    {
+        // Nutzervorgabe: 5px höher als ursprünglich (26px).
+        var size = new Vector2(width, 31f * scale);
+        var cursor = ImGui.GetCursorScreenPos();
+        var clicked = ImGui.InvisibleButton(id, size);
+        var hovered = ImGui.IsItemHovered();
+
+        var drawList = ImGui.GetWindowDrawList();
+        var bg = hovered ? CodexTheme.BgSelected : new Vector4(0f, 0f, 0f, 0f);
+        var border = active ? CodexTheme.Accent : CodexTheme.LineControl;
+        var fg = textColor ?? (active ? CodexTheme.TextHeading : CodexTheme.TextSecondary);
+        drawList.AddRectFilled(cursor, cursor + size, ImGui.GetColorU32(bg), CodexTheme.RoundingControl);
+        drawList.AddRect(cursor, cursor + size, ImGui.GetColorU32(border), CodexTheme.RoundingControl);
+        using (CodexTheme.FontLogGhostButton.Push())
+        {
+            var textSize = ImGui.CalcTextSize(label);
+            drawList.AddText(cursor + (size - textSize) / 2f, ImGui.GetColorU32(fg), label);
+        }
+
+        if (hovered)
+            ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
+        return clicked;
+    }
+
+    /// <summary>"{n} of {m} lines" links, Select lines/Copy all/Clear rechtsbündig (Nutzervorgabe: an
+    /// die Stelle des entfernten "Follow new lines"-Schalters gewandert - das automatische Mitscrollen
+    /// selbst bleibt als reines Hintergrundverhalten erhalten, nur der sichtbare Schalter fällt weg).</summary>
+    private void DrawLogMetaRow(float scale, float rightMargin, int filteredCount, int totalCount)
+    {
+        var rowY = ImGui.GetCursorPosY();
+        var buttonHeight = 31f * scale;
+
+        var lineCountText = Loc.T($"{filteredCount} von {totalCount} Zeilen", $"{filteredCount} of {totalCount} lines");
+        float textHeight;
+        using (CodexTheme.FontLogMeta.Push())
+            textHeight = ImGui.CalcTextSize(lineCountText).Y;
+
+        // Nutzervorgabe: Text an der UNTEREN Kante der drei Knöpfe ausgerichtet statt zentriert - daher
+        // erst (ohne zu zeichnen) gemessen, dann an der passenden Y-Position gezeichnet, statt wie
+        // zuvor sofort am Zeilenanfang.
+        ImGui.SetCursorPosY(rowY + buttonHeight - textHeight);
+        using (CodexTheme.FontLogMeta.Push())
+            ImGui.TextColored(CodexTheme.TextDim, lineCountText);
+
+        var selectLabel = Loc.T("Zeilen auswählen", "Select lines");
+        var copyLabel = logSelectMode
+            ? Loc.T($"Auswahl kopieren ({logSelectedIds.Count})", $"Copy selected ({logSelectedIds.Count})")
+            : Loc.T("Alles kopieren", "Copy all");
+        var clearLabel = Loc.T("Leeren", "Clear");
+
+        float selectWidth, copyWidth, clearWidth;
+        using (CodexTheme.FontLogGhostButton.Push())
+        {
+            var padX = 12f * scale * 2f;
+            selectWidth = ImGui.CalcTextSize(selectLabel).X + padX;
+            copyWidth = ImGui.CalcTextSize(copyLabel).X + padX;
+            clearWidth = ImGui.CalcTextSize(clearLabel).X + padX;
+        }
+        var buttonGap = 8f * scale;
+        var totalButtonsWidth = selectWidth + copyWidth + clearWidth + buttonGap * 2f;
+
+        // Bug (derselbe wie beim Debug-Fix): ImGui.SameLine(x) erwartet x als FENSTER-relative
+        // Position, nicht als reine "verbleibende Breite" - ohne das hier fehlende GetCursorPosX()
+        // (das den aktuellen Einzug/die Zeilenbasis mit einrechnet) landeten Elemente immer um genau
+        // diesen Einzug zu weit links, nie wirklich am rechten Rand.
+        var rowStartX = ImGui.GetCursorPosX();
+        // Oben ausgerichtet (nicht zentriert) - die Knöpfe sind die höheren Elemente dieser Zeile,
+        // daher endet der Zeilentext "{n} of {m} lines" an genau dieser unteren Kante (siehe oben).
+        var buttonY = rowY;
+
+        ImGui.SameLine(MathF.Max(0f, rowStartX + ImGui.GetContentRegionAvail().X - rightMargin - totalButtonsWidth));
+        // Y für jeden der drei Knöpfe explizit gesetzt statt sich auf ImGui.SameLine()'s implizite
+        // "gleiche Zeile"-Y-Wiederherstellung zu verlassen (Nutzer-Report: "Select lines" nicht auf
+        // gleicher Höhe wie "Copy all") - robuster gegen jede Abweichung zwischen den drei Aufrufen.
+        ImGui.SetCursorPosY(buttonY);
+        if (DrawLogGhostButton(scale, "##CodexLogSelectMode", selectLabel, selectWidth, active: logSelectMode))
+        {
+            logSelectMode = !logSelectMode;
+            if (!logSelectMode)
+            {
+                logSelectedIds.Clear();
+                logLastClickedRowIndex = null;
+            }
+        }
+
+        ImGui.SameLine(0f, buttonGap);
+        ImGui.SetCursorPosY(buttonY);
+        if (DrawLogGhostButton(scale, "##CodexLogCopy", copyLabel, copyWidth, active: false))
+        {
+            var toCopy = logSelectMode
+                ? logFilteredCache!.Where(e => logSelectedIds.Contains(e.Id))
+                : logFilteredCache!;
+            CopyLogLines(toCopy);
+        }
+
+        ImGui.SameLine(0f, buttonGap);
+        ImGui.SetCursorPosY(buttonY);
+        // Nutzervorgabe: kein Bestätigungs-Popup mehr - Clear löscht sofort.
+        if (DrawLogGhostButton(scale, "##CodexLogClear", clearLabel, clearWidth, active: false))
+        {
+            PluginLogStore.Clear();
+            logSelectedIds.Clear();
+            logLastClickedRowIndex = null;
+        }
+
+        ImGui.SetCursorPosY(rowY + MathF.Max(textHeight, buttonHeight));
+    }
+
+    private static void SetupLogTableColumns(float scale)
+    {
+        ImGui.TableSetupColumn("##CodexLogTime", ImGuiTableColumnFlags.WidthFixed, 78f * scale);
+        ImGui.TableSetupColumn("##CodexLogLevel", ImGuiTableColumnFlags.WidthFixed, 52f * scale);
+        ImGui.TableSetupColumn("##CodexLogSource", ImGuiTableColumnFlags.WidthFixed, 150f * scale);
+        ImGui.TableSetupColumn("##CodexLogMessage", ImGuiTableColumnFlags.WidthStretch, 1f);
+    }
+
+    private void DrawLogConsole(float scale, float rightMargin, List<LogEntry> filtered)
+    {
+        var width = ImGui.GetContentRegionAvail().X - rightMargin;
+        // Nutzervorgabe: insgesamt niedriger, damit die letzte Zeile nicht vom unteren Fensterrand
+        // abgeschnitten wird (vorher 20px Abstand zum Fensterende, jetzt 60px).
+        var height = MathF.Max(100f * scale,
+            ImGui.GetWindowPos().Y + ImGui.GetWindowSize().Y - ImGui.GetCursorScreenPos().Y - 60f * scale);
+
+        ImGui.PushStyleColor(ImGuiCol.ChildBg, CodexTheme.BgInput);
+        ImGui.PushStyleColor(ImGuiCol.Border, CodexTheme.LineCard);
+        ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 4f * scale);
+        ImGui.PushStyleVar(ImGuiStyleVar.ChildBorderSize, 1f * scale);
+        ImGui.BeginChild("##CodexLogConsole", new Vector2(width, height), true);
+
+        var innerWidth = ImGui.GetContentRegionAvail().X;
+        var headerHeight = 32f * scale;
+
+        // Nutzervorgabe: der Scrollbalken soll erst UNTER der Kopfzeile erscheinen, nicht über deren
+        // volle Höhe mitlaufen - daher die Kopfzeile als eigene, nicht scrollende Mini-Tabelle, und
+        // die eigentlichen Zeilen in einem separaten, darunterliegenden Scroll-Kindfenster (dessen
+        // eigener Scrollbalken dadurch erst ab dessen eigener Oberkante gezeichnet wird).
+        if (ImGui.BeginTable("##CodexLogHeaderTable", 4, ImGuiTableFlags.None, new Vector2(innerWidth, headerHeight)))
+        {
+            SetupLogTableColumns(scale);
+            DrawLogTableHeader(scale, headerHeight);
+            ImGui.EndTable();
+        }
+
+        var bodyHeight = ImGui.GetContentRegionAvail().Y;
+        ImGui.BeginChild("##CodexLogBody", new Vector2(innerWidth, bodyHeight), false);
+
+        if (filtered.Count == 0)
+        {
+            ImGui.Dummy(new Vector2(0f, bodyHeight / 2f - 12f * scale));
+            var emptyText = Loc.T("Keine Log-Zeilen passen zu den Filtern.", "No log lines match the current filters.");
+            using (CodexTheme.FontLogMeta.Push())
+                CodexWidgets.CenterNext(ImGui.CalcTextSize(emptyText).X, ImGui.GetContentRegionAvail().X);
+            using (CodexTheme.FontLogMeta.Push())
+                ImGui.TextColored(CodexTheme.TextDim, emptyText);
+        }
+        else
+        {
+            ImGui.PushStyleColor(ImGuiCol.TableBorderLight, CodexTheme.LineRow);
+            if (ImGui.BeginTable("##CodexLogBodyTable", 4, ImGuiTableFlags.BordersInnerH))
+            {
+                SetupLogTableColumns(scale);
+
+                var rowHeight = 24f * scale;
+                var clipper = new ImGuiListClipper();
+                clipper.Begin(filtered.Count, rowHeight);
+                while (clipper.Step())
+                {
+                    for (var i = clipper.DisplayStart; i < clipper.DisplayEnd; i++)
+                        DrawLogRow(scale, filtered, i, rowHeight);
+                }
+                clipper.End();
+
+                ImGui.EndTable();
+            }
+            ImGui.PopStyleColor();
+
+            // Scrollt (im eigenen Body-Kindfenster statt über die Tabelle) ans Ende, solange der
+            // Nutzer zuletzt schon (ungefähr) am Ende war.
+            if (logFollowNewLines)
+                ImGui.SetScrollY(ImGui.GetScrollMaxY());
+            logFollowNewLines = ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 2f;
+        }
+
+        ImGui.EndChild();
+        ImGui.EndChild();
+        ImGui.PopStyleVar(2);
+        ImGui.PopStyleColor(2);
+    }
+
+    private static void DrawLogTableHeader(float scale, float headerHeight)
+    {
+        ImGui.TableNextRow(ImGuiTableRowFlags.Headers, headerHeight);
+        ImGui.TableSetBgColor(ImGuiTableBgTarget.RowBg0, ImGui.GetColorU32(CodexTheme.BgCard));
+
+        string[] labels = { Loc.T("ZEIT", "TIME"), Loc.T("LEVEL", "LEVEL"), Loc.T("QUELLE", "SOURCE"), Loc.T("NACHRICHT", "MESSAGE") };
+        using (CodexTheme.FontLogTableHeader.Push())
+        {
+            var textHeight = ImGui.GetTextLineHeight();
+            for (var c = 0; c < 4; c++)
+            {
+                ImGui.TableSetColumnIndex(c);
+                ImGui.SetCursorPosX(ImGui.GetCursorPosX() + 8f * scale);
+                ImGui.SetCursorPosY(ImGui.GetCursorPosY() + (headerHeight - textHeight) / 2f);
+                CodexTheme.DrawSpacedText(labels[c], CodexTheme.TextTertiary, 1f * scale);
+            }
+        }
+        // Nutzervorgabe: keine Trennlinie zwischen Kopfzeile und der obersten Log-Zeile.
+    }
+
+    private void DrawLogRow(float scale, List<LogEntry> filtered, int rowIndex, float rowHeight)
+    {
+        var entry = filtered[rowIndex];
+        var (source, message) = SplitLogSource(entry.Message);
+        var isSelected = logSelectMode && logSelectedIds.Contains(entry.Id);
+        var levelColor = LogLevelColor(entry.Level);
+        var isDimmed = entry.Level is LogEventLevel.Debug or LogEventLevel.Verbose;
+        var isTinted = entry.Level is LogEventLevel.Warning or LogEventLevel.Error or LogEventLevel.Fatal;
+        var messageColor = isDimmed ? CodexTheme.TextMuted : CodexTheme.TextPrimary;
+
+        ImGui.TableNextRow(ImGuiTableRowFlags.None, rowHeight);
+
+        var rowBg = isSelected ? CodexTheme.BgSelectedStrong
+            : isTinted ? levelColor with { W = 0.05f }
+            : rowIndex % 2 == 1 ? CodexTheme.BgInput with { W = 1f } // Zebra wird unten separat aufgehellt
+            : new Vector4(0f, 0f, 0f, 0f);
+        ImGui.TableSetBgColor(ImGuiTableBgTarget.RowBg0, ImGui.GetColorU32(rowBg));
+
+        // Zeile per unsichtbarem Selectable über alle Spalten anklickbar machen (nur im Auswahlmodus
+        // interaktiv) - liefert außerdem den Hover-Status für die ganze Zeile.
+        ImGui.TableSetColumnIndex(0);
+        var rowCursor = ImGui.GetCursorScreenPos();
+        ImGui.Selectable($"##CodexLogRow_{entry.Id}", false, ImGuiSelectableFlags.SpanAllColumns, new Vector2(0f, rowHeight));
+        var rowHovered = ImGui.IsItemHovered();
+        // SpanAllColumns macht die Trefferfläche selbst schon zeilenbreit (nicht nur Spalte 0) - darum
+        // hier ItemRectMin/Max statt GetContentRegionAvail() verwenden, das an dieser Stelle nur die
+        // Breite von Spalte 0 (78px) liefern würde, nicht die ganze Zeile.
+        var rowMin = ImGui.GetItemRectMin();
+        var rowMax = ImGui.GetItemRectMax();
+        if (logSelectMode && rowHovered && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
+            HandleLogRowClick(rowIndex, entry.Id, filtered);
+        if (!isSelected && rowHovered)
+            ImGui.GetWindowDrawList().AddRectFilled(rowMin, rowMax, ImGui.GetColorU32(CodexTheme.BgSelected with { W = 0.4f }));
+        if (isSelected)
+            ImGui.GetWindowDrawList().AddRectFilled(rowMin, new Vector2(rowMin.X + 2f * scale, rowMax.Y), ImGui.GetColorU32(CodexTheme.Accent));
+
+        ImGui.SetCursorScreenPos(rowCursor);
+        using (CodexTheme.FontMono12.Push())
+        {
+            ImGui.SetCursorPosX(ImGui.GetCursorPosX() + 8f * scale);
+            ImGui.TextColored(CodexTheme.TextDim, entry.Timestamp.ToString("HH:mm:ss"));
+        }
+
+        ImGui.TableSetColumnIndex(1);
+        var badgeText = LogLevelBadge(entry.Level);
+        var badgeSize = new Vector2(36f * scale, 16f * scale);
+        var badgeCursor = ImGui.GetCursorScreenPos() + new Vector2(0f, (rowHeight - badgeSize.Y) / 2f);
+        var drawList = ImGui.GetWindowDrawList();
+        drawList.AddRectFilled(badgeCursor, badgeCursor + badgeSize, ImGui.GetColorU32(levelColor with { W = 0.14f }), 3f * scale);
+        using (CodexTheme.FontLogBadge.Push())
+        {
+            var textSize = ImGui.CalcTextSize(badgeText);
+            drawList.AddText(badgeCursor + (badgeSize - textSize) / 2f, ImGui.GetColorU32(levelColor), badgeText);
+        }
+
+        ImGui.TableSetColumnIndex(2);
+        ImGui.SetCursorPosX(ImGui.GetCursorPosX() + 8f * scale);
+        ImGui.SetCursorPosY(ImGui.GetCursorPosY() + (rowHeight - ImGui.GetTextLineHeight()) / 2f);
+        using (CodexTheme.FontLogRow.Push())
+        {
+            // Avail ist hier bereits um die 8px von SetCursorPosX oben verkleinert - kein zweiter Abzug.
+            var maxWidth = ImGui.GetContentRegionAvail().X;
+            var truncatedSource = TruncateToWidth(source, maxWidth);
+            ImGui.TextColored(CodexTheme.TextSecondary, truncatedSource);
+        }
+
+        ImGui.TableSetColumnIndex(3);
+        ImGui.SetCursorPosX(ImGui.GetCursorPosX() + 8f * scale);
+        var messageCellPos = ImGui.GetCursorScreenPos() + new Vector2(0f, (rowHeight - 13f * scale) / 2f);
+        float maxMessageWidth;
+        using (CodexTheme.FontLogRow.Push())
+            maxMessageWidth = ImGui.GetContentRegionAvail().X;
+        string truncatedMessage;
+        using (CodexTheme.FontLogRow.Push())
+            truncatedMessage = TruncateToWidth(message, maxMessageWidth);
+        DrawLogHighlightedText(messageCellPos, truncatedMessage, messageColor);
+        if (rowHovered && truncatedMessage != message)
+        {
+            ImGui.PushStyleColor(ImGuiCol.PopupBg, CodexTheme.BgPopup);
+            ImGui.BeginTooltip();
+            ImGui.PushTextWrapPos(ImGui.GetFontSize() * 40f);
+            using (CodexTheme.FontLogRow.Push())
+                ImGui.TextColored(CodexTheme.TextPrimary, message);
+            ImGui.PopTextWrapPos();
+            ImGui.EndTooltip();
+            ImGui.PopStyleColor();
+        }
+    }
+
+    private void HandleLogRowClick(int rowIndex, long entryId, List<LogEntry> filteredList)
+    {
+        var io = ImGui.GetIO();
+        if (io.KeyShift && logLastClickedRowIndex.HasValue)
+        {
+            var start = Math.Min(logLastClickedRowIndex.Value, rowIndex);
+            var end = Math.Max(logLastClickedRowIndex.Value, rowIndex);
+            for (var i = start; i <= end; i++)
+                logSelectedIds.Add(filteredList[i].Id);
+        }
+        else if (io.KeyCtrl)
+        {
+            if (!logSelectedIds.Remove(entryId))
+                logSelectedIds.Add(entryId);
+        }
+        else
+        {
+            logSelectedIds.Clear();
+            logSelectedIds.Add(entryId);
+        }
+
+        logLastClickedRowIndex = rowIndex;
+    }
+
+    private static void DrawLogHighlightedText(Vector2 screenPos, string text, Vector4 baseColor)
+    {
+        var drawList = ImGui.GetWindowDrawList();
+        var x = screenPos.X;
+        var lastIndex = 0;
+
+        void DrawPlain(string segment)
+        {
+            if (segment.Length == 0)
+                return;
+            using (CodexTheme.FontLogRow.Push())
+            {
+                drawList.AddText(new Vector2(x, screenPos.Y), ImGui.GetColorU32(baseColor), segment);
+                x += ImGui.CalcTextSize(segment).X;
+            }
+        }
+
+        foreach (Match m in LogTokenRegex.Matches(text))
+        {
+            DrawPlain(text[lastIndex..m.Index]);
+            using (CodexTheme.FontMono12.Push())
+            {
+                drawList.AddText(new Vector2(x, screenPos.Y), ImGui.GetColorU32(CodexTheme.Accent), m.Value);
+                x += ImGui.CalcTextSize(m.Value).X;
+            }
+            lastIndex = m.Index + m.Length;
+        }
+        DrawPlain(text[lastIndex..]);
+    }
+
+    /// <summary>Kürzt per CalcTextSize auf maxWidth und hängt "…" an, falls nötig - erwartet die passende Schrift bereits gepusht.</summary>
+    private static string TruncateToWidth(string text, float maxWidth)
+    {
+        if (string.IsNullOrEmpty(text) || ImGui.CalcTextSize(text).X <= maxWidth)
+            return text;
+
+        const string ellipsis = "…";
+        var ellipsisWidth = ImGui.CalcTextSize(ellipsis).X;
+        var low = 0;
+        var high = text.Length;
+        while (low < high)
+        {
+            var mid = (low + high + 1) / 2;
+            if (ImGui.CalcTextSize(text[..mid]).X + ellipsisWidth <= maxWidth)
+                low = mid;
+            else
+                high = mid - 1;
+        }
+        return text[..low] + ellipsis;
+    }
+
+    private void CopyLogLines(IEnumerable<LogEntry> lines)
+    {
+        var text = new StringBuilder();
+        foreach (var entry in lines)
+        {
+            var (source, message) = SplitLogSource(entry.Message);
+            var sourcePrefix = string.IsNullOrEmpty(source) ? string.Empty : $"{source}: ";
+            text.Append(entry.Timestamp.ToString("HH:mm:ss.fff")).Append(" [").Append(LevelLabel(entry.Level)).Append("] ")
+                .Append(sourcePrefix).Append(message).Append('\n');
+        }
+        ImGui.SetClipboardText(text.ToString());
+    }
+
+    private static Vector4 LogLevelColor(LogEventLevel level) => level switch
+    {
+        LogEventLevel.Verbose => CodexTheme.TextDisabled,
+        LogEventLevel.Debug => CodexTheme.TextMuted,
+        LogEventLevel.Information => CodexTheme.LogInfoFg,
+        LogEventLevel.Warning => CodexTheme.WarnFg,
+        LogEventLevel.Error => CodexTheme.ErrFg,
+        LogEventLevel.Fatal => CodexTheme.LogCritFg,
+        _ => CodexTheme.TextMuted,
+    };
+
+    private static string LogLevelBadge(LogEventLevel level) => LevelLabel(level);
+
+    private static string LevelLabel(LogEventLevel level) => level switch
+    {
+        LogEventLevel.Verbose => "VRB",
+        LogEventLevel.Debug => "DBG",
+        LogEventLevel.Information => "INF",
+        LogEventLevel.Warning => "WRN",
+        LogEventLevel.Error => "ERR",
+        LogEventLevel.Fatal => "CRT",
+        _ => "???",
+    };
+
+    /// <summary>
+    /// Fast jede Log-Zeile in diesem Projekt beginnt mit einer eigenen Quellenangabe in eckigen
+    /// Klammern (z.B. "[SightseeingAutomation] ..."), die bisher einfach Teil des Nachrichtentexts war -
+    /// für die Log-Seite hier als eigener Wert herausgelöst, Rest bleibt die eigentliche Nachricht ohne
+    /// das Tag.
+    /// </summary>
+    private static (string Source, string Message) SplitLogSource(string message)
+    {
+        if (message.Length > 0 && message[0] == '[')
+        {
+            var close = message.IndexOf(']');
+            if (close > 1)
+                return (message[1..close], message[(close + 1)..].TrimStart());
+        }
+
+        return (string.Empty, message);
+    }
+
+    // ---- Seite "Changelog" (Nutzeranforderung) - Zeitleiste mit auf-/zuklappbaren Versionskarten.
+    // Auf-/Zu-Zustand nur zur Laufzeit gehalten (Dictionary), nicht gespeichert (DESIGN_SPEC). Rauten
+    // und Chevron werden gezeichnet statt als Glyph (◆/› fehlen im Ingame-Font, erscheinen sonst als
+    // "?") - Rauten über den bereits vorhandenen CodexWidgets.Diamond-Helfer, Chevron über die
+    // FontAwesome-Icon-Schrift (die kennt ›-ähnliche Pfeile sehr wohl, nur die normale Textschrift
+    // nicht - anders als ◆/▾, die auch der Icon-Schrift fehlen).
+
+    private readonly Dictionary<string, bool> changelogExpanded = new();
+    private Version? changelogUnseenThreshold;
+    private bool changelogMarkedSeen;
+
+    private void DrawChangelogPage(float scale)
+    {
+        var config = plugin.Configuration;
+        var entries = ChangelogService.Entries;
+
+        // Beim ersten Anzeigen dieser Seite in dieser Sitzung: merken, welche Version vorher als
+        // gesehen galt (die NEW-Badges an den Versionskarten sollen laut Nutzervorgabe für den Rest
+        // der Sitzung sichtbar bleiben, auch nachdem unten sofort als gesehen gespeichert wird), dann
+        // genau einmal speichern (nicht jeden Frame).
+        if (!changelogMarkedSeen)
+        {
+            changelogMarkedSeen = true;
+            Version.TryParse(config.LastSeenChangelogVersion, out var previouslySeen);
+            changelogUnseenThreshold = previouslySeen;
+            if (ChangelogService.LatestVersion is { } latest && (previouslySeen == null || latest > previouslySeen))
+            {
+                config.LastSeenChangelogVersion = latest.ToString();
+                config.Save();
+            }
+        }
+
+        if (entries.Count == 0)
+        {
+            using (CodexTheme.FontChangelogMeta.Push())
+                ImGui.TextColored(CodexTheme.TextDim, Loc.T("Noch keine Änderungen eingetragen.", "No changes recorded yet."));
+            return;
+        }
+
+        // Nutzervorgabe: höchstens 3 Versionskarten anzeigen (statt aller bekannten Versionen).
+        var displayedEntries = entries.Count > 3 ? entries.GetRange(0, 3) : entries;
+
+        var rightMargin = 32f * scale;
+        var timelineWidth = 34f * scale;
+        var lineX = ImGui.GetCursorScreenPos().X + 9f * scale;
+        var cardWidth = ImGui.GetContentRegionAvail().X - timelineWidth - rightMargin;
+        var rowStartX = ImGui.GetCursorPosX();
+
+        float? firstDiamondY = null;
+        var lastDiamondY = 0f;
+
+        for (var i = 0; i < displayedEntries.Count; i++)
+        {
+            var entry = displayedEntries[i];
+            var isLatest = i == 0;
+            var cardTopScreenY = ImGui.GetCursorScreenPos().Y;
+            var cardTopPosY = ImGui.GetCursorPosY();
+
+            var expanded = GetChangelogExpanded(entry, isLatest);
+            float headerLineHeight;
+            using ((expanded ? CodexTheme.FontChangelogVersionTitle : CodexTheme.FontChangelogCollapsedTitle).Push())
+                headerLineHeight = ImGui.GetTextLineHeight();
+            var headerPaddingY = expanded ? CodexTheme.CardPaddingY : 12f * scale;
+            var diamondY = cardTopScreenY + headerPaddingY + headerLineHeight / 2f;
+
+            firstDiamondY ??= diamondY;
+            lastDiamondY = diamondY;
+
+            var diamondCenter = new Vector2(lineX, diamondY);
+            if (isLatest)
+            {
+                ImGui.GetWindowDrawList().AddCircleFilled(diamondCenter, 10f * scale, ImGui.GetColorU32(CodexTheme.Accent with { W = 0.15f }));
+                CodexWidgets.Diamond(diamondCenter, 8.5f * scale, ImGui.GetColorU32(CodexTheme.Accent), ImGui.GetColorU32(CodexTheme.Accent));
+            }
+            else
+            {
+                CodexWidgets.Diamond(diamondCenter, 8.5f * scale, ImGui.GetColorU32(CodexTheme.BgWindow), ImGui.GetColorU32(CodexTheme.LineFrame));
+            }
+
+            ImGui.SetCursorPos(new Vector2(rowStartX + timelineWidth, cardTopPosY));
+            DrawChangelogVersionCard(scale, entry, expanded, cardWidth);
+
+            if (i < displayedEntries.Count - 1)
+                ImGui.Dummy(new Vector2(0f, 14f * scale));
+        }
+
+        if (firstDiamondY.HasValue && firstDiamondY.Value < lastDiamondY)
+            ImGui.GetWindowDrawList().AddLine(new Vector2(lineX, firstDiamondY.Value), new Vector2(lineX, lastDiamondY), ImGui.GetColorU32(CodexTheme.LineCard));
+    }
+
+    private bool GetChangelogExpanded(ChangelogEntry entry, bool isLatest)
+    {
+        if (!changelogExpanded.TryGetValue(entry.Version, out var expanded))
+        {
+            expanded = isLatest;
+            changelogExpanded[entry.Version] = expanded;
+        }
+        return expanded;
+    }
+
+    private void DrawChangelogVersionCard(float scale, ChangelogEntry entry, bool expanded, float width)
+    {
+        var showNewBadge = Version.TryParse(entry.Version, out var entryVersion) &&
+            (changelogUnseenThreshold == null || entryVersion > changelogUnseenThreshold);
+
+        if (!expanded)
+        {
+            DrawChangelogCollapsedRow(scale, entry, width, showNewBadge);
+            return;
+        }
+
+        CodexTheme.BeginCard(scale, width: width);
+        // Nutzervorgabe: Titel/Untertitel/Badges/Änderungsliste insgesamt 40px weiter nach rechts
+        // (20px + weitere 20px).
+        var extraIndent = 40f * scale;
+        ImGui.Indent(extraIndent);
+        var contentWidth = width - CodexTheme.CardPaddingX * 2f;
+        var rowX = ImGui.GetCursorPosX();
+        var rowY = ImGui.GetCursorPosY();
+
+        var titleText = string.Format(Loc.T("Version {0}", "Version {0}"), entry.Version);
+        float titleWidth, titleHeight;
+        using (CodexTheme.FontChangelogVersionTitle.Push())
+        {
+            var size = ImGui.CalcTextSize(titleText);
+            titleWidth = size.X;
+            titleHeight = size.Y;
+            ImGui.TextColored(CodexTheme.TextHeading, titleText);
+        }
+
+        if (showNewBadge)
+        {
+            ImGui.SameLine(0f, 8f * scale);
+            ImGui.SetCursorPosY(ImGui.GetCursorPosY() + (titleHeight - ChangelogBadgeHeight(scale)) / 2f);
+            var badgeCursor = ImGui.GetCursorScreenPos();
+            var badgeSize = DrawChangelogNewBadgeAt(scale, badgeCursor);
+            ImGui.Dummy(badgeSize);
+        }
+
+        var dateText = FormatChangelogDate(entry.Date);
+        float dateWidth, dateHeight;
+        using (CodexTheme.FontChangelogMeta.Push())
+        {
+            var size = ImGui.CalcTextSize(dateText);
+            dateWidth = size.X;
+            dateHeight = size.Y;
+        }
+        // Nutzervorgabe: 15px Abstand zum rechten Kartenrand statt bündig mit contentWidth.
+        ImGui.SetCursorPos(new Vector2(rowX + contentWidth - dateWidth - 15f * scale, rowY + (titleHeight - dateHeight) / 2f));
+        using (CodexTheme.FontChangelogMeta.Push())
+            ImGui.TextColored(CodexTheme.TextMuted, dateText);
+
+        ImGui.SetCursorPos(new Vector2(rowX, rowY + titleHeight));
+        ImGui.Dummy(new Vector2(0f, 10f * scale));
+
+        var lineCursor = ImGui.GetCursorScreenPos();
+        ImGui.GetWindowDrawList().AddLine(lineCursor, lineCursor + new Vector2(contentWidth, 0f), ImGui.GetColorU32(CodexTheme.LineSubtle));
+        ImGui.Dummy(new Vector2(0f, 10f * scale));
+
+        DrawChangelogChangeList(scale, entry, contentWidth);
+
+        ImGui.Unindent(extraIndent);
+        CodexTheme.EndCard();
+    }
+
+    private static void DrawChangelogChangeList(float scale, ChangelogEntry entry, float contentWidth)
+    {
+        var tagColumnWidth = ChangelogTagColumnWidth(scale);
+        var tagBadgeHeight = ChangelogBadgeHeight(scale);
+        var rowGap = 8f * scale;
+
+        for (var i = 0; i < entry.Changes.Count; i++)
+        {
+            var change = entry.Changes[i];
+            var rowTopY = ImGui.GetCursorPosY();
+            var tagCursor = ImGui.GetCursorScreenPos();
+            DrawChangelogTagBadge(scale, tagCursor, change.Type);
+
+            // Hängender Einzug über ImGui.Indent/Unindent statt manueller SetCursorPos-Y-Buchführung -
+            // derselbe robuste Ansatz wie DrawDebugWarningBox (dauerhafter Einzug statt Einzelpositionen,
+            // damit auch mehrzeilig umgebrochener Text zuverlässig unter dem Textanfang bündig bleibt).
+            ImGui.Indent(tagColumnWidth);
+            using (CodexTheme.FontChangelogChangeText.Push())
+            {
+                var wrapPos = ImGui.GetCursorPosX() + (contentWidth - tagColumnWidth);
+                ImGui.PushTextWrapPos(wrapPos);
+                ImGui.TextColored(CodexTheme.TextValue, ChangelogService.ResolveText(change));
+                ImGui.PopTextWrapPos();
+            }
+            ImGui.Unindent(tagColumnWidth);
+
+            // Absicherung, falls das Tag-Badge (fester Höhe) höher wäre als eine einzeilige, kurze
+            // Änderung - die Zeile reserviert dann trotzdem mindestens die Badge-Höhe.
+            var minRowBottomY = rowTopY + tagBadgeHeight;
+            if (ImGui.GetCursorPosY() < minRowBottomY)
+                ImGui.Dummy(new Vector2(0f, minRowBottomY - ImGui.GetCursorPosY()));
+
+            if (i < entry.Changes.Count - 1)
+                ImGui.Dummy(new Vector2(0f, rowGap));
+        }
+    }
+
+    /// <summary>Einzeilige, zugeklappte Versionskarte - Klick auf die Zeile klappt sie auf.</summary>
+    private void DrawChangelogCollapsedRow(float scale, ChangelogEntry entry, float width, bool showNewBadge)
+    {
+        var padding = new Vector2(20f * scale, 12f * scale);
+        float titleHeight;
+        using (CodexTheme.FontChangelogCollapsedTitle.Push())
+            titleHeight = ImGui.GetTextLineHeight();
+        var rowHeight = titleHeight + padding.Y * 2f;
+        var rowSize = new Vector2(width, rowHeight);
+
+        var cursor = ImGui.GetCursorScreenPos();
+        var clicked = ImGui.InvisibleButton("##CodexChangelogRow_" + entry.Version, rowSize);
+        var hovered = ImGui.IsItemHovered();
+
+        var drawList = ImGui.GetWindowDrawList();
+        drawList.AddRectFilled(cursor, cursor + rowSize, ImGui.GetColorU32(hovered ? CodexTheme.BgSelected : CodexTheme.BgCard), CodexTheme.RoundingCard);
+        drawList.AddRect(cursor, cursor + rowSize, ImGui.GetColorU32(CodexTheme.LineCard), CodexTheme.RoundingCard);
+
+        var titleText = string.Format(Loc.T("Version {0}", "Version {0}"), entry.Version);
+        float titleWidth;
+        using (CodexTheme.FontChangelogCollapsedTitle.Push())
+        {
+            titleWidth = ImGui.CalcTextSize(titleText).X;
+            drawList.AddText(new Vector2(cursor.X + padding.X, cursor.Y + padding.Y), ImGui.GetColorU32(CodexTheme.TextHeading), titleText);
+        }
+
+        var dateText = FormatChangelogDate(entry.Date);
+        float dateWidth;
+        using (CodexTheme.FontChangelogMeta.Push())
+        {
+            var size = ImGui.CalcTextSize(dateText);
+            dateWidth = size.X;
+            drawList.AddText(new Vector2(cursor.X + padding.X + titleWidth + 10f * scale, cursor.Y + (rowHeight - size.Y) / 2f), ImGui.GetColorU32(CodexTheme.TextMuted), dateText);
+        }
+
+        if (showNewBadge)
+        {
+            var badgeX = cursor.X + padding.X + titleWidth + 10f * scale + dateWidth + 12f * scale;
+            DrawChangelogNewBadgeAt(scale, new Vector2(badgeX, cursor.Y + (rowHeight - ChangelogBadgeHeight(scale)) / 2f));
+        }
+
+        var changesLabel = entry.Changes.Count == 1
+            ? Loc.T("1 Änderung", "1 change")
+            : string.Format(Loc.T("{0} Änderungen", "{0} changes"), entry.Changes.Count);
+        float changesWidth, changesHeight;
+        using (CodexTheme.FontChangelogMeta.Push())
+        {
+            var size = ImGui.CalcTextSize(changesLabel);
+            changesWidth = size.X;
+            changesHeight = size.Y;
+        }
+
+        string chevronGlyph;
+        float chevronWidth, chevronHeight;
+        using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
+        {
+            chevronGlyph = FontAwesomeIcon.ChevronRight.ToIconString();
+            var size = ImGui.CalcTextSize(chevronGlyph);
+            chevronWidth = size.X;
+            chevronHeight = size.Y;
+        }
+
+        var chevronX = cursor.X + width - padding.X - chevronWidth;
+        using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
+            drawList.AddText(new Vector2(chevronX, cursor.Y + (rowHeight - chevronHeight) / 2f), ImGui.GetColorU32(CodexTheme.TextMuted), chevronGlyph);
+
+        var changesX = chevronX - 8f * scale - changesWidth;
+        using (CodexTheme.FontChangelogMeta.Push())
+            drawList.AddText(new Vector2(changesX, cursor.Y + (rowHeight - changesHeight) / 2f), ImGui.GetColorU32(CodexTheme.TextMuted), changesLabel);
+
+        if (hovered)
+            ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
+        if (clicked)
+            changelogExpanded[entry.Version] = true;
+
+        ImGui.Dummy(rowSize);
+    }
+
+    private static Vector2 DrawChangelogNewBadgeAt(float scale, Vector2 cursor)
+    {
+        var label = Loc.T("NEU", "NEW");
+        var padding = new Vector2(7f * scale, 1f * scale);
+        float textWidth, textHeight;
+        using (CodexTheme.FontChangelogTagBadge.Push())
+        {
+            var size = ImGui.CalcTextSize(label);
+            textWidth = size.X;
+            textHeight = size.Y;
+        }
+        var badgeSize = new Vector2(textWidth + padding.X * 2f, textHeight + padding.Y * 2f);
+        var drawList = ImGui.GetWindowDrawList();
+        drawList.AddRectFilled(cursor, cursor + badgeSize, ImGui.GetColorU32(CodexTheme.Accent), 3f * scale);
+        using (CodexTheme.FontChangelogTagBadge.Push())
+            drawList.AddText(cursor + padding, ImGui.GetColorU32(CodexTheme.TextOnAccent), label);
+        return badgeSize;
+    }
+
+    private static float ChangelogBadgeHeight(float scale)
+    {
+        using (CodexTheme.FontChangelogTagBadge.Push())
+            return ImGui.GetTextLineHeight() + 2f * scale;
+    }
+
+    private static Vector2 DrawChangelogTagBadge(float scale, Vector2 cursor, string type)
+    {
+        var label = ChangelogTagLabel(type);
+        var (fg, bg, line) = ChangelogTagColors(type);
+        var padding = new Vector2(7f * scale, 1f * scale);
+        float textWidth, textHeight;
+        using (CodexTheme.FontChangelogTagBadge.Push())
+        {
+            var size = ImGui.CalcTextSize(label);
+            textWidth = size.X;
+            textHeight = size.Y;
+        }
+        var badgeSize = new Vector2(textWidth + padding.X * 2f, textHeight + padding.Y * 2f);
+        var drawList = ImGui.GetWindowDrawList();
+        drawList.AddRectFilled(cursor, cursor + badgeSize, ImGui.GetColorU32(bg), 3f * scale);
+        drawList.AddRect(cursor, cursor + badgeSize, ImGui.GetColorU32(line), 3f * scale);
+        using (CodexTheme.FontChangelogTagBadge.Push())
+            drawList.AddText(cursor + padding, ImGui.GetColorU32(fg), label);
+        return badgeSize;
+    }
+
+    /// <summary>Nutzervorgabe: Tag-Spalte so breit wie der längste Tag in der aktuellen Menüsprache (für Deutsch "VERBESSERT" deutlich breiter als "NEW"), statt einer festen Breite.</summary>
+    private static float ChangelogTagColumnWidth(float scale)
+    {
+        var maxWidth = 0f;
+        using (CodexTheme.FontChangelogTagBadge.Push())
+        {
+            foreach (var type in new[] { "new", "improved", "fixed", "removed" })
+                maxWidth = MathF.Max(maxWidth, ImGui.CalcTextSize(ChangelogTagLabel(type)).X);
+        }
+        return maxWidth + 7f * scale * 2f + 10f * scale;
+    }
+
+    private static string ChangelogTagLabel(string type) => type switch
+    {
+        "new" => Loc.T("NEU", "NEW"),
+        "fixed" => Loc.T("BEHOBEN", "FIXED"),
+        "removed" => Loc.T("ENTFERNT", "REMOVED"),
+        _ => Loc.T("VERBESSERT", "IMPROVED"),
+    };
+
+    private static (Vector4 Fg, Vector4 Bg, Vector4 Line) ChangelogTagColors(string type) => type switch
+    {
+        "new" => (CodexTheme.OkFg, CodexTheme.OkBg, CodexTheme.OkLine),
+        "fixed" => (CodexTheme.LogInfoFg, CodexTheme.InfoBg, CodexTheme.InfoLine),
+        "removed" => (CodexTheme.ErrFg, CodexTheme.ErrBg, CodexTheme.ErrLine),
+        _ => (CodexTheme.WarnFg, CodexTheme.WarnBg, CodexTheme.WarnLine),
+    };
+
+    private static string FormatChangelogDate(string date)
+    {
+        if (DateTime.TryParse(date, CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed))
+        {
+            try
+            {
+                return parsed.ToString("d", new CultureInfo(Loc.T("de-DE", "en-US")));
+            }
+            catch (CultureNotFoundException)
+            {
+                return parsed.ToString("d", CultureInfo.InvariantCulture);
+            }
+        }
+        return date;
     }
 }
