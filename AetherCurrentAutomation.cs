@@ -28,6 +28,7 @@ public sealed class AetherCurrentAutomation
         Interacting,
         JumpRoute,
         ReturningToStart,
+        TeleportingHomeAfterCompletion,
     }
 
     // Manche Ätherströmungen sind nur über einen kurzen Sprung erreichbar (z.B. "The Dravanian
@@ -40,6 +41,7 @@ public sealed class AetherCurrentAutomation
         Dismounting,
         WalkingToRunUp,
         RunningToJump,
+        WalkingToPostJumpWaypoint,
     }
 
     private static readonly TimeSpan MountWaitTimeout = TimeSpan.FromSeconds(6);
@@ -103,6 +105,17 @@ public sealed class AetherCurrentAutomation
     private readonly ICallGateSubscriber<List<Vector3>, bool, object> moveToPath;
     private readonly ICallGateSubscriber<float> pathGetTolerance;
     private readonly ICallGateSubscriber<float, object> pathSetTolerance;
+    private readonly ICallGateSubscriber<uint, byte, bool> lifestreamTeleport;
+    private readonly ICallGateSubscriber<bool> lifestreamIsBusy;
+    private readonly ICallGateSubscriber<object> lifestreamAbort;
+
+    // Siehe TryTeleportHomeAfterCompletion-Kommentar - Punkte, nach denen zum Haupt-Ätheryten der
+    // Zone teleportiert wird, bevor der nächste Punkt gewählt wird (Nutzeranforderung, z.B. "The Ruby
+    // Sea #3" - die Landestelle/der Rückweg der Sprungroute liegt ungünstig für den nächsten Punkt).
+    private static readonly HashSet<uint> TeleportHomeAfterCompletionIds = new() { 2818185 };
+    private bool postCompletionTeleportHasSeenLoadingScreen;
+    private static readonly TimeSpan PostCompletionTeleportTimeout = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan PostCompletionTeleportSettleDelay = TimeSpan.FromSeconds(2);
     private float? savedPathTolerance;
 
     private State state = State.Idle;
@@ -197,6 +210,34 @@ public sealed class AetherCurrentAutomation
         moveToPath = Plugin.PluginInterface.GetIpcSubscriber<List<Vector3>, bool, object>("vnavmesh.Path.MoveTo");
         pathGetTolerance = Plugin.PluginInterface.GetIpcSubscriber<float>("vnavmesh.Path.GetTolerance");
         pathSetTolerance = Plugin.PluginInterface.GetIpcSubscriber<float, object>("vnavmesh.Path.SetTolerance");
+        lifestreamTeleport = Plugin.PluginInterface.GetIpcSubscriber<uint, byte, bool>("Lifestream.Teleport");
+        lifestreamIsBusy = Plugin.PluginInterface.GetIpcSubscriber<bool>("Lifestream.IsBusy");
+        lifestreamAbort = Plugin.PluginInterface.GetIpcSubscriber<object>("Lifestream.Abort");
+    }
+
+    private bool IsLifestreamAvailable()
+    {
+        try
+        {
+            return lifestreamTeleport.HasFunction && lifestreamIsBusy.HasFunction;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private void StopLifestream()
+    {
+        try
+        {
+            if (lifestreamAbort.HasAction)
+                lifestreamAbort.InvokeAction();
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error(ex, "[AetherCurrentAutomation] Fehler beim Abbrechen von Lifestream.");
+        }
     }
 
     public bool IsVNavmeshAvailable()
@@ -248,6 +289,7 @@ public sealed class AetherCurrentAutomation
         state = State.Idle;
         currentTargetEntry = null;
         StopPath();
+        StopLifestream();
         Plugin.ClearNavigationTarget();
 
         // Mitten in einer Sprungroute gestoppt - enge vnavmesh-Toleranz nicht dauerhaft gesetzt lassen.
@@ -437,6 +479,10 @@ public sealed class AetherCurrentAutomation
 
                 case State.ReturningToStart:
                     UpdateReturningToStart();
+                    break;
+
+                case State.TeleportingHomeAfterCompletion:
+                    UpdateTeleportingHomeAfterCompletion();
                     break;
             }
         }
@@ -734,30 +780,60 @@ public sealed class AetherCurrentAutomation
                     return;
                 }
 
-                // Gelandet - Route abgeschlossen, wieder normale Toleranz, normal zur echten Position
-                // weiter (BeginFinalApproach übernimmt auch das Abmounten erneut, schadet aber nicht,
-                // falls schon unten).
-                RestorePathTolerance();
-                activeJumpRoute = null;
-                didFinalApproach = true;
-                if (currentTargetEntry.WorldPosition is { } exactPosition && BeginFinalApproach(exactPosition))
+                // Gelandet - falls ein Zwischenpunkt hinterlegt ist (siehe Plugin.AetherCurrentJumpRoute.
+                // PostJumpWaypoint-Kommentar), erst dort hinlaufen, bevor es zur echten Position weitergeht.
+                if (route.PostJumpWaypoint is { } postJumpWaypoint)
                 {
-                    state = State.MovingTo;
-                    hasSeenPathRunning = false;
+                    moveToPath.InvokeAction(new List<Vector3> { postJumpWaypoint }, false);
+                    jumpPhase = JumpPhase.WalkingToPostJumpWaypoint;
                     stateEnteredAt = DateTime.UtcNow;
-                    stuckDetector.Reset();
-                    StatusText = Loc.T(
-                        $"Laufe genau auf den Punkt: {currentTargetEntry.Name}...",
-                        $"Walking precisely onto the point: {currentTargetEntry.Name}...");
                     return;
                 }
 
-                state = State.Interacting;
-                stateEnteredAt = DateTime.UtcNow;
-                StatusText = Loc.T($"Interagiere: {currentTargetEntry.Name}...", $"Interacting: {currentTargetEntry.Name}...");
+                CompleteJumpRoute();
+                return;
+            }
+
+            case JumpPhase.WalkingToPostJumpWaypoint:
+            {
+                if (pathIsRunning.InvokeFunc())
+                {
+                    if (DateTime.UtcNow - stateEnteredAt > StepMaxDuration)
+                        SkipCurrent(Loc.T("Zwischenpunkt nach dem Sprung dauert zu lange", "Post-jump waypoint is taking too long"));
+                    return;
+                }
+
+                CompleteJumpRoute();
                 return;
             }
         }
+    }
+
+    /// <summary>
+    /// Route (inkl. optionalem PostJumpWaypoint) abgeschlossen - wieder normale Toleranz, normal zur
+    /// echten Position weiter (BeginFinalApproach übernimmt auch das Abmounten erneut, schadet aber
+    /// nicht, falls schon unten).
+    /// </summary>
+    private void CompleteJumpRoute()
+    {
+        RestorePathTolerance();
+        activeJumpRoute = null;
+        didFinalApproach = true;
+        if (currentTargetEntry!.WorldPosition is { } exactPosition && BeginFinalApproach(exactPosition))
+        {
+            state = State.MovingTo;
+            hasSeenPathRunning = false;
+            stateEnteredAt = DateTime.UtcNow;
+            stuckDetector.Reset();
+            StatusText = Loc.T(
+                $"Laufe genau auf den Punkt: {currentTargetEntry.Name}...",
+                $"Walking precisely onto the point: {currentTargetEntry.Name}...");
+            return;
+        }
+
+        state = State.Interacting;
+        stateEnteredAt = DateTime.UtcNow;
+        StatusText = Loc.T($"Interagiere: {currentTargetEntry.Name}...", $"Interacting: {currentTargetEntry.Name}...");
     }
 
     // Für die Sprungroute: enge vnavmesh-Wegpunkt-Toleranz, sonst wieder die ursprüngliche - gleiches
@@ -1008,7 +1084,23 @@ public sealed class AetherCurrentAutomation
         return nearest;
     }
 
+    /// <summary>
+    /// Siehe TeleportHomeAfterCompletionIds-Kommentar - für die dort gelisteten Punkte erst zum
+    /// Haupt-Ätheryten teleportieren (TryTeleportHomeAfterCompletion), bevor tatsächlich
+    /// fertiggestellt wird; für alle anderen unverändert sofort FinishCurrentImmediate.
+    /// </summary>
     private void FinishCurrent()
+    {
+        if (currentTargetEntry != null && TeleportHomeAfterCompletionIds.Contains(currentTargetEntry.Id))
+        {
+            TryTeleportHomeAfterCompletion();
+            return;
+        }
+
+        FinishCurrentImmediate();
+    }
+
+    private void FinishCurrentImmediate()
     {
         Plugin.Log.Info($"[AetherCurrentAutomation] FinishCurrent({currentTargetEntry?.Name}): freigeschaltet.");
         attemptCounts.Remove(currentTargetEntry!.Id);
@@ -1021,6 +1113,60 @@ public sealed class AetherCurrentAutomation
         // Ziel wird wieder ganz normal mit der großzügigeren ArrivalTolerance angelaufen.
         RestorePathTolerance();
         state = State.Idle;
+    }
+
+    /// <summary>
+    /// Teleportiert zum Haupt-Ätheryten der aktuellen Zone, BEVOR der nächste Punkt gewählt wird
+    /// (siehe UpdateTeleportingHomeAfterCompletion). Klappt das nicht (Lifestream fehlt/Ätheryte noch
+    /// nicht freigeschaltet), einfach normal fertigstellen statt den Punkt zu überspringen - der war
+    /// ja schon erfolgreich erledigt.
+    /// </summary>
+    private void TryTeleportHomeAfterCompletion()
+    {
+        if (!IsLifestreamAvailable())
+        {
+            FinishCurrentImmediate();
+            return;
+        }
+
+        var territory = Plugin.ResolveEffectiveTerritoryId(Plugin.ClientState.TerritoryType);
+        var mainAetheryteId = Plugin.FindUnlockedMainAetheryteId(territory);
+        if (mainAetheryteId == null || !lifestreamTeleport.InvokeFunc(mainAetheryteId.Value, (byte)0))
+        {
+            FinishCurrentImmediate();
+            return;
+        }
+
+        postCompletionTeleportHasSeenLoadingScreen = false;
+        state = State.TeleportingHomeAfterCompletion;
+        stateEnteredAt = DateTime.UtcNow;
+        StatusText = Loc.T("Teleportiere zum Haupt-Ätheryten...", "Teleporting to the main aetheryte...");
+    }
+
+    /// <summary>
+    /// Wie SightseeingAutomation.UpdateTeleportingHomeAfterCompletion - BetweenAreas/-51 statt
+    /// lifestreamIsBusy/Zonenwechsel (lifestreamIsBusy meldet "fertig" schon während der
+    /// Teleport-Besetzungszeit, lange vor dem eigentlichen Ladebildschirm; ein Teleport zum eigenen
+    /// Haupt-Ätheryten bleibt außerdem oft in derselben Zonen-ID).
+    /// </summary>
+    private void UpdateTeleportingHomeAfterCompletion()
+    {
+        var loading = Plugin.Condition[ConditionFlag.BetweenAreas] || Plugin.Condition[ConditionFlag.BetweenAreas51];
+        if (loading)
+            postCompletionTeleportHasSeenLoadingScreen = true;
+
+        if (loading || !postCompletionTeleportHasSeenLoadingScreen)
+        {
+            if (DateTime.UtcNow - stateEnteredAt > PostCompletionTeleportTimeout)
+                FinishCurrentImmediate();
+
+            return;
+        }
+
+        if (DateTime.UtcNow - stateEnteredAt < PostCompletionTeleportSettleDelay)
+            return;
+
+        FinishCurrentImmediate();
     }
 
     /// <summary>

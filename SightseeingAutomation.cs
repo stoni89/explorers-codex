@@ -27,6 +27,8 @@ public sealed class SightseeingAutomation
         EnsuringExactPosition,
         WalkingOut,
         JumpingPuzzle,
+        TeleportingHomeAfterCompletion,
+        KuganeTowerClimbing,
     }
 
     private static readonly TimeSpan MountWaitTimeout = TimeSpan.FromSeconds(6);
@@ -145,6 +147,12 @@ public sealed class SightseeingAutomation
     private IReadOnlyList<Plugin.SightseeingApproachWaypoint>? pendingPostCompletionWaypoints;
     private int postCompletionWaypointIndex;
     private bool hasEnsuredExactPosition;
+    private bool walkOutJumpSent;
+
+    // Siehe BeginJumpingPuzzle/PuzzlePhase.FlyingToStartMounting - ob nach dem (ggf. erst nötigen)
+    // Aufsteigen am Startpunkt beritten weitergeflogen wird (Schritt 1 = Flug-Schritt) oder dort
+    // abgestiegen werden soll (DismountAtStart).
+    private bool pendingStartArrivalKeepsMounted;
 
     // Ob das AKTUELLE Teilstück (siehe currentTargetPosition) fliegend versucht werden darf - true
     // für den Normalfall (Karten-Flagge/FlagToPoint-Umweg, erster Zwischenstopp, finaler Schritt),
@@ -384,6 +392,14 @@ public sealed class SightseeingAutomation
                 case State.JumpingPuzzle:
                     UpdateJumpingPuzzle(sightseeingInZone);
                     break;
+
+                case State.TeleportingHomeAfterCompletion:
+                    UpdateTeleportingHomeAfterCompletion();
+                    break;
+
+                case State.KuganeTowerClimbing:
+                    UpdateKuganeTowerClimbing(sightseeingInZone);
+                    break;
             }
         }
         catch (Exception ex)
@@ -533,7 +549,13 @@ public sealed class SightseeingAutomation
         // fällt stattdessen in den pendingInZone-Zweig unten ("Warte auf Wetter/Uhrzeit..."), bis er
         // von selbst aktiv wird.
         var available = entries.Where(e => e.WorldPosition.HasValue && !Plugin.IsSightseeingOnlyTemporarilyUnavailable(e)).ToList();
-        var candidates = available.Where(e => !skippedIds.Contains(e.Id)).ToList();
+        // Punkte mit einer noch nicht erledigten Kletter-Vorbedingung (siehe Plugin.
+        // SightseeingJumpingPuzzle.PrerequisiteClimbAdventureId, z.B. "The Statue of Zuiko" vor
+        // "Shiokaze Hostelry") bewusst NICHT als Kandidat wählen, solange diese Vorbedingung selbst
+        // noch offen ist - sonst würde ohne eigene Zielkoordinaten oben auf dem Turm (die es für
+        // solche Punkte ggf. noch gar nicht gibt) zur rohen, unerreichbaren Kartenposition gelaufen
+        // (Nutzer-Report), statt wie gewünscht erst die Vorbedingung selbst anzugehen.
+        var candidates = available.Where(e => !skippedIds.Contains(e.Id) && !HasUnmetPrerequisiteClimb(e)).ToList();
         if (candidates.Count == 0)
         {
             // Simulation (Testmodus) läuft wie bisher einmal durch und endet dann.
@@ -615,6 +637,18 @@ public sealed class SightseeingAutomation
 
     private void StartMovingTo(CollectibleEntry entry)
     {
+        // Shiokaze Hostelry/Kugane Tower hat eine eigene, dedizierte Implementierung (siehe
+        // KuganeTowerJump-Klassenkommentar) statt des generischen SightseeingPuzzleStep-Modells -
+        // dessen "RunUp"-Kettenlogik bildet das Timing des Original-Lua-Skripts nicht korrekt nach
+        // (mehrfache Nutzer-Reports: scheiterte wiederholt an frühen Schritten).
+        if (entry.Id == KuganeTowerJump.AdventureId)
+        {
+            currentTargetEntry = entry;
+            Plugin.Instance.KuganeTowerJump.Start();
+            state = State.KuganeTowerClimbing;
+            return;
+        }
+
         var attempts = attemptCounts.GetValueOrDefault(entry.Id, 0) + 1;
         attemptCounts[entry.Id] = attempts;
         if (attempts > MaxAttemptsPerTarget)
@@ -642,6 +676,7 @@ public sealed class SightseeingAutomation
         hasEnsuredExactPosition = false;
         currentLegAllowsFlying = true;
         currentPuzzle = Plugin.TryGetSightseeingJumpingPuzzle(entry.Id, out var puzzle) ? puzzle : null;
+        currentPuzzle = ResolvePuzzleWithPrerequisiteClimb(currentPuzzle);
         puzzleAttempts = 0;
         puzzleStepRetries = 0;
         dismountStuckSince = null;
@@ -664,6 +699,59 @@ public sealed class SightseeingAutomation
         }
 
         BeginNavigateToEntry(entry);
+    }
+
+    // Wie nah an Plugin.SightseeingJumpingPuzzle.PrerequisiteClimbAdventureId's letztem Schritt man
+    // schon stehen muss, um die Kletterei NICHT erneut zu machen (z.B. "The Statue of Zuiko" auf dem
+    // Kugane-Turm, direkt nach "Shiokaze Hostelry" selbst noch oben stehend) - großzügig, da es nur
+    // grob "schon oben" von "nochmal von unten hochklettern" unterscheiden soll.
+    private const float PrerequisiteClimbSkipDistance = 25f;
+
+    /// <summary>
+    /// Ob dieser Punkt eine Kletter-Vorbedingung hat (siehe ResolvePuzzleWithPrerequisiteClimb), die
+    /// selbst noch nicht erledigt ist - für die Kandidatenauswahl in TryStartNext (Nutzeranforderung:
+    /// "Statue of Zuiko" soll NIE vor "Shiokaze Hostelry" selbst gewählt werden, solange dessen
+    /// eigener Freischalt-Status noch offen ist).
+    /// </summary>
+    private bool HasUnmetPrerequisiteClimb(CollectibleEntry entry)
+    {
+        if (!Plugin.TryGetSightseeingJumpingPuzzle(entry.Id, out var puzzle) || puzzle.PrerequisiteClimbAdventureId is not { } prerequisiteId)
+            return false;
+
+        var prerequisiteStub = new CollectibleEntry { Id = prerequisiteId, Type = CollectibleType.Sightseeing };
+        return !Plugin.Instance.IsOwned(prerequisiteStub);
+    }
+
+    /// <summary>
+    /// Manche Sightseeing-Punkte sind nur über die Klettersequenz EINES ANDEREN Punkts erreichbar
+    /// (siehe Plugin.SightseeingJumpingPuzzle.PrerequisiteClimbAdventureId-Kommentar, z.B. "The Statue
+    /// of Zuiko" auf dem Kugane-Turm, erreichbar nur über "Shiokaze Hostelry"s Kletter-Route). Steht
+    /// man nicht schon oben (grobe Entfernung zum letzten Schritt der Vorbedingung), wird deren
+    /// komplette Schritt-Liste VOR die eigene gehängt - der eigentliche Zielpunkt (currentTargetEntry)
+    /// bleibt dabei unverändert der ursprünglich angeforderte, die Vorbedingung selbst gilt NICHT als
+    /// erledigt/gelernt, auch wenn ihre Schritte tatsächlich mit abgelaufen werden (dafür müsste sie
+    /// separat als eigener Automations-Durchlauf gestartet werden).
+    /// </summary>
+    private Plugin.SightseeingJumpingPuzzle? ResolvePuzzleWithPrerequisiteClimb(Plugin.SightseeingJumpingPuzzle? puzzle)
+    {
+        if (puzzle?.PrerequisiteClimbAdventureId is not { } prerequisiteId)
+            return puzzle;
+
+        if (!Plugin.TryGetSightseeingJumpingPuzzle(prerequisiteId, out var prerequisite) || prerequisite.Steps.Length == 0)
+            return puzzle;
+
+        var playerPos = Plugin.ObjectTable.LocalPlayer?.Position;
+        if (playerPos.HasValue && Vector3.Distance(playerPos.Value, prerequisite.Steps[^1].Target) <= PrerequisiteClimbSkipDistance)
+            return puzzle;
+
+        Plugin.Log.Info($"[SightseeingAutomation] {currentTargetEntry?.Name}: nicht schon oben - erst Klettersequenz von Adventure #{prerequisiteId} voranstellen.");
+        return puzzle with
+        {
+            Start = prerequisite.Start,
+            Steps = prerequisite.Steps.Concat(puzzle.Steps).ToArray(),
+            DismountAtStart = prerequisite.DismountAtStart,
+            FallMargin = prerequisite.FallMargin ?? puzzle.FallMargin,
+        };
     }
 
     private void BeginNavigateToEntry(CollectibleEntry entry)
@@ -1201,7 +1289,12 @@ public sealed class SightseeingAutomation
 
         if (!StillNeeded(entries, currentTargetEntry.Id))
         {
-            FinishCurrent();
+            // Nicht direkt FinishCurrent() - sonst würde z.B. PostCompletionTeleportHomeTerritoryIds
+            // (siehe TryWalkOutOrFinish) übersprungen, falls IsOwned schon VOR der eigentlichen
+            // "freigeschaltet"-Erkennung weiter unten wahr wird (Nutzer-Report: teleportierte nach dem
+            // Freischalten in Kugane nicht zum Haupt-Ätheryten - genau dieser Pfad lief statt der
+            // regulären Erkennung).
+            TryWalkOutOrFinish(entries);
             return;
         }
 
@@ -1417,8 +1510,20 @@ public sealed class SightseeingAutomation
     /// wenn danach überhaupt noch ein anderer, aktuell erreichbarer Sightseeing-Punkt übrig ist -
     /// sonst (letzter Punkt der Zone) lohnt sich der Umweg nicht, die Automation stoppt ohnehin gleich.
     /// </summary>
+    // Zonen, in denen nach JEDEM Punkt zum Haupt-Ätheryten teleportiert wird, statt zu Fuß/fliegend
+    // zum nächsten weiterzuziehen (Nutzeranforderung, z.B. Kugane 628 - die Kletter-Punkte dort
+    // enden an völlig unterschiedlichen, oft schwer begehbaren Stellen).
+    private static readonly HashSet<uint> PostCompletionTeleportHomeTerritoryIds = new() { 628 };
+
     private void TryWalkOutOrFinish(IReadOnlyList<CollectibleEntry> entries)
     {
+        if (currentTargetEntry != null
+            && PostCompletionTeleportHomeTerritoryIds.Contains(Plugin.ResolveEffectiveTerritoryId(Plugin.ClientState.TerritoryType)))
+        {
+            TryTeleportHomeAfterCompletion();
+            return;
+        }
+
         if (currentTargetEntry != null
             && Plugin.TryGetSightseeingPostCompletionWaypoints(currentTargetEntry.Id, out var waypoints)
             && waypoints.Count > 0
@@ -1431,6 +1536,119 @@ public sealed class SightseeingAutomation
         }
 
         FinishCurrent();
+    }
+
+    private DateTime? postCompletionTeleportFinishedAt;
+
+    /// <summary>
+    /// Siehe PostCompletionTeleportHomeTerritoryIds - teleportiert zum Haupt-Ätheryten der aktuellen
+    /// Zone, BEVOR der nächste Punkt gewählt wird (TryStartNext läuft erst danach wieder an, siehe
+    /// UpdateTeleportingHomeAfterCompletion). Klappt das nicht (Lifestream fehlt/Ätheryte noch nicht
+    /// freigeschaltet), einfach normal fertigstellen statt den Punkt zu überspringen - der war ja
+    /// schon erfolgreich erledigt.
+    /// </summary>
+    private void TryTeleportHomeAfterCompletion()
+    {
+        if (!IsLifestreamAvailable())
+        {
+            FinishCurrent();
+            return;
+        }
+
+        var territory = Plugin.ResolveEffectiveTerritoryId(Plugin.ClientState.TerritoryType);
+        var mainAetheryteId = Plugin.FindUnlockedMainAetheryteId(territory);
+        if (mainAetheryteId == null || !lifestreamTeleport.InvokeFunc(mainAetheryteId.Value, (byte)0))
+        {
+            FinishCurrent();
+            return;
+        }
+
+        postCompletionTeleportFinishedAt = null;
+        postCompletionTeleportHasSeenLoadingScreen = false;
+        state = State.TeleportingHomeAfterCompletion;
+        stateEnteredAt = DateTime.UtcNow;
+        StatusText = Loc.T("Teleportiere zum Haupt-Ätheryten...", "Teleporting to the main aetheryte...");
+    }
+
+    private bool postCompletionTeleportHasSeenLoadingScreen;
+
+    /// <summary>
+    /// Weder lifestreamIsBusy (meldet "fertig" schon während der Teleport-Besetzungszeit, lange vor
+    /// dem eigentlichen Ladebildschirm) noch ein Zonenwechsel (Kugane hat nur EINE Zonen-ID - der
+    /// Teleport zum eigenen Haupt-Ätheryten bleibt in genau dieser Zone, löst also NIE eine
+    /// Zonen-ID-Änderung aus, siehe Nutzer-Report "geportet, aber danach nix mehr gemacht") sind hier
+    /// zuverlässig. Stattdessen BetweenAreas/-51 (echter Ladebildschirm-Indikator, zonenunabhängig):
+    /// erst warten, bis er mindestens einmal ANGEHT (Besetzungszeit vorbei, Laden beginnt), dann bis
+    /// er wieder AUSGEHT (Laden fertig), erst dann die Settle-Zeit (Nutzeranforderung: "Castzeit und
+    /// Ladeanimation abwarten").
+    /// </summary>
+    private void UpdateTeleportingHomeAfterCompletion()
+    {
+        var loading = Plugin.Condition[ConditionFlag.BetweenAreas] || Plugin.Condition[ConditionFlag.BetweenAreas51];
+        if (loading)
+            postCompletionTeleportHasSeenLoadingScreen = true;
+
+        if (loading || !postCompletionTeleportHasSeenLoadingScreen)
+        {
+            postCompletionTeleportFinishedAt = null;
+            if (DateTime.UtcNow - stateEnteredAt > DistrictTravelTimeout)
+                FinishCurrent();
+            return;
+        }
+
+        postCompletionTeleportFinishedAt ??= DateTime.UtcNow;
+        if (DateTime.UtcNow - postCompletionTeleportFinishedAt.Value < DistrictTravelSettleDelay)
+            return;
+
+        FinishCurrent();
+    }
+
+    /// <summary>
+    /// Siehe StartMovingTo-Kommentar - delegiert Tick für Tick an Plugin.Instance.KuganeTowerJump, bis entweder
+    /// der oberste Punkt erreicht ist (dann Übergabe an die bestehende Vista-Erkennung über
+    /// BeginFinalPrecisePosition/WaitingForUnlock, wie bei jedem anderen Jumping Puzzle) oder die
+    /// Climb-Instanz von selbst inaktiv wird (Abbruch, z.B. nicht in Kugane).
+    /// </summary>
+    private void UpdateKuganeTowerClimbing(IReadOnlyList<CollectibleEntry> entries)
+    {
+        if (currentTargetEntry == null)
+        {
+            state = State.Idle;
+            return;
+        }
+
+        if (!StillNeeded(entries, currentTargetEntry.Id))
+        {
+            Plugin.Instance.KuganeTowerJump.Stop();
+            FinishCurrent();
+            return;
+        }
+
+        var climb = Plugin.Instance.KuganeTowerJump;
+        climb.Update();
+        StatusText = climb.StatusText;
+
+        if (climb.ReachedTop)
+        {
+            // Minimaler Platzhalter-Puzzle-Datensatz nur für die Wiederverwendung von
+            // BeginFinalPrecisePosition/FinalPrecisePosition/RestartPuzzleFromStart (die alle
+            // currentPuzzle lesen) - KuganeTowerJump führt selbst keinen Plugin.SightseeingJumpingPuzzle.
+            var finalTarget = KuganeTowerJump.FinalPosition;
+            currentPuzzle = new Plugin.SightseeingJumpingPuzzle(
+                finalTarget,
+                new[] { new Plugin.SightseeingPuzzleStep(finalTarget, Jump: false, Exact: true) });
+            state = State.JumpingPuzzle;
+            BeginFinalPrecisePosition(finalTarget);
+            return;
+        }
+
+        if (!climb.IsActive && climb.PendingFallDecision == null)
+        {
+            skippedIds.Add(currentTargetEntry.Id);
+            lastSkipReason = Loc.T("Kugane-Turm-Puzzle abgebrochen", "Kugane Tower puzzle aborted");
+            currentTargetEntry = null;
+            state = State.Idle;
+        }
     }
 
     private void BeginWalkOutLeg()
@@ -1448,6 +1666,7 @@ public sealed class SightseeingAutomation
         state = State.WalkingOut;
         stateEnteredAt = DateTime.UtcNow;
         hasSeenPathRunning = false;
+        walkOutJumpSent = !waypoint.Jump;
         stuckDetector.Reset();
         lastPathRetryAt = DateTime.MinValue;
         StatusText = Loc.T(
@@ -1504,6 +1723,14 @@ public sealed class SightseeingAutomation
         if (pathIsRunning.InvokeFunc())
         {
             hasSeenPathRunning = true;
+
+            // Siehe SightseeingApproachWaypoint.Jump-Kommentar - kurz nach Losgehen abspringen, falls
+            // dieser Zwischenstopp selbst eine Lücke überspringen muss (z.B. Kogane Dori -> nächster Punkt).
+            if (!walkOutJumpSent && DateTime.UtcNow - stateEnteredAt >= PuzzleJumpDelay)
+            {
+                walkOutJumpSent = true;
+                Plugin.TryJump();
+            }
 
             var playerPos = Plugin.ObjectTable.LocalPlayer?.Position ?? currentTargetPosition;
 
@@ -1605,6 +1832,17 @@ public sealed class SightseeingAutomation
         FlyingStepMounting,
         FlyingStepMoving,
         FlyingStepDismounting,
+
+        // Siehe RestartPuzzleFromStart-Kommentar: nach einem Absturz bei einem DismountAtStart-Puzzle
+        // erst wieder aufmounten (ein Absturz mountet i.d.R. selbst ab), bevor zurück zum in der Luft
+        // liegenden Startpunkt geflogen werden kann.
+        RemountingAfterFall,
+
+        // Siehe BeginJumpingPuzzle-Kommentar (Schritt 1 = Flug-Schritt): zum Startpunkt fliegen, ohne
+        // dort abzusteigen - FlyingToStartMounting wartet nur auf das Aufsteigen (falls man den
+        // Startpunkt zu Fuß erreicht hat), FlyingToStartKeepMounted auf die Ankunft selbst.
+        FlyingToStartMounting,
+        FlyingToStartKeepMounted,
     }
 
     private const float PuzzleFlyToStartTolerance = 0.1f;
@@ -1725,23 +1963,67 @@ public sealed class SightseeingAutomation
         state = State.JumpingPuzzle;
         stateEnteredAt = DateTime.UtcNow;
 
-        // Startpunkt in der Luft: erst beritten genau hinfliegen, dort absteigen.
-        if (currentPuzzle?.DismountAtStart == true && Plugin.Condition[ConditionFlag.Mounted])
+        // Schritt 1 ist selbst ein Flug-Schritt (SightseeingPuzzleStep.Fly, z.B. "Halo"): zum
+        // Startpunkt NICHT absteigen (es geht ja sofort beritten weiter), sondern beritten bleiben -
+        // ggf. erst aufsteigen, falls man den Startpunkt zu Fuß erreicht hat (Nutzer-Report: landete
+        // am Startpunkt und mountete dort fälschlich ab, statt direkt zu den Flug-Punkten zu fliegen).
+        if (currentPuzzle!.Steps.Length > 0 && currentPuzzle.Steps[0].Fly)
         {
-            SetExactPathTolerance(true);
-            // Fliegend, wo möglich - sonst beritten am Boden (dort genauso erst am Startpunkt absteigen).
-            var accepted = Plugin.CanFly && pathfindAndMoveCloseTo.InvokeFunc(currentPuzzle.Start, true, PuzzleFlyToStartTolerance);
-            if (!accepted)
-                accepted = pathfindAndMoveCloseTo.InvokeFunc(currentPuzzle.Start, false, PuzzleFlyToStartTolerance);
-            if (!accepted)
-                moveToPath.InvokeAction(new List<Vector3> { currentPuzzle.Start }, Plugin.CanFly);
-            SetPuzzlePhase(PuzzlePhase.FlyingToStart);
-            StatusText = Loc.T($"Fliege genau zum Startpunkt: {currentTargetEntry?.Name}...", $"Flying precisely to the start point: {currentTargetEntry?.Name}...");
+            if (!Plugin.Condition[ConditionFlag.Mounted])
+            {
+                Plugin.TryRequestAetheryteMount();
+                pendingStartArrivalKeepsMounted = true;
+                SetPuzzlePhase(PuzzlePhase.FlyingToStartMounting);
+                StatusText = Loc.T($"Steige auf, dann zum Startpunkt: {currentTargetEntry?.Name}...", $"Mounting up, then to the start point: {currentTargetEntry?.Name}...");
+                return;
+            }
+
+            BeginFlyToPuzzleStartKeepMounted();
+            return;
+        }
+
+        // Der Startpunkt muss immer exakt angelaufen werden, egal ob gerade beritten/fliegend oder zu
+        // Fuß (Nutzervorgabe) - KEIN Warten auf ein Mount mehr (das brach z.B. in Kugane, wo man gar
+        // nicht aufmounten kann, oder löste unnötig oft den Rückflug-zum-Start-Text aus). Der
+        // Fallback in BeginFlyToPuzzleStartThenDismount wählt selbst fliegend/beritten/zu Fuß, je
+        // danach, was aktuell überhaupt möglich ist.
+        if (currentPuzzle.DismountAtStart)
+        {
+            BeginFlyToPuzzleStartThenDismount();
             return;
         }
 
         SetPuzzlePhase(PuzzlePhase.Dismounting);
         StatusText = Loc.T($"Jumping Puzzle: {currentTargetEntry?.Name}...", $"Jumping puzzle: {currentTargetEntry?.Name}...");
+    }
+
+    /// <summary>Siehe BeginJumpingPuzzle (Schritt 1 = Flug-Schritt) - fliegt beritten genau zum Startpunkt, OHNE dort abzusteigen.</summary>
+    private void BeginFlyToPuzzleStartKeepMounted()
+    {
+        var start = currentPuzzle!.Start;
+        SetExactPathTolerance(true);
+        var accepted = Plugin.CanFly && pathfindAndMoveCloseTo.InvokeFunc(start, true, PuzzleFlyToStartTolerance);
+        if (!accepted)
+            accepted = pathfindAndMoveCloseTo.InvokeFunc(start, false, PuzzleFlyToStartTolerance);
+        if (!accepted)
+            moveToPath.InvokeAction(new List<Vector3> { start }, Plugin.CanFly);
+        SetPuzzlePhase(PuzzlePhase.FlyingToStartKeepMounted);
+        StatusText = Loc.T($"Fliege zum Startpunkt: {currentTargetEntry?.Name}...", $"Flying to the start point: {currentTargetEntry?.Name}...");
+    }
+
+    /// <summary>Siehe BeginJumpingPuzzle (DismountAtStart) - fliegt beritten genau zum Startpunkt, um dort abzusteigen (PuzzlePhase.FlyingToStart).</summary>
+    private void BeginFlyToPuzzleStartThenDismount()
+    {
+        var start = currentPuzzle!.Start;
+        SetExactPathTolerance(true);
+        // Fliegend, wo möglich - sonst beritten am Boden (dort genauso erst am Startpunkt absteigen).
+        var accepted = Plugin.CanFly && pathfindAndMoveCloseTo.InvokeFunc(start, true, PuzzleFlyToStartTolerance);
+        if (!accepted)
+            accepted = pathfindAndMoveCloseTo.InvokeFunc(start, false, PuzzleFlyToStartTolerance);
+        if (!accepted)
+            moveToPath.InvokeAction(new List<Vector3> { start }, Plugin.CanFly);
+        SetPuzzlePhase(PuzzlePhase.FlyingToStart);
+        StatusText = Loc.T($"Fliege genau zum Startpunkt: {currentTargetEntry?.Name}...", $"Flying precisely to the start point: {currentTargetEntry?.Name}...");
     }
 
     private void SetPuzzlePhase(PuzzlePhase phase)
@@ -1834,6 +2116,33 @@ public sealed class SightseeingAutomation
                 SetPuzzlePhase(PuzzlePhase.Dismounting);
                 return;
 
+            case PuzzlePhase.FlyingToStartMounting:
+                if (Plugin.Condition[ConditionFlag.Mounted])
+                {
+                    if (pendingStartArrivalKeepsMounted)
+                        BeginFlyToPuzzleStartKeepMounted();
+                    else
+                        BeginFlyToPuzzleStartThenDismount();
+                    return;
+                }
+
+                if (sinceStart > MountWaitTimeout)
+                    FailPuzzleAttempt("Konnte zum Startpunkt nicht aufsteigen");
+                return;
+
+            case PuzzlePhase.FlyingToStartKeepMounted:
+                if (Plugin.IsVnavPathfindInProgress() || pathIsRunning.InvokeFunc() || sinceStart < TimeSpan.FromSeconds(0.5))
+                {
+                    if (sinceStart < PuzzleGoToStartTimeout)
+                        return;
+                    StopPath();
+                }
+
+                // Am Startpunkt angekommen - weiterhin beritten, direkt in Schritt 1 (Flug) übergehen.
+                RestorePathTolerance();
+                BeginPuzzleStep(0);
+                return;
+
             case PuzzlePhase.FlyingStepMounting:
             {
                 var step = currentPuzzle.Steps[puzzleStepIndex];
@@ -1858,11 +2167,26 @@ public sealed class SightseeingAutomation
                 return;
             }
 
+            case PuzzlePhase.RemountingAfterFall:
+                if (Plugin.Condition[ConditionFlag.Mounted])
+                {
+                    BeginJumpingPuzzle();
+                    return;
+                }
+
+                if (sinceStart > MountWaitTimeout)
+                    SkipCurrent(Loc.T("Konnte nach dem Absturz nicht wieder aufsteigen", "Could not mount up again after falling"));
+                return;
+
             case PuzzlePhase.FlyingStepMoving:
             {
+                // PuzzleGoToStartTimeout (60s) statt des deutlich kürzeren PuzzleStepTimeout (8s, für
+                // normale Lauf-Schritte gedacht) - Flug-Schritte können (z.B. "Halo") mehrere hundert
+                // Einheiten weit über die ganze Zone gehen und brauchen entsprechend länger (Nutzer-
+                // Report: brach mitten im Flug ab und startete das Puzzle von vorne).
                 if (Plugin.IsVnavPathfindInProgress() || pathIsRunning.InvokeFunc() || sinceStart < TimeSpan.FromSeconds(0.5))
                 {
-                    if (sinceStart < PuzzleStepTimeout)
+                    if (sinceStart < PuzzleGoToStartTimeout)
                         return;
                     StopPath();
                 }
@@ -1871,6 +2195,29 @@ public sealed class SightseeingAutomation
                 if (!IsAtPuzzlePoint(playerPos, step.Target))
                 {
                     FailPuzzleAttempt($"Schritt {puzzleStepIndex + 1} (Flug) nicht erreicht");
+                    return;
+                }
+
+                // Folgt noch ein weiterer Flug-Schritt: direkt (weiterhin geritten) zu dessen Ziel
+                // weiterfliegen statt hier erst abzumounten (Nutzer-Report: das Abmounten mitten über
+                // einem Abgrund/vor einer Brücke ließ den Charakter dort herunterfallen, bevor der
+                // nächste Flug-Schritt überhaupt beginnen konnte).
+                if (puzzleStepIndex + 1 < currentPuzzle.Steps.Length && currentPuzzle.Steps[puzzleStepIndex + 1].Fly)
+                {
+                    puzzleStepFromY = playerPos.Y;
+                    puzzleStepIndex++;
+                    var nextStep = currentPuzzle.Steps[puzzleStepIndex];
+                    var nextTolerance = nextStep.Exact ? PuzzleFinalPreciseTolerance : PuzzleFlyToStartTolerance;
+                    var nextAccepted = Plugin.CanFly && pathfindAndMoveCloseTo.InvokeFunc(nextStep.Target, true, nextTolerance);
+                    if (!nextAccepted)
+                        nextAccepted = pathfindAndMoveCloseTo.InvokeFunc(nextStep.Target, false, nextTolerance);
+                    if (!nextAccepted)
+                        moveToPath.InvokeAction(new List<Vector3> { nextStep.Target }, Plugin.CanFly);
+
+                    SetPuzzlePhase(PuzzlePhase.FlyingStepMoving);
+                    StatusText = Loc.T(
+                        $"Jumping Puzzle: fliege zu Schritt {puzzleStepIndex + 1}/{currentPuzzle.Steps.Length}...",
+                        $"Jumping puzzle: flying to step {puzzleStepIndex + 1}/{currentPuzzle.Steps.Length}...");
                     return;
                 }
 
@@ -2068,7 +2415,7 @@ public sealed class SightseeingAutomation
                 }
 
                 // Heruntergefallen - von vorne.
-                if (playerPos.Y < MathF.Min(puzzleStepFromY, step.Target.Y) - PuzzleFallMargin)
+                if (playerPos.Y < MathF.Min(puzzleStepFromY, step.Target.Y) - (currentPuzzle.FallMargin ?? PuzzleFallMargin))
                 {
                     FailPuzzleAttempt($"Absturz bei Schritt {puzzleStepIndex + 1}");
                     return;
@@ -2133,7 +2480,7 @@ public sealed class SightseeingAutomation
                 }
 
                 // Abgestürzt (vom kleinen Plateau gerutscht) - Puzzle neu.
-                if (playerPos.Y < target.Y - PuzzleFallMargin)
+                if (playerPos.Y < target.Y - (currentPuzzle.FallMargin ?? PuzzleFallMargin))
                 {
                     RestorePathTolerance();
                     RestartPuzzleFromStart();
@@ -2180,7 +2527,16 @@ public sealed class SightseeingAutomation
             return;
 
         var from = CurrentStepFromPoint();
-        var stillOnPlatform = playerPos.Y >= from.Y - PuzzleStepRetryHeightMargin
+
+        // "from" ist nur zu Fuß erreichbar, wenn der Schritt davor selbst kein Sprung war - sonst
+        // (Nutzer-Report: "läuft gegen einen Pfosten statt neu zu versuchen") steht "from" auf einem
+        // nur per Sprung erreichbaren Pfosten/Vorsprung, zu dem der rein bodengebundene Rückweg unten
+        // (moveToPath, kein Fliegen/Springen) prinzipiell nie ankommen kann - dann sofort ganz von
+        // vorne statt endlos gegen dessen Sockel zu laufen.
+        var fromRequiresJumpToReach = puzzleStepIndex > 0 && currentPuzzle!.Steps[puzzleStepIndex - 1].Jump;
+
+        var stillOnPlatform = !fromRequiresJumpToReach
+                              && playerPos.Y >= from.Y - PuzzleStepRetryHeightMargin
                               && Vector2.Distance(new Vector2(playerPos.X, playerPos.Z), new Vector2(from.X, from.Z)) <= PuzzleStepRetryRadius;
         if (stillOnPlatform && puzzleStepRetries < MaxPuzzleStepRetries)
         {
@@ -2243,6 +2599,36 @@ public sealed class SightseeingAutomation
         if (puzzleAttempts >= MaxPuzzleAttempts)
         {
             SkipCurrent(Loc.T("Jumping Puzzle zu oft fehlgeschlagen", "Jumping puzzle failed too often"));
+            return;
+        }
+
+        // Startpunkt in der Luft (DismountAtStart): nach einem Absturz (Nutzer-Report) erst wieder
+        // GENAU dorthin zurück statt einfach von der Absturzstelle aus weiterzumachen - sonst würde
+        // z.B. direkt von unten am Boden aus zum Sightseeing-Punkt gelaufen, ohne den eigentlich
+        // nötigen Anflug. BeginJumpingPuzzle wählt dafür selbst fliegend/beritten/zu Fuß, je nachdem,
+        // was gerade möglich ist - kein Warten auf ein Mount mehr (Nutzervorgabe: Startpunkt immer
+        // exakt, unabhängig vom Fortbewegungsmittel).
+        if (currentPuzzle!.DismountAtStart)
+        {
+            BeginJumpingPuzzle();
+            return;
+        }
+
+        // Schritt 1 ist selbst ein Flug-Schritt (siehe BeginJumpingPuzzle) - das braucht tatsächlich
+        // ein Mount, dafür ggf. erst wieder aufsteigen (ein Absturz mountet i.d.R. selbst ab).
+        if (currentPuzzle.Steps.Length > 0 && currentPuzzle.Steps[0].Fly)
+        {
+            if (!Plugin.Condition[ConditionFlag.Mounted])
+            {
+                Plugin.TryRequestAetheryteMount();
+                SetPuzzlePhase(PuzzlePhase.RemountingAfterFall);
+                StatusText = Loc.T(
+                    "Jumping Puzzle: steige nach dem Absturz wieder auf, dann zurück zum Startpunkt...",
+                    "Jumping puzzle: mounting up again after falling, then back to the start point...");
+                return;
+            }
+
+            BeginJumpingPuzzle();
             return;
         }
 

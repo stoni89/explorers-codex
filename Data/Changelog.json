@@ -1,5 +1,21 @@
 [
   {
+    "version": "2.3.0",
+    "date": "2026-10-08",
+    "title": "Order & Collapsible Menu",
+    "title_de": "Reihenfolge & einklappbares Menü",
+    "changes": [
+      { "type": "new", "text": "Added the Order page to rearrange the overlay's categories.", "text_de": "Order-Seite hinzugefügt, um die Kategorien des Overlays umzusortieren." },
+      { "type": "new", "text": "The menu can now be collapsed into a small bar.", "text_de": "Das Menü kann jetzt zu einer kleinen Leiste eingeklappt werden." },
+      { "type": "improved", "text": "Added and started the Fall Guys collaboration event.", "text_de": "Fall-Guys-Event hinzugefügt und gestartet." },
+      { "type": "improved", "text": "Opacity now also fades the filter and auto buttons.", "text_de": "Die Deckkraft betrifft jetzt auch die Filter- und Auto-Knöpfe." },
+      { "type": "fixed", "text": "Adjusted all Heavensward sightseeing spots.", "text_de": "Alle Heavensward-Sightseeing-Punkte angepasst." },
+      { "type": "fixed", "text": "Disabled the Chocobo Companion in cities.", "text_de": "Chocobo-Begleiter in Städten deaktiviert." },
+      { "type": "fixed", "text": "Merged the zone automation logic.", "text_de": "Zonen-Automatik-Logik zusammengeführt." },
+      { "type": "fixed", "text": "Quests were being hidden due to a bug.", "text_de": "Quests wurden aufgrund eines Bugs ausgeblendet." }
+    ]
+  },
+  {
     "version": "2.1.0",
     "date": "2026-10-06",
     "title": "Log & Changelog",

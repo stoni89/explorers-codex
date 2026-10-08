@@ -39,6 +39,7 @@ public class CodexMenuWindow : Window
     {
         General,
         Overlay,
+        Order,
         Database,
         Blacklist,
         Statistics,
@@ -56,10 +57,18 @@ public class CodexMenuWindow : Window
     // statt nur beim ersten Start übernommen.
     private const ImGuiWindowFlags BaseFlags = ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoResize;
 
+    private static readonly Vector2 ExpandedWindowSize = new(1247f, 850f);
+
+    // Eingeklappt/ausgeklappt (Nutzeranforderung: eigene Einklappen/Schließen-Knöpfe statt der
+    // nativen ImGui-Titelleiste, siehe PluginUiKit.UiWindowControls) - aus der Configuration
+    // vorbelegt, damit der Zustand einen Neustart übersteht (siehe PreDraw für die Fenstergröße,
+    // DrawInner/DrawCollapsedInner für die jeweilige Darstellung).
+    private bool collapsed;
+
     public CodexMenuWindow(Plugin plugin) : base("##CodexNewDesignMenu", BaseFlags)
     {
         this.plugin = plugin;
-        Size = new Vector2(1247f, 850f);
+        collapsed = plugin.Configuration.MenuWindowCollapsed;
         SizeCondition = ImGuiCond.Always;
     }
 
@@ -96,6 +105,13 @@ public class CodexMenuWindow : Window
             Position = null;
         }
 
+        // Eingeklappt (Abschnitt 3 der Nutzeranforderung): Fenster schrumpft auf die Mini-Leiste,
+        // Position oben links bleibt unverändert - dasselbe ImGuiCond.Always-Prinzip wie oben bei
+        // Position, nur für Size (Dalamuds Window-Basisklasse liest beides erst NACH PreDraw()).
+        Size = collapsed
+            ? new Vector2(PluginUiKit.UiWindowControls.CollapsedWidth, PluginUiKit.UiWindowControls.CollapsedHeight)
+            : ExpandedWindowSize;
+
         CodexTheme.PushStyle();
         ImGui.PushStyleColor(ImGuiCol.WindowBg, CodexTheme.BgWindow);
         ImGui.PushStyleColor(ImGuiCol.Border, CodexTheme.LineControl);
@@ -123,7 +139,10 @@ public class CodexMenuWindow : Window
         Loc.MenuLanguageOverride = config.MenuLanguage == MenuLanguage.German;
         try
         {
-            DrawInner();
+            if (collapsed)
+                DrawCollapsedInner();
+            else
+                DrawInner();
         }
         finally
         {
@@ -137,7 +156,7 @@ public class CodexMenuWindow : Window
 
         DrawSidebar(scale);
         ImGui.SameLine(0f, 0f);
-        DrawContent(scale);
+        var controls = DrawContent(scale);
 
         // Nutzervorgabe: dünne Trennlinie zwischen Seitenleiste und Inhaltsbereich (bisher nur über
         // den Hintergrundfarbunterschied BgSidebar/BgWindow erkennbar, keine echte Linie) - auf dem
@@ -150,15 +169,123 @@ public class CodexMenuWindow : Window
             new Vector2(sidebarLineX, windowPos.Y + ImGui.GetWindowSize().Y),
             ImGui.GetColorU32(CodexTheme.LineCard));
 
-        CodexTheme.DrawCornerOrnaments(
-            CodexTheme.CornerLenMenu * scale,
-            CodexTheme.CornerThickMenu * scale,
-            CodexTheme.CornerInsetMenu * scale);
+        CodexTheme.DrawMenuCornerOrnaments(CodexTheme.CornerInsetMenu * scale);
 
-        // Nutzeranforderung: Position persistieren, damit das Fenster beim nächsten Öffnen wieder
-        // dort erscheint, statt sich nur auf die eigene dalamudUI.ini zu verlassen (kein config.Save()
-        // bei jedem Frame während des Ziehens - dasselbe "database is locked"-Problem wie beim
-        // Deckkraft-Regler, siehe dortigen Kommentar).
+        if (controls.ToggleCollapse)
+        {
+            collapsed = true;
+            plugin.Configuration.MenuWindowCollapsed = true;
+            plugin.Configuration.Save();
+        }
+        if (controls.Close)
+            IsOpen = false;
+
+        PersistWindowPosition(windowPos);
+    }
+
+    /// <summary>Eingeklappter Zustand (Abschnitt 3 der Nutzeranforderung) - Mini-Leiste statt Seitenleiste/
+    /// Inhalt: Hintergrund/Eckverzierungen, Logo+Seitenname links, Ausklappen/Schließen rechts. Klick aufs
+    /// Logo ODER Doppelklick auf die freie Fläche klappt aus, Ziehen auf der freien Fläche verschiebt das
+    /// Fenster (siehe PluginUiKit.UiWindowControls.DrawDragArea).</summary>
+    private void DrawCollapsedInner()
+    {
+        var scale = ImGuiHelpers.GlobalScale;
+        var config = plugin.Configuration;
+        var windowPos = ImGui.GetWindowPos();
+        var windowSize = ImGui.GetWindowSize();
+
+        CodexTheme.DrawCollapsedMenuChrome(scale, CodexTheme.CornerInsetMenu * scale);
+
+        var centerY = windowPos.Y + windowSize.Y / 2f;
+        var rightEdge = windowPos.X + windowSize.X - 18f * scale;
+
+        var controls = PluginUiKit.UiWindowControls.DrawCollapsedButtons(scale, rightEdge, centerY,
+            expandTooltip: Loc.T("Ausklappen", "Expand"), closeTooltip: Loc.T("Schließen", "Close"));
+
+        var brandAreaMin = windowPos + new Vector2(18f * scale, 0f);
+        var brandClicked = DrawCollapsedBrandAndLabel(scale, brandAreaMin, windowSize.Y, out var brandAreaMaxX);
+
+        var dragAreaMin = new Vector2(brandAreaMaxX, windowPos.Y);
+        var dragAreaMax = new Vector2(rightEdge - PluginUiKit.UiWindowControls.IconButtonSize * scale * 2f - 20f * scale, windowPos.Y + windowSize.Y);
+        var dragDoubleClicked = PluginUiKit.UiWindowControls.DrawDragArea("##CodexMenuCollapsedDrag", dragAreaMin, dragAreaMax);
+
+        if (controls.ToggleCollapse || brandClicked || dragDoubleClicked)
+        {
+            collapsed = false;
+            config.MenuWindowCollapsed = false;
+            config.Save();
+        }
+        if (controls.Close)
+            IsOpen = false;
+
+        PersistWindowPosition(windowPos);
+    }
+
+    /// <summary>Logo (Kompass, 36px) + "THE EXPLORER'S"/"Codex" + " · {Seitenname}" der Mini-Leiste - klickbar
+    /// (gibt true bei Klick zurück), vertikal mittig über "barHeight". "brandAreaMaxX" (out) ist die
+    /// Bildschirm-X direkt hinter dem gezeichneten Inhalt, für die freie Zieh-/Doppelklickfläche danach.</summary>
+    private bool DrawCollapsedBrandAndLabel(float scale, Vector2 areaMin, float barHeight, out float brandAreaMaxX)
+    {
+        var iconSize = 36f * scale;
+        var iconCursor = new Vector2(areaMin.X, areaMin.Y + (barHeight - iconSize) / 2f);
+        ImGui.SetCursorScreenPos(iconCursor);
+        CodexTheme.DrawCompassIcon(iconSize);
+
+        var drawList = ImGui.GetWindowDrawList();
+        var textX = iconCursor.X + iconSize + 10f * scale;
+
+        float smallHeight, largeHeight;
+        using (CodexTheme.FontCollapsedBrandSmall.Push())
+            smallHeight = ImGui.GetFontSize();
+        using (CodexTheme.FontCollapsedBrandLarge.Push())
+            largeHeight = ImGui.GetFontSize();
+
+        var startY = iconCursor.Y + (iconSize - (smallHeight + largeHeight)) / 2f;
+
+        using (CodexTheme.FontCollapsedBrandSmall.Push())
+            drawList.AddText(new Vector2(textX, startY), ImGui.GetColorU32(CodexTheme.TextSecondary), "THE EXPLORER'S");
+
+        var codexText = Loc.T("Codex", "Codex");
+        var codexY = startY + smallHeight;
+        float codexWidth;
+        using (CodexTheme.FontCollapsedBrandLarge.Push())
+        {
+            codexWidth = ImGui.CalcTextSize(codexText).X;
+            drawList.AddText(new Vector2(textX, codexY), ImGui.GetColorU32(CodexTheme.TextHeading), codexText);
+        }
+
+        var pageLabel = " · " + GetPageHeader(activePage).Title;
+        float pageLabelWidth, pageLabelHeight;
+        using (CodexTheme.FontCollapsedPageLabel.Push())
+        {
+            var size = ImGui.CalcTextSize(pageLabel);
+            pageLabelWidth = size.X;
+            pageLabelHeight = size.Y;
+        }
+        var pageLabelX = textX + codexWidth;
+        var pageLabelY = codexY + (largeHeight - pageLabelHeight) / 2f;
+        using (CodexTheme.FontCollapsedPageLabel.Push())
+            drawList.AddText(new Vector2(pageLabelX, pageLabelY), ImGui.GetColorU32(CodexTheme.TextMuted), pageLabel);
+
+        brandAreaMaxX = pageLabelX + pageLabelWidth + 14f * scale;
+
+        var clickAreaMax = new Vector2(brandAreaMaxX, areaMin.Y + barHeight);
+        ImGui.SetCursorScreenPos(areaMin);
+        var clicked = ImGui.InvisibleButton("##CodexMenuCollapsedBrand", clickAreaMax - areaMin);
+        if (ImGui.IsItemHovered())
+            ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
+
+        return clicked;
+    }
+
+    /// <summary>Nutzeranforderung: Fensterposition persistieren, damit das Fenster beim nächsten Öffnen
+    /// wieder dort erscheint, statt sich nur auf die eigene dalamudUI.ini zu verlassen (kein config.Save()
+    /// bei jedem Frame während des Ziehens - dasselbe "database is locked"-Problem wie beim
+    /// Deckkraft-Regler, siehe dortigen Kommentar). Von DrawInner UND DrawCollapsedInner genutzt, da die
+    /// Fensterposition in beiden Zuständen gleich funktioniert (bei Letzterem per Freiflächen-Ziehen
+    /// statt der nativen Titelleiste, siehe PluginUiKit.UiWindowControls.DrawDragArea).</summary>
+    private void PersistWindowPosition(Vector2 windowPos)
+    {
         var config = plugin.Configuration;
         if (config.MenuWindowPosition is not { } savedPos || Vector2.DistanceSquared(savedPos, windowPos) > 0.25f)
         {
@@ -190,6 +317,7 @@ public class CodexMenuWindow : Window
 
         DrawNavItem(scale, MenuPage.General, FontAwesomeIcon.ArrowsAltH, Loc.T("Allgemein", "General"));
         DrawNavItem(scale, MenuPage.Overlay, FontAwesomeIcon.Desktop, Loc.T("Overlay", "Overlay"));
+        DrawNavItem(scale, MenuPage.Order, FontAwesomeIcon.SortAmountDown, Loc.T("Reihenfolge", "Order"));
 
         ImGui.Dummy(new Vector2(0f, 18f * scale));
         CodexTheme.SectionLabel(Loc.T("ARCHIV", "ARCHIVE"));
@@ -215,8 +343,6 @@ public class CodexMenuWindow : Window
         DrawNavItem(scale, MenuPage.Changelog, FontAwesomeIcon.FileAlt, Loc.T("Änderungen", "Changelog"),
             showNewBadge: ChangelogService.HasUnseenChangelog(plugin.Configuration));
         DrawNavItem(scale, MenuPage.About, FontAwesomeIcon.InfoCircle, Loc.T("Über", "About"));
-
-        DrawSidebarCloseButton(scale);
 
         ImGui.Unindent(18f * scale);
         ImGui.EndChild();
@@ -350,8 +476,27 @@ public class CodexMenuWindow : Window
             drawList.AddText(new Vector2(badgeCursor.X + padding.X + diamondSize + diamondGap, badgeCursor.Y + padding.Y), ImGui.GetColorU32(CodexTheme.TextOnAccent), label);
     }
 
-    /// <summary>Abschnitt 6 - Inhaltsbereich: bisher nur der Seitenkopf (Titel + Untertitel + Trenn-Ornament) für "General", noch ohne eigentliche Einstellungen.</summary>
-    private void DrawContent(float scale)
+    /// <summary>Titel+Untertitel des gemeinsamen Seitenkopfs (siehe DrawContent) - je MenuPage, ohne About
+    /// (die hat keinen gemeinsamen Seitenkopf). Auch von der eingeklappten Mini-Leiste genutzt (nur der
+    /// Titel, siehe DrawCollapsedBrandAndLabel), damit der Seitenname dort nicht separat gepflegt werden muss.</summary>
+    private static (string Title, string Subtitle) GetPageHeader(MenuPage page) => page switch
+    {
+        MenuPage.Overlay => (Loc.T("Overlay", "Overlay"), Loc.T("Passe das Overlay Fenster nach deinen Wünschen an.", "Adjust the overlay window to your liking.")),
+        MenuPage.Order => (Loc.T("Reihenfolge", "Order"), Loc.T("Lege fest, in welcher Reihenfolge das Overlay die Kategorien zeigt.", "Arrange the categories in the order the overlay lists them.")),
+        MenuPage.Database => (Loc.T("Datenbank", "Database"), Loc.T("Alle Sammelobjekte, die das Plugin in irgendeiner Zone oder einem Dungeon anzeigen würde - mit deinem Status.", "All collectibles this plugin would show in some zone or dungeon - with your status.")),
+        MenuPage.Blacklist => (Loc.T("Blacklist", "Blacklist"), Loc.T("Ausgeblendete Einträge erscheinen nie im Overlay und werden von keiner Automation angelaufen.", "Hidden entries never show up in the overlay and are skipped by every automation.")),
+        MenuPage.Statistics => (Loc.T("Statistik", "Statistics"), Loc.T("Zählt nur, was der Codex selbst verfolgt – dieselben Kategorien wie im Overlay.", "Counts only what the Codex itself tracks – the same categories you see in the overlay.")),
+        MenuPage.Plugins => (Loc.T("Plugins", "Plugins"), Loc.T("Begleit-Plugins, auf die sich der Codex für Automationen stützt.", "Companion plugins the Codex relies on for automation.")),
+        MenuPage.Debug => (Loc.T("Debug", "Debug"), Loc.T("Nur relevant, wenn im Overlay etwas nicht wie erwartet angezeigt wird.", "Only relevant if something in the overlay doesn't show as expected.")),
+        MenuPage.Log => (Loc.T("Log", "Log"), Loc.T("Die eigenen Log-Zeilen dieses Plugins – durchsuchbar und nach Level filterbar, ohne /xllog zu öffnen.", "This plugin's own log lines – searchable and filterable by level, without opening /xllog.")),
+        MenuPage.Changelog => (Loc.T("Änderungsprotokoll", "Changelog"), Loc.T("Was sich im Codex geändert hat – neueste Einträge zuerst.", "What changed in the Codex – newest entries first.")),
+        MenuPage.About => (Loc.T("Über", "About"), string.Empty),
+        _ => (Loc.T("Allgemein", "General"), Loc.T("Grundeinstellungen des Plugins.", "Basic plugin settings.")),
+    };
+
+    /// <summary>Abschnitt 6 - Inhaltsbereich: bisher nur der Seitenkopf (Titel + Untertitel + Trenn-Ornament) für "General", noch ohne eigentliche Einstellungen.
+    /// Gibt zurück, ob gerade auf die zentral gezeichneten Einklappen/Schließen-Knöpfe geklickt wurde (siehe deren Kommentar weiter unten).</summary>
+    private PluginUiKit.UiWindowControls.ButtonsResult DrawContent(float scale)
     {
         ImGui.BeginChild("##CodexMenuContent", Vector2.Zero, false);
         ImGui.Indent(32f * scale);
@@ -363,18 +508,7 @@ public class CodexMenuWindow : Window
         // übersprungen.
         if (activePage != MenuPage.About)
         {
-            var (pageTitle, pageSubtitle) = activePage switch
-            {
-                MenuPage.Overlay => (Loc.T("Overlay", "Overlay"), Loc.T("Passe das Overlay Fenster nach deinen Wünschen an.", "Adjust the overlay window to your liking.")),
-                MenuPage.Database => (Loc.T("Datenbank", "Database"), Loc.T("Alle Sammelobjekte, die das Plugin in irgendeiner Zone oder einem Dungeon anzeigen würde - mit deinem Status.", "All collectibles this plugin would show in some zone or dungeon - with your status.")),
-                MenuPage.Blacklist => (Loc.T("Blacklist", "Blacklist"), Loc.T("Ausgeblendete Einträge erscheinen nie im Overlay und werden von keiner Automation angelaufen.", "Hidden entries never show up in the overlay and are skipped by every automation.")),
-                MenuPage.Statistics => (Loc.T("Statistik", "Statistics"), Loc.T("Zählt nur, was der Codex selbst verfolgt – dieselben Kategorien wie im Overlay.", "Counts only what the Codex itself tracks – the same categories you see in the overlay.")),
-                MenuPage.Plugins => (Loc.T("Plugins", "Plugins"), Loc.T("Begleit-Plugins, auf die sich der Codex für Automationen stützt.", "Companion plugins the Codex relies on for automation.")),
-                MenuPage.Debug => (Loc.T("Debug", "Debug"), Loc.T("Nur relevant, wenn im Overlay etwas nicht wie erwartet angezeigt wird.", "Only relevant if something in the overlay doesn't show as expected.")),
-                MenuPage.Log => (Loc.T("Log", "Log"), Loc.T("Die eigenen Log-Zeilen dieses Plugins – durchsuchbar und nach Level filterbar, ohne /xllog zu öffnen.", "This plugin's own log lines – searchable and filterable by level, without opening /xllog.")),
-                MenuPage.Changelog => (Loc.T("Änderungsprotokoll", "Changelog"), Loc.T("Was sich im Codex geändert hat – neueste Einträge zuerst.", "What changed in the Codex – newest entries first.")),
-                _ => (Loc.T("Allgemein", "General"), Loc.T("Grundeinstellungen des Plugins.", "Basic plugin settings.")),
-            };
+            var (pageTitle, pageSubtitle) = GetPageHeader(activePage);
 
             using (CodexTheme.FontTitleMenu.Push())
                 ImGui.TextColored(CodexTheme.TextHeading, pageTitle);
@@ -387,13 +521,17 @@ public class CodexMenuWindow : Window
             ImGui.Dummy(new Vector2(0f, 0f * scale));
             CodexTheme.DrawDividerOrnament();
 
-            ImGui.Dummy(new Vector2(0f, 16f * scale));
+            // Order-Seite enger (Nutzeranforderung: ohne Scrollbar bei inzwischen 17 statt 10 Zeilen).
+            ImGui.Dummy(new Vector2(0f, (activePage == MenuPage.Order ? 8f : 16f) * scale));
         }
 
         switch (activePage)
         {
             case MenuPage.Overlay:
                 DrawOverlayPage(scale);
+                break;
+            case MenuPage.Order:
+                DrawOrderPage(scale);
                 break;
             case MenuPage.Plugins:
                 DrawPluginsPage(scale);
@@ -426,44 +564,29 @@ public class CodexMenuWindow : Window
         }
 
         ImGui.Unindent(32f * scale);
+
+        // Einklappen/Schließen (Nutzeranforderung) - zentral vom Fenster gezeichnet, NICHT je Seite,
+        // ganz rechts in der Kopfzeile, vertikal auf die Mitte des Seitentitels ausgerichtet (keine
+        // der aktuellen Codex-Seiten hat eigene Reset/Save-Knöpfe, daher hasPageButtons: false - der
+        // Trenner dazu entfällt dann laut PluginUiKit.UiWindowControls von selbst). WICHTIG: innerhalb
+        // DIESES Childs gezeichnet (nicht erst danach im Fenster) - ein außerhalb eines Childs
+        // gezeichnetes Item wird von ImGui für Hover/Klick NICHT als "vor" diesem Child liegend
+        // erkannt, selbst wenn es zeitlich danach gezeichnet wird (das Child "gewinnt" die
+        // Maus-Treffererkennung für seine eigene Fläche) - Knopf wäre sichtbar, aber nicht klickbar
+        // gewesen (Nutzer-Report).
+        var childPos = ImGui.GetWindowPos();
+        var childSize = ImGui.GetWindowSize();
+        float titleFontHeight;
+        using (CodexTheme.FontTitleMenu.Push())
+            titleFontHeight = ImGui.GetFontSize();
+        var headerButtonsCenterY = childPos.Y + (28f + titleFontHeight / 2f) * scale;
+        var headerButtonsRightEdge = childPos.X + childSize.X - 18f * scale;
+
+        var controls = PluginUiKit.UiWindowControls.DrawExpandedButtons(scale, headerButtonsRightEdge, headerButtonsCenterY, hasPageButtons: false,
+            collapseTooltip: Loc.T("Einklappen", "Collapse"), closeTooltip: Loc.T("Schließen", "Close"));
+
         ImGui.EndChild();
-    }
-
-    /// <summary>
-    /// "Schließen"-Knopf (Nutzeranforderung: jetzt ganz unten in der Seitenleiste statt oben rechts im
-    /// Inhaltsbereich jeder Seite) - Breite identisch zum Hintergrund eines ausgewählten Menüpunkts
-    /// (siehe DrawNavItem: ImGui.GetContentRegionAvail().X abzüglich desselben 18px-Randes), ca. 20px
-    /// Abstand zum unteren Rand der Seitenleiste. Schließt beim Klick nur das Menü, da dieses Plugin
-    /// ohnehin sofort bei jeder Änderung speichert, siehe DrawGeneralPage-Kommentar - ein "Speichern"-
-    /// Knopf ohne echten Zweck wäre irreführend.
-    /// </summary>
-    private void DrawSidebarCloseButton(float scale)
-    {
-        var label = Loc.T("Schließen", "Close");
-        var width = ImGui.GetContentRegionAvail().X - 18f * scale;
-        var height = 30f * scale;
-        var bottomMargin = 20f * scale;
-
-        ImGui.SetCursorPosY(ImGui.GetWindowHeight() - height - bottomMargin);
-        var cursor = ImGui.GetCursorScreenPos();
-
-        var clicked = ImGui.InvisibleButton("##CodexSidebarClose", new Vector2(width, height));
-        var hovered = ImGui.IsItemHovered();
-
-        var drawList = ImGui.GetWindowDrawList();
-        drawList.AddRectFilled(cursor, cursor + new Vector2(width, height),
-            ImGui.GetColorU32(CodexTheme.Accent with { W = hovered ? 0.85f : 1f }), CodexTheme.RoundingControl);
-
-        using (CodexTheme.FontBodyBold.Push())
-        {
-            var textSize = ImGui.CalcTextSize(label);
-            drawList.AddText(cursor + (new Vector2(width, height) - textSize) / 2f, ImGui.GetColorU32(CodexTheme.TextOnAccent), label);
-        }
-
-        if (clicked)
-            IsOpen = false;
-        if (hovered)
-            ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
+        return controls;
     }
 
     // ---- Seite "Allgemein" (Abschnitt 8) - Karten "Sprache", "Overlay", "Quality of Life",
@@ -521,6 +644,237 @@ public class CodexMenuWindow : Window
         DrawOverlayPreview(scale, config, ImGui.GetContentRegionAvail().X);
         CodexTheme.EndCard();
         ImGui.EndChild();
+    }
+
+    // Index der gerade per Drag gezogenen Zeile (siehe DrawOrderCategoryRow) - null, solange nicht gezogen wird.
+    private int? orderDraggingIndex;
+
+    // Pluralform je Kategorie NUR für den Zeilennamen dieser Seite (Nutzeranforderung, Referenzbild
+    // zeigt "Mounts"/"Minions"/... statt der sonst überall verwendeten Singularform aus Loc.TypeName,
+    // z.B. für Filter-Popups) - bewusst NICHT Loc.TypeName selbst geändert, das an vielen anderen
+    // Stellen (Blacklist-Filter, altes Overlay) weiterhin die Singularform braucht.
+    private static string GetOrderPageCategoryName(CollectibleType type) => type switch
+    {
+        CollectibleType.Mount => Loc.T("Mounts", "Mounts"),
+        CollectibleType.Minion => Loc.T("Minions", "Minions"),
+        CollectibleType.Orchestrion => Loc.T("Orchestrionrollen", "Orchestrion Rolls"),
+        CollectibleType.TripleTriadCard => Loc.T("Triple-Triad-Karten", "Triple Triad Cards"),
+        CollectibleType.Emote => Loc.T("Emotes", "Emotes"),
+        CollectibleType.Hairstyle => Loc.T("Moderne Ästhetik", "Hairstyles"),
+        CollectibleType.FashionAccessory => Loc.T("Accessoires", "Fashion Accessories"),
+        CollectibleType.Barding => Loc.T("Bardierungen", "Bardings"),
+        CollectibleType.Facewear => Loc.T("Brillen", "Glasses"),
+        CollectibleType.FrameKit => Loc.T("Framer's Kits", "Framer's Kits"),
+        CollectibleType.Quest => Loc.T("Quests", "Quests"),
+        CollectibleType.AetherCurrent => Loc.T("Ätherströmungen", "Aether Currents"),
+        CollectibleType.Sightseeing => Loc.T("Sightseeing-Punkte", "Sightseeing Spots"),
+        CollectibleType.HuntingLog => Loc.T("Hunting Log", "Hunting Log"),
+        CollectibleType.Aetheryte => Loc.T("Ätheryten", "Aetherytes"),
+        CollectibleType.Chocobokeep => Loc.T("Chocobokeep", "Chocobokeep"),
+        CollectibleType.Achievement => Loc.T("Errungenschaften", "Achievements"),
+        _ => Loc.TypeName(type),
+    };
+
+    /// <summary>Seite "Reihenfolge" (Nutzeranforderung) - legt fest, in welcher Reihenfolge die Sammel-Kategorien im Overlay erscheinen (siehe Configuration.OrderPageCategories/SetOrderPageCategoryOrder).</summary>
+    private void DrawOrderPage(float scale)
+    {
+        var width = ImGui.GetContentRegionAvail().X - 32f * scale;
+        if (ImGui.BeginTable("##CodexOrderPageWidth", 1, ImGuiTableFlags.None, new Vector2(width, 0f)))
+        {
+            ImGui.TableNextColumn();
+            DrawOrderCategoriesCard(scale, width);
+            ImGui.EndTable();
+        }
+    }
+
+    private void DrawOrderCategoriesCard(float scale, float width)
+    {
+        var config = plugin.Configuration;
+        var order = config.GetOrderPageCategoryOrder();
+
+        CodexTheme.BeginCard(scale, width: width);
+        var contentWidth = width - CodexTheme.CardPaddingX * 2f;
+        var rowStartX = ImGui.GetCursorPosX();
+
+        // Kartenkopf: Titel links, Hinweistext rechtsbündig auf derselben Zeile (Nutzeranforderung:
+        // keine Trennlinie mehr darunter - die Zeilen selbst haben schon LineSubtle-Trenner).
+        var titleY = ImGui.GetCursorPosY();
+        using (CodexTheme.FontCardTitle.Push())
+            ImGui.TextColored(CodexTheme.TextCardTitle, Loc.T("Kategorien", "Categories").ToUpperInvariant());
+
+        var hint = Loc.T("Ziehen ⠿ oder Pfeile nutzen", "Drag ⠿ or use the arrows");
+        float hintWidth;
+        using (CodexTheme.FontOrderHint.Push())
+            hintWidth = ImGui.CalcTextSize(hint).X;
+        ImGui.SetCursorPos(new Vector2(rowStartX + contentWidth - hintWidth, titleY + 6f * scale));
+        using (CodexTheme.FontOrderHint.Push())
+            ImGui.TextColored(CodexTheme.TextDim, hint);
+
+        ImGui.Dummy(new Vector2(0f, 8f * scale));
+
+        for (var i = 0; i < order.Count; i++)
+        {
+            DrawOrderCategoryRow(scale, contentWidth, order, i);
+            if (i < order.Count - 1)
+            {
+                var dividerCursor = ImGui.GetCursorScreenPos();
+                ImGui.GetWindowDrawList().AddLine(dividerCursor, dividerCursor + new Vector2(contentWidth, 0f), ImGui.GetColorU32(CodexTheme.LineSubtle));
+            }
+        }
+
+        CodexTheme.EndCard();
+    }
+
+    private const string OrderDragDropPayloadId = "CodexOrderCategory";
+
+    private void DrawOrderCategoryRow(float scale, float contentWidth, List<CollectibleType> order, int index)
+    {
+        var type = order[index];
+        var rowHeight = 30f * scale;
+        var rowStartScreenPos = ImGui.GetCursorScreenPos();
+        var rowStartY = ImGui.GetCursorPosY();
+        var rowStartX = ImGui.GetCursorPosX();
+
+        // Pfeil-Spalte vorab berechnen, damit die Drag-Zeilen-Fläche (unten) exakt davor aufhört -
+        // so überlappt sie die Pfeil-Buttons gar nicht erst (ImGui blockt Klicks für spätere Items,
+        // die eine frühere überlappende Fläche treffen, ansonsten zuverlässig ab).
+        var arrowSize = new Vector2(24f * scale, 24f * scale);
+        var arrowsWidth = arrowSize.X * 2f + 6f * scale;
+        var arrowsX = rowStartX + contentWidth - arrowsWidth;
+        var dragAreaWidth = arrowsX - rowStartX - 4f * scale;
+
+        // Zeile (bis kurz vor die Pfeile) als Drag-Quelle/-Ziel - der sichtbare Griff ist nur der
+        // Hinweis, nicht die einzige ziehbare Fläche (großzügiger als "nur die 6 Punkte treffen").
+        ImGui.SetCursorPos(new Vector2(rowStartX, rowStartY));
+        ImGui.InvisibleButton($"##CodexOrderRow{type}", new Vector2(dragAreaWidth, rowHeight));
+        var rowHovered = ImGui.IsItemHovered();
+        if (rowHovered)
+            ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
+
+        if (ImGui.BeginDragDropSource())
+        {
+            orderDraggingIndex = index;
+            ImGui.SetDragDropPayload(OrderDragDropPayloadId, ReadOnlySpan<byte>.Empty);
+            using (CodexTheme.FontOrderName.Push())
+                ImGui.TextColored(CodexTheme.TextPrimary, GetOrderPageCategoryName(type));
+            ImGui.EndDragDropSource();
+        }
+
+        if (ImGui.BeginDragDropTarget())
+        {
+            // Während des Ziehens: 2px Accent-Linie an der Einfügeposition (oberhalb dieser Zeile).
+            var insertLineCursor = rowStartScreenPos;
+            ImGui.GetWindowDrawList().AddLine(insertLineCursor, insertLineCursor + new Vector2(contentWidth, 0f), ImGui.GetColorU32(CodexTheme.Accent), 2f);
+
+            var payload = ImGui.AcceptDragDropPayload(OrderDragDropPayloadId);
+            if (!payload.IsNull && orderDraggingIndex is { } sourceIndex && sourceIndex != index)
+            {
+                var moved = order[sourceIndex];
+                order.RemoveAt(sourceIndex);
+                // Lag das gezogene Element VOR dem Ziel, rückt durch das RemoveAt alles danach um
+                // einen Platz nach vorne - Zielindex entsprechend um 1 verringern.
+                var insertIndex = sourceIndex < index ? index - 1 : index;
+                order.Insert(insertIndex, moved);
+                plugin.Configuration.SetOrderPageCategoryOrder(order);
+                orderDraggingIndex = null;
+            }
+
+            ImGui.EndDragDropTarget();
+        }
+
+        // Gezogene Zeile selbst hervorgehoben (BgSelected).
+        if (orderDraggingIndex == index)
+            ImGui.GetWindowDrawList().AddRectFilled(rowStartScreenPos, rowStartScreenPos + new Vector2(contentWidth, rowHeight), ImGui.GetColorU32(CodexTheme.BgSelected));
+
+        // Griff: 6 Punkte (2 Spalten x 3 Reihen), TextDisabled.
+        var handleWidth = 14f * scale;
+        var dotRadius = 1.6f * scale;
+        var handleCenter = rowStartScreenPos + new Vector2(handleWidth / 2f, rowHeight / 2f);
+        var dotColor = ImGui.GetColorU32(CodexTheme.TextDisabled);
+        var drawList = ImGui.GetWindowDrawList();
+        for (var col = -1; col <= 1; col += 2)
+        {
+            for (var row = -1; row <= 1; row++)
+                drawList.AddCircleFilled(handleCenter + new Vector2(col * 3.5f * scale, row * 5f * scale), dotRadius, dotColor);
+        }
+
+        var cursorX = rowStartX + handleWidth + 10f * scale;
+
+        // Position (rechtsbündig in einer 18px-Spalte), 1-basiert.
+        var positionColumnWidth = 18f * scale;
+        var positionText = (index + 1).ToString(CultureInfo.InvariantCulture);
+        float positionTextWidth, positionTextHeight;
+        using (CodexTheme.FontOrderPosition.Push())
+        {
+            var size = ImGui.CalcTextSize(positionText);
+            positionTextWidth = size.X;
+            positionTextHeight = size.Y;
+        }
+        ImGui.SetCursorPos(new Vector2(cursorX + positionColumnWidth - positionTextWidth, rowStartY + (rowHeight - positionTextHeight) / 2f));
+        using (CodexTheme.FontOrderPosition.Push())
+            ImGui.TextColored(CodexTheme.TextDim, positionText);
+        cursorX += positionColumnWidth + 14f * scale;
+
+        // Typ-Badge (92px, Farben/Label wie im Overlay).
+        var (badgeBg, badgeFg) = CodexOverlayWindow.GetTypeBadgeColors(type);
+        var badgeLabel = CodexOverlayWindow.GetBadgeLabel(type);
+        float badgeFontHeight;
+        using (CodexTheme.FontTypeBadge.Push())
+            badgeFontHeight = ImGui.GetFontSize();
+        var badgeSize = new Vector2(92f * scale, badgeFontHeight + 4f * scale);
+        var badgeCursor = rowStartScreenPos + new Vector2(cursorX - rowStartX, (rowHeight - badgeSize.Y) / 2f);
+        drawList.AddRectFilled(badgeCursor, badgeCursor + badgeSize, ImGui.GetColorU32(badgeBg), CodexTheme.RoundingControl);
+        ImGui.SetCursorScreenPos(badgeCursor);
+        CodexOverlayWindow.CenteredText(badgeLabel, badgeSize, badgeFg, false);
+        cursorX += badgeSize.X + 14f * scale;
+
+        // Name (Stretch, bis kurz vor die Pfeile - arrowSize/arrowsX bereits oben berechnet).
+        var nameWidth = arrowsX - 8f * scale - cursorX;
+        using (CodexTheme.FontOrderName.Push())
+        {
+            ImGui.PushTextWrapPos(cursorX + MathF.Max(0f, nameWidth));
+            ImGui.SetCursorPos(new Vector2(cursorX, rowStartY + (rowHeight - ImGui.GetFontSize()) / 2f));
+            ImGui.TextColored(CodexTheme.TextPrimary, GetOrderPageCategoryName(type));
+            ImGui.PopTextWrapPos();
+        }
+
+        DrawOrderArrowButton(scale, rowStartScreenPos + new Vector2(arrowsX - rowStartX, (rowHeight - arrowSize.Y) / 2f), arrowSize,
+            FontAwesomeIcon.ChevronUp, index > 0, () => ReorderOrderCategory(order, index, index - 1));
+        DrawOrderArrowButton(scale, rowStartScreenPos + new Vector2(arrowsX - rowStartX + arrowSize.X + 6f * scale, (rowHeight - arrowSize.Y) / 2f), arrowSize,
+            FontAwesomeIcon.ChevronDown, index < order.Count - 1, () => ReorderOrderCategory(order, index, index + 1));
+    }
+
+    private void ReorderOrderCategory(List<CollectibleType> order, int fromIndex, int toIndex)
+    {
+        (order[fromIndex], order[toIndex]) = (order[toIndex], order[fromIndex]);
+        plugin.Configuration.SetOrderPageCategoryOrder(order);
+    }
+
+    private void DrawOrderArrowButton(float scale, Vector2 screenPos, Vector2 size, FontAwesomeIcon icon, bool enabled, System.Action onClick)
+    {
+        ImGui.SetCursorScreenPos(screenPos);
+        var id = $"##CodexOrderArrow{icon}{screenPos.X}{screenPos.Y}";
+        if (!enabled)
+            ImGui.BeginDisabled();
+
+        var clicked = ImGui.InvisibleButton(id, size);
+        var hovered = ImGui.IsItemHovered();
+
+        var drawList = ImGui.GetWindowDrawList();
+        var fg = enabled ? (hovered ? CodexTheme.TextHeading : CodexTheme.TextSecondary) : CodexTheme.TextDisabled;
+        drawList.AddRect(screenPos, screenPos + size, ImGui.GetColorU32(CodexTheme.LineControl), CodexTheme.RoundingControl);
+
+        using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
+        {
+            var glyph = icon.ToIconString();
+            var glyphSize = ImGui.CalcTextSize(glyph);
+            drawList.AddText(screenPos + (size - glyphSize) / 2f, ImGui.GetColorU32(fg), glyph);
+        }
+
+        if (!enabled)
+            ImGui.EndDisabled();
+        else if (clicked)
+            onClick();
     }
 
     /// <summary>
@@ -700,13 +1054,13 @@ public class CodexMenuWindow : Window
         ImGui.Separator();
 
         DrawPreviewCurrencyWallet(scale, config);
-        DrawPreviewTabsAndFilters(scale);
+        DrawPreviewTabsAndFilters(scale, config);
         DrawPreviewList(scale, layoutScale, config);
 
         // Zierecken (wie beim echten Overlay) - innerhalb desselben Child-Fensters gezeichnet, per
         // ImGui.GetWindowPos()/GetWindowSize() (siehe CodexTheme.DrawCornerOrnaments-Kommentar), daher
         // VOR EndChild aufgerufen.
-        CodexTheme.DrawCornerOrnaments(CodexTheme.CornerLenOverlay * scale, CodexTheme.CornerThickOverlay * scale, CodexTheme.CornerInsetOverlay * scale);
+        CodexTheme.DrawOverlayCornerOrnaments(CodexTheme.CornerInsetOverlay * scale);
 
         ImGui.EndChild();
         ImGui.PopStyleVar(2);
@@ -803,7 +1157,8 @@ public class CodexMenuWindow : Window
                 }
 
                 ImGui.SetCursorPos(new Vector2(cursorX, cursorY));
-                CodexOverlayWindow.DrawAutoButton(button, label, new Vector2(width, buttonHeight), anyRunning, scale, shadow: false);
+                CodexOverlayWindow.DrawAutoButton(button, label, new Vector2(width, buttonHeight), anyRunning, scale, shadow: false,
+                    contentAlpha: 1f - Math.Clamp(config.CompactTransparency, 0f, 1f));
 
                 cursorX += width + CodexOverlayWindow.AutoButtonGap * scale;
             }
@@ -886,14 +1241,16 @@ public class CodexMenuWindow : Window
             ImGui.TextColored(CodexTheme.TextDim, $"({retainerCount:N0})");
     }
 
-    private static void DrawPreviewTabsAndFilters(float scale)
+    private static void DrawPreviewTabsAndFilters(float scale, Configuration config)
     {
+        var contentAlpha = 1f - Math.Clamp(config.CompactTransparency, 0f, 1f);
+
         ImGui.Dummy(new Vector2(0f, 8f * scale));
         ImGui.Indent(14f * scale);
 
-        CodexOverlayWindow.DrawTab("zone", Loc.T("Zone", "Zone"), PreviewItems.Length, selected: true, scale, shadow: false);
+        CodexOverlayWindow.DrawTab("zone", Loc.T("Zone", "Zone"), PreviewItems.Length, selected: true, scale, shadow: false, contentAlpha);
         ImGui.SameLine(0f, 18f * scale);
-        CodexOverlayWindow.DrawTab("todo", Loc.T("ToDo-Liste", "To-do list"), 0, selected: false, scale, shadow: false);
+        CodexOverlayWindow.DrawTab("todo", Loc.T("ToDo-Liste", "To-do list"), 0, selected: false, scale, shadow: false, contentAlpha);
 
         var typeLabel = Loc.T("Typen", "Types");
         var currencyLabel = Loc.T("Währungen", "Currencies");
@@ -914,9 +1271,9 @@ public class CodexMenuWindow : Window
 
         var rightEdge = ImGui.GetWindowContentRegionMax().X - 10f * scale;
         ImGui.SameLine(rightEdge - typeWidth - currencyWidth - 6f * scale);
-        CodexOverlayWindow.DrawFilterButton("type", typeLabel, active: false, typeWidth, scale, shadow: false);
+        CodexOverlayWindow.DrawFilterButton("type", typeLabel, active: false, typeWidth, scale, shadow: false, contentAlpha);
         ImGui.SameLine(0f, 6f * scale);
-        CodexOverlayWindow.DrawFilterButton("cur", currencyLabel, active: false, currencyWidth, scale, shadow: false);
+        CodexOverlayWindow.DrawFilterButton("cur", currencyLabel, active: false, currencyWidth, scale, shadow: false, contentAlpha);
 
         ImGui.Unindent(14f * scale);
         ImGui.Separator();
@@ -961,6 +1318,8 @@ public class CodexMenuWindow : Window
                 badgeBg = badgeBg with { W = badgeBg.W * 0.55f };
                 badgeFg = badgeFg with { W = badgeFg.W * 0.55f };
             }
+            var previewContentAlpha = 1f - Math.Clamp(config.CompactTransparency, 0f, 1f);
+            badgeBg = badgeBg with { W = badgeBg.W * previewContentAlpha };
 
             var badgeLabel = CodexOverlayWindow.GetBadgeLabel(type);
 
@@ -3860,7 +4219,7 @@ public class CodexMenuWindow : Window
 
         var showDebug = config.ShowDebugInfo;
         if (DrawDebugToggleRow("##CodexDebugShowInfo", Loc.T("Debug-Infos im Overlay anzeigen", "Show debug info in overlay"), ref showDebug, scale, contentWidth, isFirstRow: true,
-                Loc.T("Zeigt im Overlay eine Zeile mit Zone, Filter und Zählern.", "Adds the zone, filter and counter line to the overlay.")))
+                Loc.T("Weltposition im Overlay anzeigen.", "Show world position in overlay.")))
         {
             config.ShowDebugInfo = showDebug;
             config.Save();
@@ -3897,7 +4256,9 @@ public class CodexMenuWindow : Window
         ImGui.GetWindowDrawList().AddLine(lineCursor, lineCursor + new Vector2(contentWidth, 0f), ImGui.GetColorU32(CodexTheme.LineSubtle));
         ImGui.Dummy(new Vector2(0f, 8f * scale));
 
-        const float labelColumnWidth = 96f;
+        // Nutzervorgabe: Zonen-Name-/Weltposition-Werte um 6px nach rechts (war 96px) - beide Zeilen
+        // teilen sich dieselbe Spaltenbreite, die Verschiebung gilt also automatisch für beide.
+        const float labelColumnWidth = 102f;
 
         var territoryId = Plugin.ClientState.TerritoryType;
         var zoneName = Plugin.GetZoneName(territoryId);
@@ -3905,6 +4266,8 @@ public class CodexMenuWindow : Window
         using (CodexTheme.FontDebugStatusText.Push())
             ImGui.TextColored(CodexTheme.TextPrimary, zoneName);
         ImGui.SameLine(0f, 4f * scale);
+        // Nutzervorgabe: Zonen-ID-Etikett ("#397") um 2px nach unten.
+        ImGui.SetCursorPosY(ImGui.GetCursorPosY() + 2f * scale);
         using (CodexTheme.FontMono12.Push())
         {
             ImGui.TextColored(CodexTheme.TextDim, "#");
@@ -3918,6 +4281,8 @@ public class CodexMenuWindow : Window
 
         var playerPos = Plugin.ObjectTable.LocalPlayer?.Position;
         DrawDebugStatusLabel(scale, labelColumnWidth, Loc.T("Weltposition", "World position"));
+        // Nutzervorgabe: X/Y/Z-Werte um 2px nach unten.
+        ImGui.SetCursorPosY(ImGui.GetCursorPosY() + 2f * scale);
         if (playerPos.HasValue)
         {
             using (CodexTheme.FontMono12.Push())
@@ -4283,6 +4648,8 @@ public class CodexMenuWindow : Window
             (Loc.T("Ätherströmungen (alle Zonen)", "Aether currents (all zones)"), Plugin.DumpAetherCurrentDebugInfoAllZones),
             ("\"Protecting What's Important\"", () => plugin.DumpQuestAcceptabilityDebugInfo("Protecting What's Important")),
             ("\"Open and Inviting\"", () => plugin.DumpQuestAcceptabilityDebugInfo("Open and Inviting")),
+            ("\"Cat on a Cold Stone Roof\"", () => plugin.DumpQuestAcceptabilityDebugInfo("Cat on a Cold Stone Roof")),
+            ("\"Grandfather's Belongings\"", () => plugin.DumpQuestAcceptabilityDebugInfo("Grandfather's Belongings")),
         };
 
         // Jeder Knopf bekommt 1,5 Sekunden lang ein Häkchen statt des Terminal-Symbols, sobald er
@@ -4471,7 +4838,7 @@ public class CodexMenuWindow : Window
 
         DrawLogLevelChip(scale, LogEventLevel.Verbose, Loc.T("Verbose", "Verbose"), CodexTheme.TextDisabled, isFirst: true);
         DrawLogLevelChip(scale, LogEventLevel.Debug, Loc.T("Debug", "Debug"), CodexTheme.TextMuted, isFirst: false, gap: chipGap);
-        DrawLogLevelChip(scale, LogEventLevel.Information, Loc.T("Info", "Info"), CodexTheme.LogInfoFg, isFirst: false, gap: chipGap);
+        DrawLogLevelChip(scale, LogEventLevel.Information, Loc.T("Info", "Info"), PluginUiKit.UiTheme.Active.InfoFg, isFirst: false, gap: chipGap);
         DrawLogLevelChip(scale, LogEventLevel.Warning, Loc.T("Warnung", "Warning"), CodexTheme.WarnFg, isFirst: false, gap: chipGap);
         DrawLogLevelChip(scale, LogEventLevel.Error, Loc.T("Fehler", "Error"), CodexTheme.ErrFg, isFirst: false, gap: chipGap);
         DrawLogLevelChip(scale, LogEventLevel.Fatal, Loc.T("Kritisch", "Critical"), CodexTheme.LogCritFg, isFirst: false, gap: chipGap);
@@ -4924,7 +5291,7 @@ public class CodexMenuWindow : Window
     {
         LogEventLevel.Verbose => CodexTheme.TextDisabled,
         LogEventLevel.Debug => CodexTheme.TextMuted,
-        LogEventLevel.Information => CodexTheme.LogInfoFg,
+        LogEventLevel.Information => PluginUiKit.UiTheme.Active.InfoFg,
         LogEventLevel.Warning => CodexTheme.WarnFg,
         LogEventLevel.Error => CodexTheme.ErrFg,
         LogEventLevel.Fatal => CodexTheme.LogCritFg,
@@ -5311,7 +5678,7 @@ public class CodexMenuWindow : Window
     private static (Vector4 Fg, Vector4 Bg, Vector4 Line) ChangelogTagColors(string type) => type switch
     {
         "new" => (CodexTheme.OkFg, CodexTheme.OkBg, CodexTheme.OkLine),
-        "fixed" => (CodexTheme.LogInfoFg, CodexTheme.InfoBg, CodexTheme.InfoLine),
+        "fixed" => (PluginUiKit.UiTheme.Active.InfoFg, PluginUiKit.UiTheme.Active.InfoBg, PluginUiKit.UiTheme.Active.InfoLine),
         "removed" => (CodexTheme.ErrFg, CodexTheme.ErrBg, CodexTheme.ErrLine),
         _ => (CodexTheme.WarnFg, CodexTheme.WarnBg, CodexTheme.WarnLine),
     };

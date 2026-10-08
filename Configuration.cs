@@ -102,6 +102,10 @@ public class Configuration : IPluginConfiguration
     public Vector2? MenuWindowPosition { get; set; }
     public Vector2? OverlayWindowPosition { get; set; }
 
+    // Eingeklappter Zustand von Windows.CodexMenuWindow (Nutzeranforderung: "Zustand... werden in der
+    // Config gespeichert") - true = nur die Mini-Leiste (Logo + Seitenname) statt Seitenleiste/Inhalt.
+    public bool MenuWindowCollapsed { get; set; }
+
     // Changelog (siehe ChangelogService) - leer = noch nie gesehen/benachrichtigt. Getrennte Felder,
     // da "Seite angesehen" (steuert das NEW-Badge im Menü) und "Chat-Hinweis schon geschickt" (steuert
     // die einmalige Login-Nachricht) unabhängig voneinander sein sollen: sonst würde das Badge schon
@@ -182,7 +186,9 @@ public class Configuration : IPluginConfiguration
     // #FFC200FF
     public Vector4 NavigationArrowColor { get; set; } = new(1f, 0.7607843f, 0f, 1f);
 
-    // Debug
+    // Debug-Infos (Zonen-Name/-Id, Weltposition + Kopieren-Knopf) direkt im neuen Overlay unterhalb
+    // der Zonen-Zeile (siehe CodexOverlayWindow.DrawOverlayDebugInfo) - Umschalter auf der
+    // Debug-Seite, Karte "Allgemein" (siehe CodexMenuWindow.DrawDebugGeneralCard).
     public bool ShowDebugInfo { get; set; } = false;
 
     // Lässt die Aetheryten-/Chocobokeep-Automation auch bereits freigeschaltete Ziele erneut
@@ -200,6 +206,13 @@ public class Configuration : IPluginConfiguration
     // müssen. Wirkt sich NUR auf die Automation-Zielliste aus, nicht auf die normale Anzeige im
     // Overlay.
     public bool SimulateSightseeingAutomation { get; set; } = false;
+
+    // Siehe KuganeTowerJump.HandleFall-Kommentar - nach einem Sturz automatisch (statt auf eine
+    // Nutzerentscheidung über das Overlay zu warten) ab dem vorgeschlagenen Wiedereinstiegspunkt
+    // neu versuchen, höchstens 3x pro Lauf. Default true, solange es noch keine Resume/Restart/Stop-
+    // Knöpfe im Overlay gibt (Nutzer-Report: ohne das blieb die Automation nach einem Sturz ohne
+    // Wiedereinstiegspunkt einfach stehen, da nichts die Entscheidung je ausgelöst hätte).
+    public bool KuganeTowerJumpAutoRetry { get; set; } = true;
 
     // Aktiviert SHIFT + Linksklick auf einen Sammelobjekt-Namen oder eine Währungsangabe im
     // kompakten Overlay, um Allagan Tools' "Mehr Informationen"-Fenster für das jeweilige Item zu
@@ -272,5 +285,53 @@ public class Configuration : IPluginConfiguration
 
         if (changed)
             Save();
+    }
+
+    // Alle Kategorien, die die neue "Order"-Seite (Windows.CodexMenuWindow.DrawOrderPage) zum
+    // Umsortieren anbietet - Reihenfolge hier = Standardreihenfolge, falls TypeOrder noch keinen
+    // dieser Typen enthält (Nutzeranforderung: auch die zonengebundenen Typen Quest/AetherCurrent/
+    // Sightseeing/HuntingLog/Aetheryte/Chocobokeep/Achievement mit aufnehmen, nicht mehr nur die
+    // "Sammel"-Kategorien).
+    public static readonly CollectibleType[] OrderPageCategories =
+    {
+        CollectibleType.Mount, CollectibleType.Minion, CollectibleType.Orchestrion, CollectibleType.TripleTriadCard,
+        CollectibleType.Emote, CollectibleType.Hairstyle, CollectibleType.FashionAccessory, CollectibleType.Barding,
+        CollectibleType.Facewear, CollectibleType.FrameKit,
+        CollectibleType.Quest, CollectibleType.AetherCurrent, CollectibleType.Sightseeing, CollectibleType.HuntingLog,
+        CollectibleType.Aetheryte, CollectibleType.Chocobokeep, CollectibleType.Achievement,
+    };
+
+    /// <summary>
+    /// Setzt die neue Reihenfolge der OrderPageCategories innerhalb von TypeOrder - ersetzt NUR deren
+    /// bisherige Plätze in der Liste (in der Reihenfolge, in der diese Plätze aktuell vorkommen),
+    /// alle anderen (zonengebundenen) Typen bleiben an ihrer bisherigen absoluten Position unverändert
+    /// stehen. So wirkt sich ein Umsortieren auf der Order-Seite nicht auf deren Reihenfolge aus.
+    /// </summary>
+    public void SetOrderPageCategoryOrder(IReadOnlyList<CollectibleType> newOrder)
+    {
+        SanitizeTypeOrder();
+
+        var editableSet = new HashSet<CollectibleType>(OrderPageCategories);
+        var result = new List<CollectibleType>(TypeOrder);
+        var nextNewIndex = 0;
+        for (var i = 0; i < result.Count; i++)
+        {
+            if (!editableSet.Contains(result[i]))
+                continue;
+
+            if (nextNewIndex < newOrder.Count)
+                result[i] = newOrder[nextNewIndex++];
+        }
+
+        TypeOrder = result;
+        Save();
+    }
+
+    /// <summary>Aktuelle Reihenfolge der OrderPageCategories innerhalb von TypeOrder, für die Anzeige auf der Order-Seite.</summary>
+    public List<CollectibleType> GetOrderPageCategoryOrder()
+    {
+        SanitizeTypeOrder();
+        var editableSet = new HashSet<CollectibleType>(OrderPageCategories);
+        return TypeOrder.Where(editableSet.Contains).ToList();
     }
 }

@@ -110,6 +110,7 @@ public sealed class ChocoboCompanionSupport
     public static bool NeedsSummon =>
         Plugin.UseChocoboCompanion
         && Plugin.IsChocoboCompanionUnlocked()
+        && !Plugin.IsInCity
         && Plugin.GetGysahlGreensCount() > 0
         && (!Plugin.IsChocoboCompanionSummoned() || Plugin.GetChocoboSummonTimeLeft() < ResummonThresholdSeconds);
 
@@ -184,12 +185,13 @@ public sealed class ChocoboCompanionSupport
     {
         var useChocobo = Plugin.UseChocoboCompanion;
         var unlocked = Plugin.IsChocoboCompanionUnlocked();
-        if (!useChocobo || !unlocked)
+        var inCity = Plugin.IsInCity;
+        if (!useChocobo || !unlocked || inCity)
         {
             if (DateTime.UtcNow - lastGateDiagnosticLogAt > GateDiagnosticLogInterval)
             {
                 lastGateDiagnosticLogAt = DateTime.UtcNow;
-                Plugin.Log.Info($"[ChocoboCompanionSupport] Tick() bricht ab: UseChocoboCompanion={useChocobo}, IsChocoboCompanionUnlocked={unlocked}.");
+                Plugin.Log.Info($"[ChocoboCompanionSupport] Tick() bricht ab: UseChocoboCompanion={useChocobo}, IsChocoboCompanionUnlocked={unlocked}, InCity={inCity}.");
             }
 
             return;
