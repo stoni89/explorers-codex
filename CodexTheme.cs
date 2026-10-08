@@ -1,20 +1,26 @@
 using System;
 using System.Numerics;
 using Dalamud.Interface.ManagedFontAtlas;
-using Dalamud.Interface.Utility;
 using Dalamud.Bindings.ImGui;
+using PluginUiKit;
 
 namespace TheExplorersCodex;
 
 /// <summary>
-/// Zentrales Farb-/Schrift-/Abstands-Theme für das neue Codex-Design (siehe
-/// NewDesign/DESIGN_SPEC.md) - "dunkles Tinten-Braun mit Gold-Akzent". Alle Werte kommen 1:1 aus
-/// Abschnitt 2-4 der Spezifikation; UI-Code darf keine eigenen Hex-Farben mehr hart codieren,
-/// sondern verwendet ausschließlich diese Tokens (Vorgabe aus Abschnitt 1 der Spezifikation).
+/// Codex-Theme - seit der PluginUiKit-Extraktion (siehe C:\FF14Mods\PluginUiKit\README.md) nur
+/// noch eine dünne Weiterleitungsschicht auf PluginUiKit.UiTheme/UiFonts/UiWidgets statt einer
+/// eigenen Implementierung (Schritt 3 "Codex auf das Paket umstellen"). Alle Aufrufstellen im
+/// restlichen Projekt (CodexMenuWindow.cs, CodexOverlayWindow.cs, CodexWidgets.cs) bleiben
+/// UNVERÄNDERT bei "CodexTheme.X" - das Aussehen darf sich durch die Umstellung nicht ändern,
+/// daher bleiben an den wenigen Stellen, wo der Schritt-1-Bestandsaufnahme-Bericht abweichende
+/// Werte zwischen Codex und dem PluginUiKit-Standarddefault gefunden hat (z.B. RoundingControl
+/// 3.5f vs. UiMetrics.ControlRadius 3f), Codex' ORIGINALWERTE als eigene Literale erhalten statt
+/// sie auf den Kit-Default umzubiegen - diese Vereinheitlichung ist eine separate, noch offene
+/// Entscheidung (siehe Bestandsaufnahme), keine stille Nebenwirkung dieser Umstellung.
 ///
-/// Bewusst eine KOMPLETT EIGENSTÄNDIGE Theme-Klasse neben dem bisherigen <see cref="Windows.ModernUi"/> -
-/// das alte Design bleibt unverändert nutzbar, während das neue Design schrittweise (siehe
-/// Abschnitt 8 der Spezifikation) parallel aufgebaut wird.
+/// Farb-/Fonttokens, die exakt denselben Hex-Wert wie ein PluginUiKit.UiTheme-Token haben, wurden
+/// hier entfernt - Aufrufstellen, die sie nutzten, zeigen jetzt direkt auf UiTheme.Active.X (z.B.
+/// LogInfoFg -> UiTheme.Active.InfoFg, beide waren schon immer #9CC4E4).
 /// </summary>
 public static class CodexTheme
 {
@@ -27,149 +33,119 @@ public static class CodexTheme
         return new Vector4(r, g, b, alpha);
     }
 
-    // ---- Flächen (Abschnitt 2) ----
-    public static readonly Vector4 BgOuter = Hex("#0B0906");
-    public static readonly Vector4 BgWindow = Hex("#1A150F");
-    public static readonly Vector4 BgSidebar = Hex("#130F0A");
-    public static readonly Vector4 BgCard = Hex("#221C14");
-    public static readonly Vector4 BgInput = Hex("#17120C");
-    public static readonly Vector4 BgPopup = Hex("#1D1812");
-    public static readonly Vector4 BgSelected = Hex("#2E2516");
-    public static readonly Vector4 BgSelectedStrong = Hex("#3A2F1E");
+    // ---- Flächen - 1:1 Weiterleitung auf UiTheme.Active (siehe Klassenkommentar) ----
+    public static Vector4 BgWindow => UiTheme.Active.BgWindow;
+    public static Vector4 BgSidebar => UiTheme.Active.BgSidebar;
+    public static Vector4 BgCard => UiTheme.Active.BgCard;
+    public static Vector4 BgInput => UiTheme.Active.BgInput;
+    public static Vector4 BgPopup => UiTheme.Active.BgPopup;
+    public static Vector4 BgSelected => UiTheme.Active.BgSelected;
+    public static Vector4 BgSelectedStrong => UiTheme.Active.BgSelectedStrong;
 
-    /// <summary>BgOverlay - Alpha folgt der Transparenz-Einstellung, siehe <see cref="OverlayBg"/>.</summary>
+    // ---- Codex-eigene Zusatzflächen (kein PluginUiKit-Äquivalent - Overlay-Transparenz ist
+    // Codex-spezifisches Verhalten, nicht Teil der generischen Palette) ----
+    public static readonly Vector4 BgOuter = Hex("#0B0906");
     private static readonly Vector4 BgOverlayBase = Hex("#16110B");
 
-    /// <summary>Overlay-Hintergrund mit der aktuell eingestellten Transparenz (0 = voll deckend, 1 = unsichtbar, siehe Abschnitt 5.9/9.3).</summary>
+    /// <summary>Overlay-Hintergrund mit der aktuell eingestellten Transparenz (0 = voll deckend, 1 = unsichtbar).</summary>
     public static Vector4 OverlayBg(float transparency) => BgOverlayBase with { W = 0.93f * (1f - Math.Clamp(transparency, 0f, 1f)) };
 
-    /// <summary>Abschnitt 5.9: Hintergrund für Knöpfe ohne eigene Füllung (bereit, gesperrt, Filter), sobald ab ~70% Overlay-Transparenz Textschatten aktiv sind - sonst wären diese Knöpfe auf dem fast unsichtbaren Fensterhintergrund kaum noch zu lesen.</summary>
+    /// <summary>Hintergrund für Knöpfe ohne eigene Füllung, sobald ab ~70% Overlay-Transparenz Textschatten aktiv sind.</summary>
     public static readonly Vector4 TranslucentButtonBg = BgOverlayBase with { W = 0.7f };
 
-    // ---- Linien (Abschnitt 2) ----
-    public static readonly Vector4 LineFrame = Hex("#6A5638");
-    public static readonly Vector4 LineControl = Hex("#5A4A33");
-    public static readonly Vector4 LineCard = Hex("#43372A");
-    public static readonly Vector4 LineSubtle = Hex("#362C1F");
-    public static readonly Vector4 LineRow = Hex("#2A2219");
-    public static readonly Vector4 LineDisabled = Hex("#3E3324");
+    // ---- Linien ----
+    public static Vector4 LineFrame => UiTheme.Active.LineFrame;
+    public static Vector4 LineControl => UiTheme.Active.LineControl;
+    public static Vector4 LineCard => UiTheme.Active.LineCard;
+    public static Vector4 LineSubtle => UiTheme.Active.LineSubtle;
+    public static Vector4 LineRow => UiTheme.Active.LineRow;
+    public static Vector4 LineDisabled => UiTheme.Active.LineDisabled;
 
-    // ---- Text (Abschnitt 2) ----
-    public static readonly Vector4 TextHeading = Hex("#F6E9C8");
-    public static readonly Vector4 TextPrimary = Hex("#F1E6CF");
-    public static readonly Vector4 TextCardTitle = Hex("#E9D7AE");
-    public static readonly Vector4 TextValue = Hex("#E2D3B2");
-    public static readonly Vector4 TextSecondary = Hex("#C2B396");
-    public static readonly Vector4 TextTertiary = Hex("#B8A88A");
-    public static readonly Vector4 TextMuted = Hex("#A8987A");
-    public static readonly Vector4 TextDim = Hex("#8A7B62");
-    public static readonly Vector4 TextDisabled = Hex("#6E604A");
-    public static readonly Vector4 TextOnAccent = Hex("#1A1208");
+    // ---- Text ----
+    public static Vector4 TextHeading => UiTheme.Active.TextHeading;
+    public static Vector4 TextPrimary => UiTheme.Active.TextPrimary;
+    public static Vector4 TextCardTitle => UiTheme.Active.TextCardTitle;
+    public static Vector4 TextValue => UiTheme.Active.TextValue;
+    public static Vector4 TextSecondary => UiTheme.Active.TextSecondary;
+    public static Vector4 TextTertiary => UiTheme.Active.TextTertiary;
+    public static Vector4 TextMuted => UiTheme.Active.TextMuted;
+    public static Vector4 TextDim => UiTheme.Active.TextDim;
+    public static Vector4 TextDisabled => UiTheme.Active.TextDisabled;
+    public static Vector4 TextOnAccent => UiTheme.Active.TextOnAccent;
 
-    // ---- Akzent und Status (Abschnitt 2) ----
+    // ---- Akzent und Status ----
     public static readonly Vector4 AccentGold = Hex("#D4A94F");
     public static readonly Vector4 AccentEmerald = Hex("#5FB98A");
     public static readonly Vector4 AccentArcane = Hex("#9C8CF0");
     public static readonly Vector4 AccentEmber = Hex("#E0785A");
 
-    /// <summary>Aktuell eingestellte Akzentfarbe (Standard: Gold) - siehe Abschnitt 1 "Akzentfarbe einstellbar".</summary>
-    public static Vector4 Accent { get; set; } = AccentGold;
+    /// <summary>Aktuell eingestellte Akzentfarbe (Standard: Gold) - weitergeleitet auf UiTheme.Active.Accent, damit ein Wechsel hier UND im Kit konsistent bleibt.</summary>
+    public static Vector4 Accent
+    {
+        get => UiTheme.Active.Accent;
+        set => UiTheme.Active.Accent = value;
+    }
 
-    public static readonly Vector4 OkFg = Hex("#9BD3A2");
-    public static readonly Vector4 OkBg = Hex("#1C2A1D");
-    public static readonly Vector4 OkLine = Hex("#35513A");
-    public static readonly Vector4 WarnFg = Hex("#E9C46A");
-    public static readonly Vector4 WarnBg = Hex("#30271A");
-    public static readonly Vector4 WarnLine = Hex("#5C4A26");
-    public static readonly Vector4 ErrFg = Hex("#EE9A86");
-    public static readonly Vector4 ErrBg = Hex("#331C17");
-    public static readonly Vector4 ErrLine = Hex("#5A2E26");
+    public static Vector4 OkFg => UiTheme.Active.OkFg;
+    public static Vector4 OkBg => UiTheme.Active.OkBg;
+    public static Vector4 OkLine => UiTheme.Active.OkLine;
+    public static Vector4 WarnFg => UiTheme.Active.WarnFg;
+    public static Vector4 WarnBg => UiTheme.Active.WarnBg;
+    public static Vector4 WarnLine => UiTheme.Active.WarnLine;
+    public static Vector4 ErrFg => UiTheme.Active.ErrFg;
+    public static Vector4 ErrBg => UiTheme.Active.ErrBg;
+    public static Vector4 ErrLine => UiTheme.Active.ErrLine;
     public static readonly Vector4 TooltipLine = Hex("#8A6E3A");
 
-    // ---- Changelog-Seite ("FIXED"-Tag - NEW/IMPROVED/REMOVED decken sich bereits exakt mit
-    // Ok/Warn/Err oben, nur FIXED (blau) kommt sonst nirgends vor). ----
-    public static readonly Vector4 InfoBg = Hex("#18242E");
-    public static readonly Vector4 InfoLine = Hex("#2C4458");
+    // "FIXED"-Tag (Changelog) / Log-Info-Level: #9CC4E4/#18242E/#2C4458 sind exakt UiTheme.Active.
+    // InfoFg/InfoBg/InfoLine - Aufrufstellen zeigen jetzt direkt dorthin (keine eigenen Tokens mehr).
 
-    // ---- Log-Seite (Abschnitt 4/6 des Log-DESIGN_SPEC) - Info/Critical kommen in keiner anderen
-    // Seite vor, daher keine passenden Tokens oben wiederverwendbar. ----
-    public static readonly Vector4 LogInfoFg = Hex("#9CC4E4");
+    // ---- Log-Seite: Critical-Level kommt in keiner anderen Seite vor, kein Kit-Äquivalent. ----
     public static readonly Vector4 LogCritFg = Hex("#F06A7A");
 
-    // ---- Typ-Etiketten (Abschnitt 2) ----
+    // ---- Typ-Etiketten ----
     public static readonly Vector4 MountBadgeBg = Hex("#3A2F1E");
     public static readonly Vector4 MountBadgeFg = Hex("#E9C46A");
     public static readonly Vector4 MinionBadgeBg = Hex("#26223A");
     public static readonly Vector4 MinionBadgeFg = Hex("#C3B8F5");
 
-    // ---- Abstände und Formen (Abschnitt 4) ----
+    // ---- Abstände und Formen ----
     public const float OverlayWidth = 450f;
     public const float OverlayPaddingX = 14f;
     public const float OverlayRowGap = 2.5f;
-    public const float SidebarWidth = 236f;
+    public const float SidebarWidth = UiMetrics.SidebarWidth;
 
-    public const float RoundingOverlay = 6f;
-    public const float RoundingCard = 6f;
+    public const float RoundingOverlay = UiMetrics.OverlayRadius;
+    public const float RoundingCard = UiMetrics.CardRadius;
+
+    /// <summary>Bewusst NICHT auf UiMetrics.ControlRadius (3f) umgebogen - Codex nutzt seit jeher 3.5f
+    /// an dieser einen Stelle (Nav-Item-Auswahl); die übrigen ~15 Badge-/Chip-Stellen im Projekt
+    /// nutzen ohnehin einen eigenen 3f-Literal statt dieser Konstante (siehe Bestandsaufnahme) - die
+    /// Vereinheitlichung ist eine offene, separate Entscheidung.</summary>
     public const float RoundingControl = 3.5f;
-    public const float RoundingWindow = 8f;
 
-    /// <summary>Zierecken in jeder Fensterecke (Abschnitt 4) - Länge/Dicke/Randabstand für Overlay bzw. Menü.</summary>
-    public const float CornerLenOverlay = 10f;
-    public const float CornerThickOverlay = 1.5f;
-    public const float CornerInsetOverlay = 4f;
-    public const float CornerLenMenu = 18f;
-    public const float CornerThickMenu = 2f;
-    public const float CornerInsetMenu = 6f;
+    public const float RoundingWindow = UiMetrics.WindowRadius;
 
-    /// <summary>Breite des Trenn-Ornaments unter Seitentiteln (Abschnitt 4).</summary>
-    public const float DividerOrnamentWidth = 160f;
+    /// <summary>Zierecken in jeder Fensterecke - Länge/Dicke/Randabstand für Overlay bzw. Menü.</summary>
+    public const float CornerLenOverlay = UiMetrics.CornerLenOverlay;
+    public const float CornerThickOverlay = UiMetrics.CornerThickOverlay;
+    public const float CornerInsetOverlay = UiMetrics.CornerInsetOverlay;
+    public const float CornerLenMenu = UiMetrics.CornerLenMenu;
+    public const float CornerThickMenu = UiMetrics.CornerThickMenu;
+    public const float CornerInsetMenu = UiMetrics.CornerInsetMenu;
 
-    // ---- Schriften (Abschnitt 3) ----
-    private static IFontAtlas Atlas => Plugin.PluginInterface.UiBuilder.FontAtlas;
-    private static float ScaledPx(float px) => px * ImGuiHelpers.GlobalScale;
+    /// <summary>Breite des Trenn-Ornaments unter Seitentiteln.</summary>
+    public const float DividerOrnamentWidth = UiMetrics.DividerOrnamentWidth;
 
-    private static string FontPath(string fileName) =>
-        System.IO.Path.Combine(Plugin.PluginInterface.AssemblyLocation.DirectoryName!, "Data", "Fonts", fileName);
+    // Die beiden Ornament-Zeichner (goldene L-Striche in Menü-/Overlay-Größe) - siehe
+    // DrawCornerOrnaments weiter unten.
+    private static readonly CodexOrnaments MenuOrnaments = new(CornerLenMenu, CornerThickMenu);
+    private static readonly CodexOrnaments OverlayOrnaments = new(CornerLenOverlay, CornerThickOverlay);
 
-    /// <summary>
-    /// Baut ein Font-Handle aus einer lokalen TTF-Datei - mergeCjk=true merged zusätzlich Dalamuds
-    /// gebündelte Noto-Sans-CJK-Schrift als Fallback für japanische Glyphen (Abschnitt 3: "Japanisch
-    /// (Fallback)"), eigene Schriftdateien decken nur lateinische Glyphen ab. Der Merge-Schritt ist
-    /// bewusst in ein eigenes try/catch gepackt: scheitert NUR er (z.B. CJK-Asset von Dalamud gerade
-    /// nicht bereit), soll das die eigentliche lateinische Schrift nicht mit zu Fall bringen - sonst
-    /// bliebe das komplette Handle dauerhaft "nicht verfügbar" und JEDER Text fiele auf die
-    /// ImGui-Standardschrift zurück (Nutzer-Report: Schriftarten/-größen im Overlay passen nicht zum
-    /// Entwurf).
-    ///
-    /// Nutzer-Report "Rendern des Menüs dauert über 1 Minute": der CJK-Merge rastert Dalamuds
-    /// komplette Noto-Sans-CJK-Schrift (mehrere tausend Glyphen) NEU, einmal PRO Handle - bei inzwischen
-    /// ~70 verschiedenen (Datei, Größe)-Kombinationen in diesem Theme war das der dominante Anteil der
-    /// Font-Atlas-Bauzeit beim Plugin-Start. mergeCjk ist daher jetzt standardmäßig AUS und wird NUR
-    /// für die Handles auf true gesetzt, die tatsächlich rohe Spieldaten anzeigen (Item-/Zonen-/
-    /// Händler-/Währungsnamen, die bei japanischem Spielclient japanische Zeichen enthalten können) -
-    /// alle reinen UI-Beschriftungen dieses Plugins kommen ausschließlich aus Loc.T(de, en)/
-    /// Loc.TypeName, sind also NIE japanisch und brauchen den Fallback nicht.
-    /// </summary>
+    // ---- Schriften - Aufbau jetzt über PluginUiKit.UiFonts.BuildHandle (identische Atlas-/CJK-
+    // Merge-Logik, siehe dessen Kommentar) statt einer eigenen Implementierung. ----
     private static IFontHandle BuildHandle(string fileName, float sizePx, bool mergeCjk = false) =>
-        Atlas.NewDelegateFontHandle(e => e.OnPreBuild(tk =>
-        {
-            var baseFont = tk.AddFontFromFile(FontPath(fileName), new SafeFontConfig { SizePx = ScaledPx(sizePx) });
-            if (!mergeCjk)
-                return;
-
-            try
-            {
-                tk.AddDalamudAssetFont(Dalamud.DalamudAsset.NotoSansCjkRegular, new SafeFontConfig
-                {
-                    SizePx = ScaledPx(sizePx),
-                    MergeFont = baseFont,
-                });
-            }
-            catch (Exception ex)
-            {
-                Plugin.Log.Warning(ex, $"[CodexTheme] Japanisch-Fallback für {fileName} konnte nicht gemergt werden - Schrift bleibt ohne CJK-Fallback.");
-            }
-        }));
+        UiFonts.BuildHandle(fileName, sizePx, mergeCjk);
 
     private static IFontHandle? cinzelTitleOverlay;
     private static IFontHandle? cinzelTitleMenu;
@@ -231,6 +207,13 @@ public static class CodexTheme
     /// <summary>Erklärtext unter einem BeginDropdownRow-Label (Nutzervorgabe: +3px gegenüber FontBodySmall) - Alegreya Sans, 17px.</summary>
     public static IFontHandle FontDropdownCaption => alegreyaSansDropdownCaption ??= BuildHandle("AlegreyaSans-Regular.ttf", 17f);
 
+    private static IFontHandle? alegreyaOverlayStatusText;
+
+    /// <summary>Automation-Statuszeile im neuen Overlay (z.B. "Laufe zu..."/"Walking to...", siehe CodexOverlayWindow.
+    /// DrawAutomationStatusText) - Nutzervorgabe: +2px gegenüber FontBodySmall, betrifft NUR diese eine Zeile.
+    /// Alegreya Sans, 16px.</summary>
+    public static IFontHandle FontOverlayStatusText => alegreyaOverlayStatusText ??= BuildHandle("AlegreyaSans-Regular.ttf", 16f);
+
     /// <summary>Fließtext/Knöpfe/Listen Medium - Alegreya Sans 18px (Abschnitt 3, im Spiel für den Menü-Navigationspunkt von 13px erhöht).</summary>
     public static IFontHandle FontBodyMedium => alegreyaSansMedium ??= BuildHandle("AlegreyaSans-Medium.ttf", 18f);
 
@@ -243,11 +226,11 @@ public static class CodexTheme
     // Nutzer-Feedback: eigenständig von FontBody/FontBodyBold gelöst und auf 14px vergrößert - die
     // beiden bleiben bei 13px für den Rest des Overlays (z.B. Item-Liste), nur die Auto-Knöpfe
     // sollen größer werden.
-    /// <summary>Label der Auto-Knöpfe - Alegreya Sans Bold, 14px (im Spiel angepasst statt 13px).</summary>
-    public static IFontHandle FontAutoButtonLabel => alegreyaAutoButtonBold ??= BuildHandle("AlegreyaSans-Bold.ttf", 14f);
+    /// <summary>Label der Auto-Knöpfe - Alegreya Sans Bold, 16px (Nutzervorgabe: nochmal +2px, war 14px).</summary>
+    public static IFontHandle FontAutoButtonLabel => alegreyaAutoButtonBold ??= BuildHandle("AlegreyaSans-Bold.ttf", 16f);
 
-    /// <summary>Zahl der Auto-Knöpfe - Alegreya Sans Regular, 14px (im Spiel angepasst statt 13px).</summary>
-    public static IFontHandle FontAutoButtonCount => alegreyaAutoButtonRegular ??= BuildHandle("AlegreyaSans-Regular.ttf", 14f);
+    /// <summary>Zahl der Auto-Knöpfe - Alegreya Sans Regular, 16px (Nutzervorgabe: nochmal +2px, war 14px).</summary>
+    public static IFontHandle FontAutoButtonCount => alegreyaAutoButtonRegular ??= BuildHandle("AlegreyaSans-Regular.ttf", 16f);
 
     /// <summary>Untertitel Menü - Alegreya Italic 15px (Abschnitt 3).</summary>
     public static IFontHandle FontSubtitleItalic => alegreyaItalic ??= BuildHandle("AlegreyaItalic.ttf", 15f);
@@ -331,6 +314,21 @@ public static class CodexTheme
 
     /// <summary>Zähler-/Sortierzeile der Datenbank-Seite ("X von Y Einträgen", "Sortiert nach ...") - Alegreya Sans Regular, 16px (von FontBody +3px gelöst, das auch anderswo gebraucht wird).</summary>
     public static IFontHandle FontDatabaseCountRow => alegreyaDatabaseCountRow ??= BuildHandle("AlegreyaSans-Regular.ttf", 16f);
+
+    private static IFontHandle? alegreyaOrderPosition;
+
+    /// <summary>Positionsnummer je Zeile auf der "Order"-Seite - Alegreya Sans Bold, 13px.</summary>
+    public static IFontHandle FontOrderPosition => alegreyaOrderPosition ??= BuildHandle("AlegreyaSans-Bold.ttf", 13f);
+
+    private static IFontHandle? alegreyaOrderName;
+
+    /// <summary>Kategoriename je Zeile auf der "Order"-Seite - Alegreya Sans Bold, 15px.</summary>
+    public static IFontHandle FontOrderName => alegreyaOrderName ??= BuildHandle("AlegreyaSans-Bold.ttf", 15f);
+
+    private static IFontHandle? alegreyaOrderHint;
+
+    /// <summary>"Drag ⠿ or use the arrows"-Hinweis im Kartenkopf der "Order"-Seite - Alegreya Sans Regular, 12px.</summary>
+    public static IFontHandle FontOrderHint => alegreyaOrderHint ??= BuildHandle("AlegreyaSans-Regular.ttf", 12f);
 
     private static IFontHandle? alegreyaBlacklistTypeBadge;
 
@@ -593,6 +591,19 @@ public static class CodexTheme
     /// <summary>Menü-Logo (Abschnitt 6) - "CODEX"-Schriftzug - Cinzel Bold 26px (im Spiel von 21px erhöht).</summary>
     public static IFontHandle FontSidebarBrandLarge => cinzelSidebarBrandLarge ??= BuildHandle("Cinzel-Bold.ttf", 26f);
 
+    private static IFontHandle? cinzelCollapsedBrandSmall;
+    private static IFontHandle? cinzelCollapsedBrandLarge;
+    private static IFontHandle? alegreyaCollapsedPageLabel;
+
+    /// <summary>Eingeklappte Mini-Leiste (Nutzeranforderung) - "THE EXPLORER'S", Cinzel 10px.</summary>
+    public static IFontHandle FontCollapsedBrandSmall => cinzelCollapsedBrandSmall ??= BuildHandle("Cinzel.ttf", 10f);
+
+    /// <summary>Eingeklappte Mini-Leiste (Nutzeranforderung) - "Codex", Cinzel Bold 19px.</summary>
+    public static IFontHandle FontCollapsedBrandLarge => cinzelCollapsedBrandLarge ??= BuildHandle("Cinzel-Bold.ttf", 19f);
+
+    /// <summary>Eingeklappte Mini-Leiste (Nutzeranforderung) - " · {Seitenname}", Alegreya Sans Medium 13px.</summary>
+    public static IFontHandle FontCollapsedPageLabel => alegreyaCollapsedPageLabel ??= BuildHandle("AlegreyaSans-Medium.ttf", 13f);
+
     /// <summary>
     /// Baut alle Font-Handles schon beim Plugin-Start an, statt erst beim ersten Zeichnen des neuen
     /// Overlays (Nutzer-Report: beim Öffnen sah man kurz die ImGui-Standardschrift, bis der
@@ -605,11 +616,15 @@ public static class CodexTheme
         _ = FontTitleOverlay;
         _ = FontTitleMenu;
         _ = FontCardTitle;
+        _ = FontOrderPosition;
+        _ = FontOrderName;
+        _ = FontOrderHint;
         _ = FontZoneName;
         _ = FontSectionLabel;
         _ = FontBody;
         _ = FontBodySmall;
         _ = FontDropdownCaption;
+        _ = FontOverlayStatusText;
         _ = FontBodyMedium;
         _ = FontBodyBold;
         _ = FontSubtitleItalic;
@@ -638,6 +653,9 @@ public static class CodexTheme
         _ = FontTypeBadge;
         _ = FontSidebarBrandSmall;
         _ = FontSidebarBrandLarge;
+        _ = FontCollapsedBrandSmall;
+        _ = FontCollapsedBrandLarge;
+        _ = FontCollapsedPageLabel;
         _ = FontBlacklistTypeBadge;
         _ = FontBlacklistBody;
         _ = FontBlacklistButtonLabel;
@@ -734,155 +752,39 @@ public static class CodexTheme
         ImGui.PopStyleVar(5);
     }
 
-    /// <summary>
-    /// Zierecken (Abschnitt 4) - zwei kurze Akzentlinien je Fensterecke, die ein L bilden. Zeichnet
-    /// über das aktuelle Fenster-Rechteck (ImGui.GetWindowPos()/GetWindowSize()).
-    /// </summary>
-    public static void DrawCornerOrnaments(float length, float thickness, float inset, Vector4? color = null)
-    {
-        var col = ImGui.GetColorU32(color ?? Accent);
-        var min = ImGui.GetWindowPos();
-        var size = ImGui.GetWindowSize();
-        var max = min + size;
-        var drawList = ImGui.GetWindowDrawList();
+    /// <summary>Zierecken in Menü-Größe (CornerLenMenu/ThickMenu) - zwei kurze Akzentlinien je Fensterecke, die ein L bilden.</summary>
+    public static void DrawMenuCornerOrnaments(float inset) => UiWidgets.DrawWindowCorners(MenuOrnaments, inset);
 
-        void Corner(Vector2 origin, Vector2 h, Vector2 v)
-        {
-            drawList.AddLine(origin, origin + h, col, thickness);
-            drawList.AddLine(origin, origin + v, col, thickness);
-        }
+    /// <summary>Hintergrund+Eckverzierungen der eingeklappten Menü-Mini-Leiste (Nutzeranforderung) -
+    /// dieselben Eckverzierungen wie das ausgeklappte Menü (MenuOrnaments), damit beide Zustände
+    /// optisch zusammengehören.</summary>
+    public static void DrawCollapsedMenuChrome(float scale, float inset) => UiWindowControls.DrawChrome(scale, MenuOrnaments, inset, RoundingWindow);
 
-        Corner(min + new Vector2(inset, inset), new Vector2(length, 0f), new Vector2(0f, length));
-        Corner(new Vector2(max.X - inset, min.Y + inset), new Vector2(-length, 0f), new Vector2(0f, length));
-        Corner(new Vector2(min.X + inset, max.Y - inset), new Vector2(length, 0f), new Vector2(0f, -length));
-        Corner(max - new Vector2(inset, inset), new Vector2(-length, 0f), new Vector2(0f, -length));
-    }
+    /// <summary>Zierecken in Overlay-Größe (CornerLenOverlay/ThickOverlay) - zwei kurze Akzentlinien je Fensterecke, die ein L bilden.</summary>
+    public static void DrawOverlayCornerOrnaments(float inset) => UiWidgets.DrawWindowCorners(OverlayOrnaments, inset);
 
-    /// <summary>
-    /// Trenn-Ornament (Abschnitt 4) - zwei Linien (60% Deckkraft Akzent) mit kleiner Raute in der
-    /// Mitte, mittig unter dem Cursor über <see cref="DividerOrnamentWidth"/> gezeichnet.
-    /// </summary>
-    public static void DrawDividerOrnament()
-    {
-        var drawList = ImGui.GetWindowDrawList();
-        var cursor = ImGui.GetCursorScreenPos();
-        var y = cursor.Y + 6f;
-        var col = ImGui.GetColorU32(Accent with { W = 0.6f });
-        const float diamond = 4f;
-        var halfLine = (DividerOrnamentWidth - diamond * 2f - 8f) / 2f;
+    /// <summary>Trenn-Ornament - zwei Linien mit kleiner Raute in der Mitte, mittig unter dem Cursor über DividerOrnamentWidth gezeichnet.</summary>
+    public static void DrawDividerOrnament() => UiWidgets.DrawDividerOrnament(MenuOrnaments, 1f);
 
-        var left = cursor.X;
-        drawList.AddLine(new Vector2(left, y), new Vector2(left + halfLine, y), col, 1f);
-        var center = new Vector2(left + halfLine + 4f + diamond / 2f, y);
-        drawList.AddCircleFilled(center, diamond / 2f, col, 4);
-        var right = center.X + diamond / 2f + 4f;
-        drawList.AddLine(new Vector2(right, y), new Vector2(right + halfLine, y), col, 1f);
+    /// <summary>Zeichnet Text mit dunklem Schatten (ab ~70% Overlay-Transparenz).</summary>
+    public static void TextShadowed(string text, Vector4 color, bool shadow) => UiWidgets.TextShadowed(text, color, shadow);
 
-        ImGui.Dummy(new Vector2(DividerOrnamentWidth, 12f));
-    }
+    /// <summary>Wie <see cref="TextShadowed"/>, aber für Text, der bereits direkt per drawList.AddText an einer manuell berechneten Position gezeichnet wird.</summary>
+    public static void DrawTextShadowed(ImDrawListPtr drawList, Vector2 pos, Vector4 color, string text, bool shadow) =>
+        UiWidgets.DrawTextShadowed(drawList, pos, color, text, shadow);
 
-    /// <summary>
-    /// Zeichnet Text mit dunklem Schatten (Abschnitt 5.9, ab ~70% Overlay-Transparenz) - 1px in 4
-    /// Richtungen versetzt in Schwarz (~80% Deckkraft), danach normal darüber.
-    /// </summary>
-    public static void TextShadowed(string text, Vector4 color, bool shadow)
-    {
-        if (!shadow)
-        {
-            ImGui.TextColored(color, text);
-            return;
-        }
+    /// <summary>Zeichnet Text mit zusätzlichem Zeichenabstand (Letter-Spacing).</summary>
+    public static void DrawSpacedText(string text, Vector4 color, float spacing) => UiWidgets.DrawSpacedText(text, color, spacing);
 
-        var pos = ImGui.GetCursorScreenPos();
-        var drawList = ImGui.GetWindowDrawList();
-        var shadowCol = ImGui.GetColorU32(new Vector4(0f, 0f, 0f, 0.8f));
-        foreach (var offset in stackalloc Vector2[] { new(-1, 0), new(1, 0), new(0, -1), new(0, 1) })
-            drawList.AddText(pos + offset, shadowCol, text);
-        drawList.AddText(pos, ImGui.GetColorU32(color), text);
-        ImGui.Dummy(ImGui.CalcTextSize(text));
-    }
-
-    /// <summary>
-    /// Wie <see cref="TextShadowed"/>, aber für Text, der bereits direkt per drawList.AddText an einer
-    /// manuell berechneten Position gezeichnet wird (Auto-Knöpfe, Reiter, Filter-Knöpfe, Typ-Etikett -
-    /// siehe CodexOverlayWindow), statt über den ImGui-Cursor.
-    /// </summary>
-    public static void DrawTextShadowed(ImDrawListPtr drawList, Vector2 pos, Vector4 color, string text, bool shadow)
-    {
-        if (shadow)
-        {
-            var shadowCol = ImGui.GetColorU32(new Vector4(0f, 0f, 0f, 0.8f));
-            foreach (var offset in stackalloc Vector2[] { new(-1, 0), new(1, 0), new(0, -1), new(0, 1) })
-                drawList.AddText(pos + offset, shadowCol, text);
-        }
-
-        drawList.AddText(pos, ImGui.GetColorU32(color), text);
-    }
-
-    /// <summary>
-    /// Zeichnet Text mit zusätzlichem Zeichenabstand (Versalien-Spaltennamen der Datenbank-Tabelle,
-    /// ~0.08em) - ImGui kennt kein natives Letter-Spacing, daher Zeichen für Zeichen über die
-    /// Draw-List gezeichnet. Zeichnet AM AKTUELLEN Cursor (wie ein normales ImGui-Widget) und rückt
-    /// den Cursor um die tatsächlich gezeichnete Breite vor (per Dummy), erwartet also die gewünschte
-    /// Schrift bereits gepusht (siehe Aufrufer).
-    /// </summary>
-    public static void DrawSpacedText(string text, Vector4 color, float spacing)
-    {
-        var drawList = ImGui.GetWindowDrawList();
-        var pos = ImGui.GetCursorScreenPos();
-        var height = ImGui.GetTextLineHeight();
-        var x = pos.X;
-        foreach (var ch in text)
-        {
-            var s = ch.ToString();
-            drawList.AddText(new Vector2(x, pos.Y), ImGui.GetColorU32(color), s);
-            x += ImGui.CalcTextSize(s).X + spacing;
-        }
-
-        ImGui.Dummy(new Vector2(MathF.Max(0f, x - pos.X - spacing), height));
-    }
-
-    /// <summary>Abschnitts-Label (Abschnitt 5.4/6 etc.) - Versalien, Cinzel SemiBold, leicht gesperrt gesetzt.</summary>
+    /// <summary>Abschnitts-Label - Versalien, Cinzel SemiBold, leicht gesperrt gesetzt.</summary>
     public static void SectionLabel(string text, bool shadow = false)
     {
         using (FontSectionLabel.Push())
-            TextShadowed(text.ToUpperInvariant(), TextTertiary, shadow);
+            UiWidgets.TextShadowed(text.ToUpperInvariant(), TextTertiary, shadow);
     }
 
-    /// <summary>
-    /// Schalter (Abschnitt 4) - 42x22px, selbst gezeichnet und per InvisibleButton klickbar. An:
-    /// Akzent-Fläche mit dunklem Knopf (TextOnAccent). Aus: #2A2219 mit Rahmen LineControl und Knopf
-    /// #A8987A (TextMuted). Gibt true zurück, wenn gerade umgeschaltet wurde - der Aufrufer liest den
-    /// NEUEN Wert dann selbst aus "value" (ref), ändert ihn aber NICHT selbst (siehe CodexMenuWindow-
-    /// Vorbild: der Aufrufer speichert erst nach dem Umschalten in die Configuration).
-    /// </summary>
-    public static bool Toggle(string id, ref bool value, float scale)
-    {
-        var size = new Vector2(42f * scale, 22f * scale);
-        var cursor = ImGui.GetCursorScreenPos();
-        var clicked = ImGui.InvisibleButton(id, size);
-        var hovered = ImGui.IsItemHovered();
-
-        var drawList = ImGui.GetWindowDrawList();
-        var rounding = size.Y / 2f;
-        var bg = value ? Accent : Hex("#2A2219");
-        drawList.AddRectFilled(cursor, cursor + size, ImGui.GetColorU32(bg), rounding);
-        if (!value)
-            drawList.AddRect(cursor, cursor + size, ImGui.GetColorU32(LineControl), rounding);
-
-        // Nutzervorgabe: dezenter Hover-Effekt (wie bei den Auto-Knöpfen im Overlay).
-        if (hovered)
-            drawList.AddRectFilled(cursor, cursor + size, ImGui.GetColorU32(new Vector4(1f, 1f, 1f, 0.08f)), rounding);
-
-        var knobRadius = size.Y / 2f - 3f * scale;
-        var knobX = value ? cursor.X + size.X - size.Y / 2f : cursor.X + size.Y / 2f;
-        var knobColor = value ? TextOnAccent : TextMuted;
-        drawList.AddCircleFilled(new Vector2(knobX, cursor.Y + size.Y / 2f), knobRadius, ImGui.GetColorU32(knobColor));
-
-        if (clicked)
-            value = !value;
-        return clicked;
-    }
+    /// <summary>Schalter, 42x22px, selbst gezeichnet und per InvisibleButton klickbar.</summary>
+    public static bool Toggle(string id, ref bool value, float scale) => UiWidgets.Toggle(id, ref value, scale);
 
     /// <summary>
     /// Schieberegler 0..1 mit golden einfärbendem Füllbalken (Nutzervorgabe: "soll sich gold füllen,
@@ -926,272 +828,43 @@ public static class CodexTheme
         return changed;
     }
 
-    // Siehe BeginCard/EndCard - Karten haben beliebig viele Zeilen (Schalter/Combos), eine feste oder
-    // per BeginChild "AutoResizeY" (das dieses ältere ImGui-Binding nicht kennt, siehe fehlendes
-    // ImGuiChildFlags) automatisch mitwachsende Höhe gibt es hier nicht. Stattdessen das verbreitete
-    // ImGui-Muster "Hintergrund hinter eine Gruppe nachträglich einziehen": der Kartenhintergrund wird
-    // über einen eigenen Draw-Kanal (ChannelsSplit) VOR dem eigentlichen Inhalt gezeichnet, aber erst
-    // NACH EndCard() (wenn die tatsächliche Höhe feststeht) per ChannelsMerge sichtbar - der Inhalt
-    // selbst läuft dabei ganz normal über den ImGui-Cursor (Indent/Dummy), nur eben auf einem anderen
-    // Kanal, daher keine Cursor-Sondertricks nötig.
-    private static Vector2 cardOrigin;
-    private static float cardWidth;
-    private static float cardPaddingX;
-    private static float cardPaddingY;
-    private static bool cardAccentBar;
+    /// <summary>Karte mit inhaltsabhängiger Höhe - BgCard-Hintergrund, LineCard-Rahmen. Mit EndCard() beenden.</summary>
+    public static void BeginCard(float scale, bool accentBar = false, float rightMargin = 0f, float? width = null) =>
+        UiWidgets.BeginCard(scale, accentBar, rightMargin, width);
 
-    /// <summary>
-    /// Karte im Menü (Abschnitt 6) - BgCard-Hintergrund, LineCard-Rahmen, Innenabstand, Höhe passt
-    /// sich dem Inhalt an. Mit EndCard() beenden. "accentBar" (Nutzeranforderung, Plugins-Seite:
-    /// ausgewähltes Kampf-Plugin) zeichnet einen 2px goldenen Strich ganz links an der Karte, über die
-    /// VOLLE Kartenhöhe (inkl. Innenabstand oben/unten) - deshalb erst in EndCard gezeichnet, wenn die
-    /// tatsächliche Höhe feststeht, nicht vom Aufrufer selbst (der kennt nur die Zeilenhöhe, nicht die
-    /// der ganzen Karte).
-    /// </summary>
-    /// <summary>
-    /// "rightMargin" (Nutzervorgabe: Debug-Seite soll denselben rechten Randabstand wie die
-    /// Statistics-Seite einhalten) begrenzt die Kartenbreite optional - ohne Angabe nutzt die Karte
-    /// wie bisher die volle verfügbare Breite. "width" überschreibt die Breite komplett explizit (für
-    /// Karten, die NICHT die volle Zeilenbreite einnehmen, z.B. zwei Karten nebeneinander ohne
-    /// ImGui.BeginTable, siehe Windows.CodexMenuWindow.DrawDebugPage-Kommentar: ImGui.
-    /// GetContentRegionAvail() kennt eine solche manuell aufgeteilte Spaltenbreite nicht von selbst).
-    /// </summary>
-    public static void BeginCard(float scale, bool accentBar = false, float rightMargin = 0f, float? width = null)
-    {
-        cardPaddingX = 16f * scale;
-        cardPaddingY = 14f * scale;
-        cardOrigin = ImGui.GetCursorScreenPos();
-        cardWidth = width ?? (ImGui.GetContentRegionAvail().X - rightMargin);
-        cardAccentBar = accentBar;
+    public static void EndCard() => UiWidgets.EndCard();
 
-        var drawList = ImGui.GetWindowDrawList();
-        drawList.ChannelsSplit(2);
-        drawList.ChannelsSetCurrent(1);
+    /// <summary>Innerer Innenabstand der aktuell offenen Karte (siehe BeginCard).</summary>
+    public static float CardPaddingX => UiWidgets.CardPaddingX;
 
-        ImGui.Indent(cardPaddingX);
-        ImGui.Dummy(new Vector2(0f, cardPaddingY));
-    }
+    /// <summary>Oberer/unterer Innenabstand der aktuell offenen Karte (siehe BeginCard).</summary>
+    public static float CardPaddingY => UiWidgets.CardPaddingY;
 
-    public static void EndCard()
-    {
-        ImGui.Dummy(new Vector2(0f, cardPaddingY));
-        ImGui.Unindent(cardPaddingX);
+    /// <summary>Kartentitel - wie SectionLabel, darunter eine Trennlinie. "lineWidth" begrenzt die Linie optional.</summary>
+    public static void CardGroupLabel(string text, float scale, float? lineWidth = null) =>
+        UiWidgets.CardGroupLabel(text, scale, lineWidth, FontCardTitle);
 
-        var min = cardOrigin;
-        var max = new Vector2(cardOrigin.X + cardWidth, ImGui.GetCursorScreenPos().Y);
+    /// <summary>Eine Einstellungszeile: Label links, Schalter rechtsbündig, optionaler Erklärtext darunter.
+    /// Eigene Schriftarten explizit übergeben statt UiWidgets.ToggleRow seine Kit-Standardschriften nehmen zu lassen
+    /// (sonst würde das innere Push in UiWidgets ein äußeres CodexTheme-Font-Push überschreiben - Codex' Schriftgrößen weichen von den Kit-Defaults ab).</summary>
+    public static bool ToggleRow(string id, string label, ref bool value, float scale, string? caption = null) =>
+        UiWidgets.ToggleRow(id, label, ref value, scale, caption, FontMenuFieldLabel, FontDropdownCaption);
 
-        var drawList = ImGui.GetWindowDrawList();
-        drawList.ChannelsSetCurrent(0);
-        drawList.AddRectFilled(min, max, ImGui.GetColorU32(BgCard), RoundingCard);
-        drawList.AddRect(min, max, ImGui.GetColorU32(LineCard), RoundingCard);
-        if (cardAccentBar)
-            drawList.AddRectFilled(min, new Vector2(min.X + 2f, max.Y), ImGui.GetColorU32(Accent));
-        drawList.ChannelsMerge();
-    }
-
-    /// <summary>Innerer Innenabstand der aktuell offenen Karte (siehe BeginCard) - für rechtsbündige Breiten per ImGui.SetNextItemWidth(-CardPaddingX), damit Combos auch rechts symmetrisch Abstand zum Kartenrand halten.</summary>
-    public static float CardPaddingX => cardPaddingX;
-
-    /// <summary>Oberer/unterer Innenabstand der aktuell offenen Karte (siehe BeginCard) - z.B. für die Changelog-Seite, die die Y-Position der Zeitleisten-Raute auf die Kartenkopfzeile ausrichtet, bevor die Karte selbst gezeichnet wird.</summary>
-    public static float CardPaddingY => cardPaddingY;
-
-    /// <summary>
-    /// Kartentitel (Abschnitt 6, z.B. "SPRACHE"/"OVERLAY") - wie SectionLabel, darunter eine über die
-    /// volle Kartenbreite durchgehende Trennlinie (Nutzervorgabe laut Entwurfsbild - fehlte vorher).
-    /// </summary>
-    /// <summary>
-    /// lineWidth: optionale Breite der Trennlinie unter dem Titel, falls sie NICHT die volle
-    /// Kartenbreite einnehmen soll - Nutzervorgabe für die Sprachkarte, deren Combo wegen ihres
-    /// rechten Randabstands kürzer als die Karte ist, damit die Linie exakt dort endet, wo die Combo
-    /// endet, statt optisch darüber hinauszuragen.
-    /// </summary>
-    public static void CardGroupLabel(string text, float scale, float? lineWidth = null)
-    {
-        using (FontCardTitle.Push())
-            TextShadowed(text.ToUpperInvariant(), TextTertiary, false);
-        ImGui.Dummy(new Vector2(0f, 8f * scale));
-
-        var cursor = ImGui.GetCursorScreenPos();
-        var width = lineWidth ?? ImGui.GetContentRegionAvail().X;
-        ImGui.GetWindowDrawList().AddLine(cursor, cursor + new Vector2(width, 0f), ImGui.GetColorU32(LineSubtle), 1f);
-
-        ImGui.Dummy(new Vector2(0f, 10f * scale));
-    }
-
-    /// <summary>
-    /// Eine Einstellungszeile: Label links, Schalter rechtsbündig, optionaler Erklärtext darunter
-    /// (immer sichtbar, kein Hover-Tooltip mehr - Nutzeranforderung, Vorbild: BeginDropdownRow.caption).
-    /// Gibt true zurück, wenn der Schalter gerade umgeschaltet wurde.
-    /// </summary>
-    public static bool ToggleRow(string id, string label, ref bool value, float scale, string? caption = null)
-    {
-        var toggleHeight = 22f * scale;
-        var toggleWidth = 42f * scale;
-
-        var rowStartY = ImGui.GetCursorPosY();
-        using (FontMenuFieldLabel.Push())
-            ImGui.TextColored(TextPrimary, label);
-
-        // Umbruch 5px vor dem Toggle-Knopf (Nutzervorgabe), damit lange Erklärtexte nicht unter den
-        // Knopf selbst laufen.
-        if (!string.IsNullOrEmpty(caption))
-        {
-            var wrapX = ImGui.GetWindowContentRegionMax().X - toggleWidth - 25f * scale - 5f * scale;
-            using (FontDropdownCaption.Push())
-            {
-                ImGui.PushTextWrapPos(wrapX);
-                ImGui.TextColored(TextTertiary, caption);
-                ImGui.PopTextWrapPos();
-            }
-        }
-
-        var textBottomY = ImGui.GetCursorPosY();
-        var textHeight = textBottomY - rowStartY;
-
-        var toggleY = rowStartY + (textHeight - toggleHeight) / 2f;
-        // Derselbe rechte Randabstand wie bei den Dropdowns (siehe BeginDropdownRow rightMargin,
-        // Nutzervorgabe).
-        var rightX = ImGui.GetWindowContentRegionMax().X - toggleWidth - 25f * scale;
-
-        ImGui.SetCursorPos(new Vector2(rightX, toggleY));
-        var changed = Toggle(id, ref value, scale);
-
-        ImGui.SetCursorPosY(MathF.Max(textBottomY, toggleY + toggleHeight));
-        return changed;
-    }
-
-    private static IDisposable? dropdownValueFontPop;
-    private static float dropdownRowTextBottomY;
-    private static float dropdownRowComboY;
-    private static float dropdownRowComboHeight;
-
-    /// <summary>
-    /// Zeilenlayout + einheitliches Aussehen für eine Menü-Combo (Nutzeranforderung: "Sprache"-Design
-    /// für ALLE Dropdowns) - Label links, Combo rechtsbündig mit festem Randabstand, schlankere Höhe,
-    /// eigene Schriftgröße (FontMenuDropdownValue) und ein dünner Rahmen im Kartenton (LineCard). Bei
-    /// geöffnetem Dropdown bekommen die Einträge zusätzlich 5px Innenabstand (siehe EndDropdownRow).
-    /// Muss IMMER mit EndDropdownRow() abgeschlossen werden, unabhängig vom Rückgabewert (wie
-    /// ImGui.BeginCombo/EndCombo selbst nur bei geöffnetem Dropdown ein Gegenstück braucht - das
-    /// übernimmt EndDropdownRow intern).
-    /// </summary>
+    /// <summary>Zeilenlayout + einheitliches Aussehen für eine Menü-Combo. Muss IMMER mit EndDropdownRow() abgeschlossen werden.</summary>
     public static bool BeginDropdownRow(string label, string currentValueLabel, string comboId, float scale,
-        string? tooltip = null, string? caption = null, bool disabled = false, float width = 205f, float rightMargin = 25f)
-    {
-        var comboWidth = width * scale;
-
-        var rowStartY = ImGui.GetCursorPosY();
-        using (FontMenuFieldLabel.Push())
-            ImGui.TextColored(disabled ? TextDisabled : TextPrimary, label);
-        if (!string.IsNullOrEmpty(tooltip) && ImGui.IsItemHovered(disabled ? ImGuiHoveredFlags.AllowWhenDisabled : ImGuiHoveredFlags.None))
-            ImGui.SetTooltip(tooltip);
-
-        // Optionaler, immer sichtbarer Erklärtext unter dem Label (Nutzeranforderung, Vorbild:
-        // Erklärtext unter "Währungen anzeigen") - anders als "tooltip" (nur beim Hover sichtbar).
-        // Zählt mit in die Zeilenhöhe, die Combobox zentriert sich dadurch automatisch über
-        // Label+caption zusammen. Umbruch 5px vor der Combobox (Nutzervorgabe), damit lange Texte
-        // nicht unter die Combobox selbst laufen.
-        if (!string.IsNullOrEmpty(caption))
-        {
-            var wrapX = ImGui.GetWindowContentRegionMax().X - comboWidth - rightMargin * scale - 5f * scale;
-            using (FontDropdownCaption.Push())
-            {
-                ImGui.PushTextWrapPos(wrapX);
-                ImGui.TextColored(TextTertiary, caption);
-                ImGui.PopTextWrapPos();
-            }
-        }
-
-        var textBottomY = ImGui.GetCursorPosY();
-        ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(10f * scale, 9f * scale));
-        ImGui.PushStyleVar(ImGuiStyleVar.FrameBorderSize, 1f * scale);
-        ImGui.PushStyleColor(ImGuiCol.Border, LineCard);
-        dropdownValueFontPop = FontMenuDropdownValue.Push();
-
-        var comboHeight = ImGui.GetFrameHeight();
-        var comboY = rowStartY + (textBottomY - rowStartY - comboHeight) / 2f;
-        dropdownRowTextBottomY = textBottomY;
-        dropdownRowComboY = comboY;
-        dropdownRowComboHeight = comboHeight;
-
-        ImGui.SetCursorPos(new Vector2(ImGui.GetWindowContentRegionMax().X - comboWidth - rightMargin * scale, comboY));
-        ImGui.SetNextItemWidth(comboWidth);
-
-        if (disabled)
-            ImGui.BeginDisabled();
-
-        // Nutzervorgabe: der Hover-Effekt soll nicht auf dem kleinen Pfeil-Knopf der Combobox
-        // erscheinen (der intern dieselben ImGuiCol.Button-Farben wie echte Knöpfe nutzt, siehe
-        // PushStyle) - hier lokal auf "keine Füllung" zurückgesetzt, nur für den BeginCombo-Aufruf
-        // selbst (der Pfeil wird ausschließlich darin gezeichnet).
-        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0f, 0f, 0f, 0f));
-        ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0f, 0f, 0f, 0f));
-        var open = ImGui.BeginCombo(comboId, currentValueLabel);
-        ImGui.PopStyleColor(2);
-
-        if (open)
-            // +2px Innenabstand oben/unten (Nutzervorgabe) auf die bisherigen 5px.
-            ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(5f * scale, 7f * scale));
-        return open;
-    }
+        string? tooltip = null, string? caption = null, bool disabled = false, float width = 205f, float rightMargin = 25f) =>
+        UiWidgets.BeginDropdownRow(label, currentValueLabel, comboId, scale, tooltip, caption, disabled, width, rightMargin,
+            FontMenuFieldLabel, FontDropdownCaption, FontMenuDropdownValue);
 
     /// <summary>Gegenstück zu BeginDropdownRow - IMMER aufrufen, auch wenn das Dropdown gerade nicht offen ist.</summary>
-    public static void EndDropdownRow(bool wasOpen, bool disabled)
-    {
-        if (wasOpen)
-        {
-            ImGui.PopStyleVar();
-            ImGui.EndCombo();
-        }
+    public static void EndDropdownRow(bool wasOpen, bool disabled) => UiWidgets.EndDropdownRow(wasOpen, disabled);
 
-        if (disabled)
-            ImGui.EndDisabled();
+    /// <summary>Für CardGroupLabel(lineWidth:) - damit die Trennlinie unter dem Kartentitel exakt dort endet, wo ToggleRow/BeginDropdownRow ihr Steuerelement enden lassen.</summary>
+    public static float CardFieldLineWidth(float scale, float rightMargin = 25f) => UiWidgets.CardFieldLineWidth(scale, rightMargin);
 
-        dropdownValueFontPop?.Dispose();
-        dropdownValueFontPop = null;
-        ImGui.PopStyleColor();
-        ImGui.PopStyleVar(2);
-        ImGui.SetCursorPosY(MathF.Max(dropdownRowTextBottomY, dropdownRowComboY + dropdownRowComboHeight));
-    }
+    /// <summary>Feine Trennlinie innerhalb einer Karte, mit etwas vertikalem Abstand.</summary>
+    public static void CardDivider(float scale) => UiWidgets.CardDivider(scale);
 
-    /// <summary>
-    /// Für CardGroupLabel(lineWidth:) - damit die Trennlinie unter dem Kartentitel exakt dort endet,
-    /// wo ToggleRow/BeginDropdownRow ihr Steuerelement enden lassen (beide nutzen denselben 25px
-    /// rechten Randabstand, Nutzervorgabe), statt über die volle Kartenbreite zu gehen.
-    /// </summary>
-    public static float CardFieldLineWidth(float scale, float rightMargin = 25f) =>
-        ImGui.GetContentRegionAvail().X - rightMargin * scale;
-
-    /// <summary>Feine Trennlinie innerhalb einer Karte (Abschnitt 2 "LineSubtle"), mit etwas vertikalem Abstand.</summary>
-    public static void CardDivider(float scale)
-    {
-        ImGui.Dummy(new Vector2(0f, 8f * scale));
-        ImGui.PushStyleColor(ImGuiCol.Separator, LineSubtle);
-        ImGui.Separator();
-        ImGui.PopStyleColor();
-        ImGui.Dummy(new Vector2(0f, 8f * scale));
-    }
-
-    /// <summary>
-    /// Kompass-Symbol aus dem Entwurf (referenz/OverlayWidget.dc.html) nachgebaut: Kreis-Umriss plus
-    /// gefüllte Raute (Nadel) in der Akzentfarbe. Gemeinsam von Overlay-Kopfzeile (CodexOverlayWindow)
-    /// und Menü-Logo (CodexMenuWindow) genutzt, daher hier statt in einem der beiden Fenster.
-    /// </summary>
-    public static void DrawCompassIcon(float size)
-    {
-        var cursor = ImGui.GetCursorScreenPos();
-        var center = cursor + new Vector2(size / 2f, size / 2f);
-        var drawList = ImGui.GetWindowDrawList();
-        var accent = ImGui.GetColorU32(Accent);
-
-        drawList.AddCircle(center, size * 0.39f, accent, 24, 1.5f);
-
-        var r = size * 0.3f;
-        var top = center + new Vector2(0f, -r);
-        var right = center + new Vector2(r * 0.65f, 0f);
-        var bottom = center + new Vector2(0f, r);
-        var left = center + new Vector2(-r * 0.65f, 0f);
-        drawList.AddQuadFilled(top, right, bottom, left, accent);
-
-        ImGui.Dummy(new Vector2(size, size));
-    }
+    /// <summary>Kompass-Symbol: Kreis-Umriss plus gefüllte Raute (Nadel) in der Akzentfarbe. Gemeinsam von Overlay-Kopfzeile und Menü-Logo genutzt.</summary>
+    public static void DrawCompassIcon(float size) => MenuOrnaments.DrawSidebarLogo(size);
 }

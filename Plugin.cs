@@ -107,6 +107,7 @@ public sealed class Plugin : IDalamudPlugin
     public ChocobokeepAutomation ChocobokeepAutomation { get; init; }
     public TripleTriadAutomation TripleTriadAutomation { get; init; }
     public NoFlyAreaExit NoFlyAreaExit { get; init; }
+    public KuganeTowerJump KuganeTowerJump { get; init; }
 
     /// <summary>Für Klassen ohne eigene Plugin-Referenz (z.B. TripleTriadAutomation), die IsOwned/GetCurrencyAmount brauchen.</summary>
     public static Plugin Instance => instance;
@@ -389,6 +390,13 @@ public sealed class Plugin : IDalamudPlugin
         ChocobokeepAutomation = new ChocobokeepAutomation();
         TripleTriadAutomation = new TripleTriadAutomation();
         NoFlyAreaExit = new NoFlyAreaExit();
+        KuganeTowerJump = new KuganeTowerJump();
+
+        // Das Codex-Theme (Farben/Fonts/Bausteine) lebt jetzt in PluginUiKit (siehe dessen README) -
+        // CodexTheme/CodexWidgets sind nur noch eine dünne Weiterleitung darauf. Muss VOR jeder
+        // Fenstererzeugung/CodexTheme.PreloadFonts() passieren, da beides bereits Font-Handles baut.
+        PluginUiKit.UiFonts.Initialize(PluginInterface, Log);
+        PluginUiKit.UiTheme.Active = PluginUiKit.UiTheme.Codex;
 
         // Nutzeranforderung: altes Menü (MainWindow) und altes Overlay (CompactOverlayWindow)
         // vollständig entfernt - CodexMenuWindow/CodexOverlayWindow sind jetzt die einzigen Fenster,
@@ -581,6 +589,20 @@ public sealed class Plugin : IDalamudPlugin
         return territorySheet != null
                && territorySheet.TryGetRow(entry.TerritoryTypeId, out var territory)
                && territory.TerritoryIntendedUse.RowId == 0;
+    }
+
+    /// <summary>Ob die AKTUELLE Zone eine Stadt ist (TerritoryIntendedUse 0, siehe IsSightseeingFlyingRequirementMet-
+    /// Kommentar) - Nutzeranforderung: den Chocobo-Begleiter dort gar nicht erst beschwören (siehe
+    /// ChocoboCompanionSupport.NeedsSummon/Tick), da es dort weder Kämpfe noch einen Grund dafür gibt.</summary>
+    public static bool IsInCity
+    {
+        get
+        {
+            var territorySheet = DataManager.GetExcelSheet<TerritoryType>();
+            return territorySheet != null
+                   && territorySheet.TryGetRow(ClientState.TerritoryType, out var territory)
+                   && territory.TerritoryIntendedUse.RowId == 0;
+        }
     }
 
     public static unsafe bool CanFly
@@ -2196,7 +2218,10 @@ public sealed class Plugin : IDalamudPlugin
     // Je Zwischenstopp: Position + ob dieses Teilstück fliegend angeflogen werden darf (false =
     // erzwungen zu Fuß/abgemountet, z.B. für einen Durchgang wie eine Tür, durch die man nicht
     // hindurchfliegen kann) - siehe SightseeingApproachWaypoints-Kommentar.
-    public readonly record struct SightseeingApproachWaypoint(Vector3 Position, bool AllowFlying = true);
+    // Jump: springt kurz nach Losgehen zu diesem Wegpunkt (siehe SightseeingAutomation.
+    // UpdateWalkingOut) - für Zwischenstopps auf dem Rückweg/zum nächsten Punkt, die selbst eine
+    // Lücke überspringen müssen, nicht nur geradeaus laufen.
+    public readonly record struct SightseeingApproachWaypoint(Vector3 Position, bool AllowFlying = true, bool Jump = false);
 
     // Von Hand nachgetragene ZWISCHENSTOPPS (der Reihe nach abzulaufen) vor der eigentlichen
     // Zielposition (Key = Adventure-RowId) - für Punkte, bei denen selbst der über die Karten-
@@ -2242,6 +2267,14 @@ public sealed class Plugin : IDalamudPlugin
             new SightseeingApproachWaypoint(new Vector3(195.98488f, 234.7984f, 414.46854f)),
             new SightseeingApproachWaypoint(new Vector3(187.42712f, 234.38025f, 403.59232f)),
         },
+        [2162827] = new[] // Centrifugal Crystal Engine (Azys Lla) - erst zurück zu Punkt 1, dann zum Startpunkt
+        {
+            new SightseeingApproachWaypoint(new Vector3(-600.1704f, -169.31009f, -396.249f)),
+            new SightseeingApproachWaypoint(new Vector3(-604.4407f, -169f, -415.19754f)),
+        },
+        // Kugane-Punkte (Kogane Dori, The Sekiseigumi Barracks) hatten hier eigene Rückweg-Routen -
+        // auf Nutzerwunsch entfernt: in Kugane wird nach jedem Punkt stattdessen generell zum Haupt-
+        // Ätheryten teleportiert (siehe SightseeingAutomation.PostCompletionTeleportHomeTerritoryIds).
     };
 
     /// <summary>Siehe SightseeingPostCompletionWaypoints-Kommentar.</summary>
@@ -2265,6 +2298,7 @@ public sealed class Plugin : IDalamudPlugin
     // gewartet/der Emote ausgeführt wird, sonst schaltet der Punkt u.U. gar nicht frei.
     private static readonly Dictionary<uint, Vector3> SightseeingExactStandPositions = new()
     {
+        [2162804] = new Vector3(543.13043f, 219.76675f, 652.3547f), // The Fractal Continuum (Azys Lla)
     };
 
     // Ein Schritt eines Jumping Puzzles: in gerader Linie (vnavmesh Path.MoveTo, ohne Wegsuche) zu
@@ -2291,7 +2325,18 @@ public sealed class Plugin : IDalamudPlugin
     // letzten Schritts ist - dorthin wird nach der Landung noch genau gelaufen.
     // DismountAtStart = beritten (fliegend, sonst reitend) genau bis zum Startpunkt, erst dort absteigen
     // (liegt er in der Luft: senkrecht nach unten landen) und von dort aus die Schritte ablaufen.
-    public sealed record SightseeingJumpingPuzzle(Vector3 Start, SightseeingPuzzleStep[] Steps, Vector3? ExactStand = null, bool DismountAtStart = false);
+    // FallMargin: überschreibt SightseeingAutomation.PuzzleFallMargin für dieses Puzzle (null =
+    // Standardwert) - für Routen, deren Laufweg legitim kurz tiefer absackt als die vnavmesh-Gerade
+    // zwischen zwei Punkten vermuten lässt (z.B. unebenes Gelände/kleine Senken), ohne das generische
+    // Sturz-Erkennung für alle anderen Puzzles pauschal zu lockern.
+    // PrerequisiteClimbAdventureId: Adventure-RowId eines ANDEREN Sightseeing-Jumping-Puzzles, dessen
+    // komplette Klettersequenz erst durchlaufen werden muss, um diesen Punkt überhaupt zu erreichen
+    // (z.B. "The Statue of Zuiko" auf dem Kugane-Turm - nur über "Shiokaze Hostelry"s Route oben
+    // erreichbar, Nutzeranforderung). Steht man laut SightseeingAutomation.
+    // ResolvePuzzleWithPrerequisiteClimb schon oben (grob in der Nähe des letzten Schritts der
+    // Vorbedingung), wird die Kletterei übersprungen. Die Vorbedingung selbst gilt dabei NICHT als
+    // erledigt - nur ihre Schritte werden mit abgelaufen, nicht ihr eigener Freischalt-Status.
+    public sealed record SightseeingJumpingPuzzle(Vector3 Start, SightseeingPuzzleStep[] Steps, Vector3? ExactStand = null, bool DismountAtStart = false, float? FallMargin = null, uint? PrerequisiteClimbAdventureId = null);
 
     // Von Hand hinterlegte Jumping Puzzles (Key = Adventure-RowId): Die Automation steuert zuerst
     // normal den Startpunkt an, steigt ab, läuft genau darauf und arbeitet dann die Schritte der
@@ -2513,6 +2558,383 @@ public sealed class Plugin : IDalamudPlugin
                 new SightseeingPuzzleStep(new Vector3(67.4166f, 1.9575522f, 47.885967f), Jump: true, RunUp: true),    // Sightseeing-Punkt - mit Anlauf ab Absprungpunkt
             },
             DismountAtStart: true),
+        [2162813] = new( // The Slate Mountains (Coerthas Western Highlands) - kein Sprung, nur genauer Fußweg
+            new Vector3(-488.55457f, 145.94162f, -714.015f),
+            new[]
+            {
+                new SightseeingPuzzleStep(new Vector3(-488.51077f, 144.16452f, -714.0192f), Jump: false, Exact: true), // Punkt 1 (Sightseeing-Punkt)
+            },
+            DismountAtStart: true),
+        [2162811] = new( // Black Iron Bridge (Coerthas Western Highlands)
+            new Vector3(354.85336f, 174.76999f, 103.92284f),
+            new[]
+            {
+                new SightseeingPuzzleStep(new Vector3(371.3535f, 213.962f, 62.748394f), Jump: false),  // Punkt 1
+                new SightseeingPuzzleStep(new Vector3(369.13516f, 205.15167f, 61.918354f), Jump: false), // Punkt 2
+                new SightseeingPuzzleStep(new Vector3(369.78137f, 205.64905f, 61.96306f), Jump: false),  // Punkt 3 (Sightseeing-Punkt)
+            },
+            DismountAtStart: true),
+        [2162772] = new( // Gorgagne Mills (Coerthas Western Highlands) - abmounten direkt am Startpunkt (in der Luft), dann zu Fuß zum Sightseeing-Punkt
+            new Vector3(446.05908f, 195.6534f, -885.5948f),
+            new[]
+            {
+                new SightseeingPuzzleStep(new Vector3(453.0606f, 185.495f, -883.3604f), Jump: false, Exact: true), // Sightseeing-Punkt, zu Fuß
+            },
+            DismountAtStart: true),
+        [2162827] = new( // Centrifugal Crystal Engine (Azys Lla)
+            new Vector3(-604.4407f, -169f, -415.19754f),
+            new[]
+            {
+                new SightseeingPuzzleStep(new Vector3(-600.1704f, -169.31009f, -396.249f), Jump: false),               // Punkt 1
+                new SightseeingPuzzleStep(new Vector3(-625.3924f, -169f, -383.3046f), Jump: false, Exact: true),       // Punkt 2 (Sightseeing-Punkt)
+            },
+            DismountAtStart: true),
+        [2162829] = new( // The Cathedral (Azys Lla)
+            new Vector3(168.22775f, 24.249746f, 294.9604f),
+            new[]
+            {
+                new SightseeingPuzzleStep(new Vector3(167.53691f, 24.336863f, 295.10367f), Jump: false),         // Punkt 1
+                new SightseeingPuzzleStep(new Vector3(167.99977f, 19.113792f, 298.74478f), Jump: false),         // Punkt 2
+                new SightseeingPuzzleStep(new Vector3(168.98222f, 19.495443f, 304.17224f), Jump: false),         // Punkt 3
+                new SightseeingPuzzleStep(new Vector3(166.71301f, 8.016158f, 297.277f), Jump: false),            // Punkt 4
+                new SightseeingPuzzleStep(new Vector3(168.06035f, 8.51966f, 304.49298f), Jump: false, Exact: true), // Punkt 5 (Sightseeing-Punkt)
+            },
+            DismountAtStart: true),
+        [2162828] = new( // Biomass Incubation Complex (Azys Lla)
+            new Vector3(672.8191f, -33.07628f, -831.4089f),
+            new[]
+            {
+                new SightseeingPuzzleStep(new Vector3(660.6012f, -43.100124f, -818.28674f), Jump: false),       // Punkt 1
+                new SightseeingPuzzleStep(new Vector3(658.4361f, -42.130207f, -810.63f), Jump: false),          // Punkt 2
+                new SightseeingPuzzleStep(new Vector3(652.0644f, -50.390446f, -807.1888f), Jump: false, Exact: true), // Punkt 3 (Sightseeing-Punkt)
+            },
+            DismountAtStart: true,
+            // Nutzer-Report: wurde nach Ankunft an Punkt 1 fälschlich als "abgestürzt" gewertet -
+            // der Laufweg sackt unterwegs legitim tiefer ab als der Standard-Spielraum (1.5) erlaubt.
+            FallMargin: 6f),
+        [2162779] = new( // Halo (The Dravanian Forelands)
+            new Vector3(-344.4581f, 30.81839f, -43.359917f),
+            new[]
+            {
+                new SightseeingPuzzleStep(new Vector3(-384.24463f, 24.82344f, -140.94548f), Jump: false, Fly: true, Exact: true), // Punkt 1 (fliegend)
+                new SightseeingPuzzleStep(new Vector3(-545.6712f, 3.606424f, -652.7198f), Jump: false, Fly: true, Exact: true),   // Punkt 2 (fliegend)
+                new SightseeingPuzzleStep(new Vector3(-714.05914f, 8.867394f, -820.5609f), Jump: false, Fly: true, Exact: true),  // Punkt 3 (fliegend, Sightseeing-Punkt)
+            }),
+        [2162820] = new( // The Old Father (The Churning Mists)
+            new Vector3(-395.99408f, 113.04093f, 122.711296f),
+            new[]
+            {
+                new SightseeingPuzzleStep(new Vector3(-393.22644f, 113.04094f, 122.703575f), Jump: false, Exact: true), // Punkt 1 (Sightseeing-Punkt)
+            },
+            DismountAtStart: true),
+        [2162785] = new( // Zenith (The Churning Mists)
+            new Vector3(-735.1021f, 460.92453f, 226.16637f),
+            new[]
+            {
+                new SightseeingPuzzleStep(new Vector3(-736.5128f, 461.21588f, 225.99606f), Jump: false, Exact: true), // Punkt 1 (Sightseeing-Punkt)
+            },
+            DismountAtStart: true),
+        [2162875] = new( // The Destroyer (Rhalgr's Reach)
+            new Vector3(14.237253f, 0.31174254f, 142.50418f),
+            new[]
+            {
+                new SightseeingPuzzleStep(new Vector3(12.608364f, 0.7028518f, 141.45947f), Jump: false),               // Punkt 1 (ohne anzuhalten)
+                new SightseeingPuzzleStep(new Vector3(8.978649f, 2.182783f, 139.585f), Jump: true, RunUp: true),        // Punkt 2 - Sprung mit Anlauf ab Punkt 1
+                new SightseeingPuzzleStep(new Vector3(7.9094467f, 2.0028865f, 139.45029f), Jump: false),                // Punkt 3
+                new SightseeingPuzzleStep(new Vector3(8.042152f, 1.051358f, 135.94002f), Jump: false),                  // Punkt 4
+                new SightseeingPuzzleStep(new Vector3(11.265883f, 1.5607371f, 135.80649f), Jump: false),                // Punkt 5
+                new SightseeingPuzzleStep(new Vector3(10.705002f, 3.324168f, 136.6117f), Jump: true),                   // Punkt 6
+                new SightseeingPuzzleStep(new Vector3(9.72822f, 3.7528384f, 136.94829f), Jump: false, Exact: true),     // Punkt 7 (Sightseeing-Punkt)
+            },
+            DismountAtStart: true),
+        [2162876] = new( // Bloodstorm (Rhalgr's Reach) - "Slow Jump" = JumpFromStandstill (kontrollierter
+            // Sprung ohne Anlauf/Wartezeit, kein Sprung mit Schwung wie bei RunUp), Nutzervorgabe
+            // unterschied zwar zwischen "Jump" (Punkt 1/13) und "Slow Jump" (restliche Sprünge), beide
+            // sind aber reine Einzel-Hochsprünge ohne Anlauf - bei Bedarf bitte konkretisieren.
+            new Vector3(-52.539837f, -0.7309038f, -96.440285f),
+            new[]
+            {
+                new SightseeingPuzzleStep(new Vector3(-52.91258f, 0.7005534f, -96.06823f), Jump: true, JumpFromStandstill: true),   // Punkt 1
+                new SightseeingPuzzleStep(new Vector3(-51.389496f, 2.050886f, -94.655815f), Jump: true, JumpFromStandstill: true),  // Punkt 2
+                new SightseeingPuzzleStep(new Vector3(-52.863888f, 3.554677f, -96.0213f), Jump: true, JumpFromStandstill: true),     // Punkt 3
+                new SightseeingPuzzleStep(new Vector3(-51.463406f, 4.9050064f, -94.715454f), Jump: true, JumpFromStandstill: true),  // Punkt 4
+                new SightseeingPuzzleStep(new Vector3(-52.836018f, 6.310092f, -96.020134f), Jump: true, JumpFromStandstill: true),   // Punkt 5
+                new SightseeingPuzzleStep(new Vector3(-51.541042f, 7.6604233f, -94.78665f), Jump: true, JumpFromStandstill: true),   // Punkt 6
+                new SightseeingPuzzleStep(new Vector3(-52.876778f, 8.980771f, -96.03884f), Jump: true, JumpFromStandstill: true),    // Punkt 7
+                new SightseeingPuzzleStep(new Vector3(-51.600765f, 10.3310995f, -94.85608f), Jump: true, JumpFromStandstill: true),  // Punkt 8
+                new SightseeingPuzzleStep(new Vector3(-52.85996f, 11.58651f, -96.02795f), Jump: true, JumpFromStandstill: true),     // Punkt 9
+                new SightseeingPuzzleStep(new Vector3(-51.587494f, 13.06057f, -94.83111f), Jump: true, JumpFromStandstill: true),    // Punkt 10
+                new SightseeingPuzzleStep(new Vector3(-50.54697f, 14.06621f, -93.39152f), Jump: true, JumpFromStandstill: true),     // Punkt 11
+                new SightseeingPuzzleStep(new Vector3(-49.53487f, 15.25223f, -92.128944f), Jump: true, JumpFromStandstill: true),    // Punkt 12
+                new SightseeingPuzzleStep(new Vector3(-50.060173f, 16.850092f, -91.63483f), Jump: true, JumpFromStandstill: true),   // Punkt 13
+                new SightseeingPuzzleStep(new Vector3(-46.6431f, 15.900194f, -88.31154f), Jump: false),                             // Punkt 14
+                new SightseeingPuzzleStep(new Vector3(-45.960625f, 15.900192f, -88.58243f), Jump: false),                           // Punkt 15
+                new SightseeingPuzzleStep(new Vector3(-44.761223f, 15.900194f, -87.38864f), Jump: false),                           // Punkt 16
+                new SightseeingPuzzleStep(new Vector3(-44.898518f, 15.726675f, -85.7897f), Jump: false),                            // Punkt 17
+                new SightseeingPuzzleStep(new Vector3(-39.763016f, 15.900192f, -81.13107f), Jump: false),                           // Punkt 18
+                new SightseeingPuzzleStep(new Vector3(-39.86382f, 15.900194f, -79.693306f), Jump: false),                           // Punkt 19
+                new SightseeingPuzzleStep(new Vector3(-38.72158f, 15.900194f, -78.741875f), Jump: false),                           // Punkt 20
+                new SightseeingPuzzleStep(new Vector3(-37.43322f, 15.726681f, -78.90788f), Jump: false),                            // Punkt 21
+                new SightseeingPuzzleStep(new Vector3(-34.301895f, 15.726713f, -76.025566f), Jump: false, Exact: true),             // Punkt 22 (Sightseeing-Punkt)
+            },
+            DismountAtStart: true),
+        // Shiokaze Hostelry (Kugane Tower) - übernommen aus einem SND-Skript (pot0to, "Kugane Tower
+        // jump puzzle and sightseeing log"). Dessen "wait"-Wert pro Punkt (Sekunden bis zum Sprung
+        // nach Losgehen) auf unser Modell übertragen: kein "wait" = reiner Laufpunkt (Jump: false),
+        // wait=0 = Sprung aus dem Stand (JumpFromStandstill: true), wait>0 (0.05/0.08/0.1, dort "kurzer"
+        // bzw. "langer Sprung mit Anlauf") = Sprung mit Anlauf (RunUp: true) - unser Modell kennt keine
+        // abgestufte Anlauflänge, daher einheitlich RunUp statt drei verschiedener Werte.
+        [2162855] = new(
+            new Vector3(-41.66f, 14.02f, -34.77f),
+            new[]
+            {
+                // Punkt 1 ist der ERSTE Schritt direkt nach dem Startpunkt - RunUp braucht einen
+                // VORHERIGEN Schritt, der die Sprung-Kette anstößt (siehe StepMoving/StepSettling);
+                // ohne den (wie hier) wird der Sprung nie ausgelöst und der Charakter läuft nur gegen
+                // das Geländer (Nutzer-Log: "Schritt 1: festgelaufen"). Kontrollierter Stand-Sprung
+                // statt RunUp.
+                new SightseeingPuzzleStep(new Vector3(-41.07f, 15.49f, -37.5f), Jump: true, JumpFromStandstill: true), // 1, Sprung aufs Geländer
+                new SightseeingPuzzleStep(new Vector3(-40.89f, 15.52f, -35.79f), Jump: false),                         // 2, Justieren auf dem Geländer
+                // Nutzer-Log: "Absturz bei Schritt 3" - wie bei Kogane Alleyways schoss der Anlauf
+                // (RunUp) über das kleine Pfosten-Ziel hinaus statt zu kurz zu kommen. Kontrollierter
+                // Stand-Sprung statt Anlauf.
+                new SightseeingPuzzleStep(new Vector3(-39.36f, 17.2f, -38.42f), Jump: true, JumpFromStandstill: true), // 3, Sprung auf den Pfosten
+                new SightseeingPuzzleStep(new Vector3(-39.3f, 17.2f, -37.9f), Jump: false),                            // 4
+                new SightseeingPuzzleStep(new Vector3(-36.97f, 17.41f, -39.1f), Jump: true, JumpFromStandstill: true), // 5
+                new SightseeingPuzzleStep(new Vector3(-36.92f, 17.41f, -39.15f), Jump: false),                         // 6
+                new SightseeingPuzzleStep(new Vector3(-33.76f, 19.21f, -38.91f), Jump: true, RunUp: true),             // 7
+                new SightseeingPuzzleStep(new Vector3(-30.42f, 20.91f, -38.71f), Jump: true, RunUp: true),             // 8
+                new SightseeingPuzzleStep(new Vector3(-32.01f, 22.85f, -40.35f), Jump: true, RunUp: true),             // 9, grünes Dach
+
+                new SightseeingPuzzleStep(new Vector3(-28.05f, 23.63f, -45.98f), Jump: false),                         // 10
+                new SightseeingPuzzleStep(new Vector3(-27.65f, 24.18f, -70.36f), Jump: false),                         // 11
+                new SightseeingPuzzleStep(new Vector3(-38.29f, 24.09f, -80.26f), Jump: false),                         // 12
+                new SightseeingPuzzleStep(new Vector3(-41.47f, 25.55f, -78.2f), Jump: false),                          // 13
+                new SightseeingPuzzleStep(new Vector3(-43.11f, 26.6f, -78.66f), Jump: true, RunUp: true),              // 14, Balkonkante
+                new SightseeingPuzzleStep(new Vector3(-44.11f, 28.1f, -78.84f), Jump: true, RunUp: true),              // 15, Geländer
+                new SightseeingPuzzleStep(new Vector3(-50.62f, 26.6f, -79.85f), Jump: false),                          // 16
+                new SightseeingPuzzleStep(new Vector3(-52.48f, 28.3f, -81.71f), Jump: true, JumpFromStandstill: true), // 17, Pfosten
+                new SightseeingPuzzleStep(new Vector3(-52.18f, 28.3f, -81.52f), Jump: false),                          // 18
+                new SightseeingPuzzleStep(new Vector3(-53.99f, 30f, -82.9f), Jump: true, JumpFromStandstill: true),    // 19, Pfosten
+                // Punkt 20 wird direkt von Punkt 19 (JumpFromStandstill, eigener unabhängiger Sprung)
+                // vorangegangen - RunUp würde hier bedeuten "nicht an Punkt 19 anhalten", aber Punkt 19
+                // löst seinen EIGENEN Sprung sofort/unabhängig aus (JumpFromStandstill), was mit der
+                // RunUp-Erwartung von Punkt 20 kollidiert (verfrühter Sprung, bevor Punkt 19 überhaupt
+                // erreicht ist) - daher normaler Sprung statt RunUp (entspricht ohnehin eher dem
+                // Original-SND-Skript: dort ist jeder Punkt ein eigener, abgeschlossener Schritt).
+                new SightseeingPuzzleStep(new Vector3(-54.31f, 31.76f, -80.3f), Jump: true),                           // 20, Dach
+
+                new SightseeingPuzzleStep(new Vector3(-45.89f, 40.81f, -70.41f), Jump: false),                         // 21
+                new SightseeingPuzzleStep(new Vector3(-46.56f, 42.11f, -70.26f), Jump: true, JumpFromStandstill: true), // 22, Pfosten 1
+                new SightseeingPuzzleStep(new Vector3(-46.41f, 42.11f, -70.47f), Jump: false),                         // 23
+                new SightseeingPuzzleStep(new Vector3(-49.59f, 43.81f, -70.29f), Jump: true, RunUp: true),             // 24, Pfosten 2
+                new SightseeingPuzzleStep(new Vector3(-49.44f, 43.8f, -70.45f), Jump: false),                          // 25
+                new SightseeingPuzzleStep(new Vector3(-52.57f, 45.31f, -70.33f), Jump: true, RunUp: true),             // 26, Pfosten 3
+                new SightseeingPuzzleStep(new Vector3(-49.62f, 47.11f, -70.24f), Jump: true, RunUp: true),             // 27, Pfosten 4
+                new SightseeingPuzzleStep(new Vector3(-49.14f, 47.11f, -70.67f), Jump: false),                         // 28
+                new SightseeingPuzzleStep(new Vector3(-46.39f, 48.91f, -70.69f), Jump: true, RunUp: true),             // 29, vorletzter Sprung vor dem 3. Dach
+                new SightseeingPuzzleStep(new Vector3(-46f, 48.91f, -71.08f), Jump: false),                            // 30
+                new SightseeingPuzzleStep(new Vector3(-49.02f, 50.44f, -70.56f), Jump: true, RunUp: true),             // 31, Sprung aufs Dach
+
+                new SightseeingPuzzleStep(new Vector3(-53.22f, 52.1f, -66.66f), Jump: false),                          // 32
+                new SightseeingPuzzleStep(new Vector3(-53.89f, 53.68f, -65.98f), Jump: true, JumpFromStandstill: true), // 33
+                new SightseeingPuzzleStep(new Vector3(-55.72f, 54.51f, -66.72f), Jump: true, JumpFromStandstill: true), // 34
+                new SightseeingPuzzleStep(new Vector3(-55.64f, 53.44f, -65.25f), Jump: false),                         // 35
+                new SightseeingPuzzleStep(new Vector3(-56.31f, 54.82f, -63.22f), Jump: true, RunUp: true),             // 36
+                new SightseeingPuzzleStep(new Vector3(-57.34f, 54.78f, -62.79f), Jump: false),                         // 37
+                new SightseeingPuzzleStep(new Vector3(-57.14f, 54.95f, -58.82f), Jump: false),                         // 38
+                new SightseeingPuzzleStep(new Vector3(-55.81f, 56.47f, -58.96f), Jump: false),                         // 39
+                new SightseeingPuzzleStep(new Vector3(-54.5f, 57.74f, -58.44f), Jump: true, RunUp: true),              // 40, Sprung in den Holzbereich
+                new SightseeingPuzzleStep(new Vector3(-54.48f, 57.73f, -56.56f), Jump: false),                         // 41
+                new SightseeingPuzzleStep(new Vector3(-55.06f, 59.53f, -55.71f), Jump: true, JumpFromStandstill: true), // 42, Pfosten 1
+                new SightseeingPuzzleStep(new Vector3(-54.74f, 61.31f, -58.41f), Jump: true, JumpFromStandstill: true), // 43, Pfosten 2
+                new SightseeingPuzzleStep(new Vector3(-54.46f, 62.75f, -56.34f), Jump: true),                          // 44, flaches Brett - Vorgänger (43) ist eigener JumpFromStandstill-Sprung, RunUp würde kollidieren
+                new SightseeingPuzzleStep(new Vector3(-54.48f, 62.75f, -56.67f), Jump: false),                         // 45
+                new SightseeingPuzzleStep(new Vector3(-55.01f, 64.31f, -59.55f), Jump: true, RunUp: true),             // 46, Sprung zum Kreis
+                new SightseeingPuzzleStep(new Vector3(-55.05f, 65.94f, -62.18f), Jump: true, RunUp: true),             // 47, Sprung über den Kreis
+                new SightseeingPuzzleStep(new Vector3(-54.32f, 68.48f, -64.66f), Jump: false),                         // 48
+                new SightseeingPuzzleStep(new Vector3(-52.49f, 67.19f, -65.71f), Jump: false),                         // 49
+                new SightseeingPuzzleStep(new Vector3(-49.14f, 68.41f, -65.81f), Jump: true, RunUp: true),             // 50, Pfosten 1
+                new SightseeingPuzzleStep(new Vector3(-46.84f, 70.21f, -65.81f), Jump: true, JumpFromStandstill: true), // 51, Pfosten 2
+                new SightseeingPuzzleStep(new Vector3(-44.77f, 72.01f, -65.78f), Jump: true, JumpFromStandstill: true), // 52, Pfosten 3
+                new SightseeingPuzzleStep(new Vector3(-49.23f, 73.51f, -65.64f), Jump: true),                          // 53, Pfosten 4 - Vorgänger (52) ist eigener JumpFromStandstill-Sprung, RunUp würde kollidieren
+                new SightseeingPuzzleStep(new Vector3(-50.92f, 75.11f, -66.13f), Jump: true, JumpFromStandstill: true), // 54, Pfosten 5
+                new SightseeingPuzzleStep(new Vector3(-47.11f, 76.41f, -65.88f), Jump: true),                          // 55, Pfosten 6 - Vorgänger (54) ist eigener JumpFromStandstill-Sprung, RunUp würde kollidieren
+                new SightseeingPuzzleStep(new Vector3(-45.46f, 77.25f, -65.47f), Jump: true, JumpFromStandstill: true), // 56, Ecke
+
+                new SightseeingPuzzleStep(new Vector3(-41.58f, 79.05f, -65.55f), Jump: true),                          // 57, Pfosten 1 - Vorgänger (56) ist eigener JumpFromStandstill-Sprung, RunUp würde kollidieren
+                new SightseeingPuzzleStep(new Vector3(-41.07f, 79.05f, -65.93f), Jump: false),                         // 58, Repositionieren
+                new SightseeingPuzzleStep(new Vector3(-39.84f, 80.85f, -63.6f), Jump: true, RunUp: true),              // 59, Pfosten 2
+                new SightseeingPuzzleStep(new Vector3(-41.53f, 82.24f, -61.86f), Jump: true, RunUp: true),             // 60, rechte Seite der Flagge
+                new SightseeingPuzzleStep(new Vector3(-41.54f, 82.25f, -56.47f), Jump: true, RunUp: true),             // 61, linke Seite der Flagge
+
+                new SightseeingPuzzleStep(new Vector3(-40.99f, 83.75f, -55.39f), Jump: true, JumpFromStandstill: true), // 62, Pfosten 1
+                new SightseeingPuzzleStep(new Vector3(-40.4f, 83.75f, -55.31f), Jump: false),                          // 63, Repositionieren
+                new SightseeingPuzzleStep(new Vector3(-39.12f, 85.55f, -51.9f), Jump: true, RunUp: true),              // 64, Pfosten 2
+                new SightseeingPuzzleStep(new Vector3(-40.05f, 87.35f, -54.45f), Jump: true, RunUp: true),             // 65, Pfosten 3
+                new SightseeingPuzzleStep(new Vector3(-40.35f, 88.49f, -54.42f), Jump: true, JumpFromStandstill: true), // 66, Sprung auf das Plateau
+                new SightseeingPuzzleStep(new Vector3(-39.96f, 89.65f, -52f), Jump: true),                             // 67, Pfosten 4 - Vorgänger (66) ist eigener JumpFromStandstill-Sprung, RunUp würde kollidieren
+                new SightseeingPuzzleStep(new Vector3(-39.49f, 89.65f, -52.34f), Jump: false),                         // 68
+                new SightseeingPuzzleStep(new Vector3(-40.81f, 90.89f, -51.97f), Jump: true, JumpFromStandstill: true), // 69, äußere Kante
+                new SightseeingPuzzleStep(new Vector3(-42.18f, 89.16f, -53.73f), Jump: false),                         // 70, hinunter zur unteren Kante
+                new SightseeingPuzzleStep(new Vector3(-41.64f, 89.15f, -65.36f), Jump: false),                         // 71, hinüberlaufen
+                new SightseeingPuzzleStep(new Vector3(-46.15f, 89.15f, -65.34f), Jump: false),                         // 72, um die Ecke
+                new SightseeingPuzzleStep(new Vector3(-48.28f, 90.88f, -66.2f), Jump: true, JumpFromStandstill: true), // 73, Sprung nach oben
+                new SightseeingPuzzleStep(new Vector3(-44.86f, 90.89f, -66.22f), Jump: false),                         // 74, Position für Pfosten 3
+                new SightseeingPuzzleStep(new Vector3(-39.95f, 91.01f, -68.3f), Jump: true, RunUp: true),              // 75, letzter Pfosten
+                new SightseeingPuzzleStep(new Vector3(-40.25f, 91.01f, -68.85f), Jump: false),                         // 76, Repositionieren
+                new SightseeingPuzzleStep(new Vector3(-36.94f, 92.81f, -67f), Jump: true, RunUp: true),                // 77
+                new SightseeingPuzzleStep(new Vector3(-37.46f, 94.6f, -65.43f), Jump: true, JumpFromStandstill: true), // 78
+                new SightseeingPuzzleStep(new Vector3(-38.51f, 95.38f, -65.56f), Jump: true, JumpFromStandstill: true, Exact: true), // 79 (Sightseeing-Punkt)
+            },
+            DismountAtStart: true),
+        // The Statue of Zuiko (Kugane) - VORLÄUFIG: nur über die Vorbedingung (Kletterei von Shiokaze
+        // Hostelry/Kugane Tower) erreichbar, siehe PrerequisiteClimbAdventureId. Eigene Zielkoordinaten
+        // oben auf dem Turm fehlen noch (Nutzerentscheidung: erst den Turm fertigstellen) - Start und
+        // einziger Schritt sind daher bewusst Platzhalter (= Shiokazes eigener Start-/Endpunkt), damit
+        // die Automation wenigstens nach oben läuft statt zur rohen (unerreichbaren) Kartenposition.
+        // BITTE durch die echten Koordinaten der Statue ersetzen, sobald bekannt.
+        [2162882] = new(
+            new Vector3(-41.66f, 14.02f, -34.77f),
+            new[]
+            {
+                new SightseeingPuzzleStep(new Vector3(-38.51f, 95.38f, -65.56f), Jump: true, JumpFromStandstill: true, Exact: true), // Platzhalter = Shiokazes letzter Schritt
+            },
+            DismountAtStart: true,
+            PrerequisiteClimbAdventureId: 2162855),
+        [2162884] = new( // Tenkonto (Kugane)
+            new Vector3(88.80654f, 12.005137f, -25.82123f),
+            new[]
+            {
+                new SightseeingPuzzleStep(new Vector3(81.80286f, 12.141358f, -25.331562f), Jump: false, SprintBefore: true), // Punkt 1 - Sprint, dann ohne anzuhalten weiter
+                new SightseeingPuzzleStep(new Vector3(76.24548f, 13.5843725f, -24.970667f), Jump: true, RunUp: true),        // Punkt 2
+                new SightseeingPuzzleStep(new Vector3(75.87552f, 13.961276f, -25.448786f), Jump: false),                     // Punkt 3
+                new SightseeingPuzzleStep(new Vector3(75.88411f, 15.4191265f, -29.98987f), Jump: true, RunUp: true),         // Punkt 4
+                new SightseeingPuzzleStep(new Vector3(64.70729f, 15.641808f, -30.304445f), Jump: false, Exact: true),        // Punkt 5 (Sightseeing-Punkt)
+            },
+            DismountAtStart: true),
+        [2162854] = new( // Kogane Alleyways (Kugane)
+            new Vector3(100.605736f, 12.049919f, 25.365953f),
+            new[]
+            {
+                new SightseeingPuzzleStep(new Vector3(99.197556f, 13.391518f, 22.801615f), Jump: true),                     // Punkt 1
+                new SightseeingPuzzleStep(new Vector3(99.477745f, 13.28135f, 23.134325f), Jump: false),                     // Punkt 1b
+                new SightseeingPuzzleStep(new Vector3(98.48551f, 13.423598f, 22.835777f), Jump: false, SprintBefore: true), // Punkt 2 - Sprint, dann ohne anzuhalten weiter
+                new SightseeingPuzzleStep(new Vector3(90.3375f, 9.475309f, 23.184855f), Jump: true, RunUp: true),           // Punkt 3
+                new SightseeingPuzzleStep(new Vector3(83.56504f, 9.581733f, 23.527267f), Jump: false),                      // Punkt 4
+                new SightseeingPuzzleStep(new Vector3(81.418335f, 10.669992f, 23.273607f), Jump: true, JumpFromStandstill: true), // Punkt 5
+                new SightseeingPuzzleStep(new Vector3(73.63667f, 9.428951f, 23.110458f), Jump: false),                      // Punkt 6
+                new SightseeingPuzzleStep(new Vector3(71.96502f, 11.119587f, 23.109419f), Jump: true, JumpFromStandstill: true),  // Punkt 7
+                new SightseeingPuzzleStep(new Vector3(69.148834f, 10.658191f, 22.802834f), Jump: true, JumpFromStandstill: true), // Punkt 8
+                new SightseeingPuzzleStep(new Vector3(64.3647f, 10.65819f, 23.04328f), Jump: false),                        // Punkt 9
+                new SightseeingPuzzleStep(new Vector3(60.33274f, 10.572725f, 22.89683f), Jump: true, JumpFromStandstill: true),   // Punkt 10
+                new SightseeingPuzzleStep(new Vector3(53.290386f, 9.35223f, 22.891317f), Jump: false),                      // Punkt 11
+                new SightseeingPuzzleStep(new Vector3(51.24246f, 10.933338f, 22.89027f), Jump: true, JumpFromStandstill: true),   // Punkt 12
+                new SightseeingPuzzleStep(new Vector3(43.333843f, 9.416694f, 23.071596f), Jump: false),                     // Punkt 13
+                new SightseeingPuzzleStep(new Vector3(41.115303f, 11.062417f, 23.23322f), Jump: true, JumpFromStandstill: true),  // Punkt 14
+                new SightseeingPuzzleStep(new Vector3(37.681717f, 10.658191f, 23.663258f), Jump: true, JumpFromStandstill: true), // Punkt 15
+                new SightseeingPuzzleStep(new Vector3(36.122955f, 10.658191f, 23.579247f), Jump: false, Exact: true),       // Punkt 16 (Sightseeing-Punkt)
+            },
+            DismountAtStart: true,
+            // Nutzer-Log: "Schritt 6 nicht erreicht" - der dort zuvor per RunUp hinzugefügte Anlauf
+            // ließ den Sprung über die ohnehin kurze (~2 Einheiten) Distanz offenbar ÜBER das kleine
+            // Ziel hinausschießen statt zu kurz zu kommen. Für die kurzen Sprünge daher zurück auf
+            // kontrollierte Stand-Sprünge (JumpFromStandstill) - RunUp bleibt nur bei Punkt 3, dem
+            // einzigen wirklich weiten (~8 Einheiten) Sprung mit vorherigem Sprint.
+            FallMargin: 4f),
+        [2162853] = new( // Kogane Dori (Kugane)
+            new Vector3(114.36405f, 12f, 105.211205f),
+            new[]
+            {
+                new SightseeingPuzzleStep(new Vector3(112.53736f, 13.605098f, 103.739296f), Jump: true, JumpFromStandstill: true), // Punkt 1
+                new SightseeingPuzzleStep(new Vector3(112.58033f, 14.027059f, 102.22197f), Jump: false), // Punkt 2
+                new SightseeingPuzzleStep(new Vector3(110.83346f, 15.944979f, 102.17448f), Jump: true),  // Punkt 3
+                new SightseeingPuzzleStep(new Vector3(106.95777f, 18.496264f, 101.210396f), Jump: false), // Punkt 4
+                new SightseeingPuzzleStep(new Vector3(105.414955f, 20.112288f, 98.919525f), Jump: true), // Punkt 5
+                new SightseeingPuzzleStep(new Vector3(99.94157f, 15.934586f, 91.34301f), Jump: false),   // Punkt 6
+                new SightseeingPuzzleStep(new Vector3(97.5125f, 11.499998f, 87.95555f), Jump: false),    // Punkt 7
+                new SightseeingPuzzleStep(new Vector3(98.90513f, 11.499998f, 81.12253f), Jump: false, Exact: true), // Punkt 8 (Sightseeing-Punkt)
+            },
+            DismountAtStart: true),
+        [2162851] = new( // The Sekiseigumi Barracks (Kugane)
+            new Vector3(153.42166f, 17.999998f, -61.866024f),
+            new[]
+            {
+                // Jump: true ohne RunUp (Default) ließ den Sprung Punkt1->Punkt2 offenbar aus fast dem
+                // Stand heraus mit zu wenig Schwung starten und landete zu kurz/tief - Nutzer-Report:
+                // "immer beim 2. Step zurückfliegen" (= nach Sturz-Erkennung neu vom Startpunkt).
+                // JumpFromStandstill wie bei Bloodstorm's ähnlich engem Vertikal-Klettern - springt
+                // sofort statt erst noch PuzzleJumpDelay abzuwarten, dafür kontrolliert statt mit Anlauf
+                // (der auf dem schmalen Steg eher zum Vorbeispringen führen könnte).
+                new SightseeingPuzzleStep(new Vector3(153.51881f, 19.105192f, -63.61415f), Jump: true, JumpFromStandstill: true),  // Punkt 1
+                new SightseeingPuzzleStep(new Vector3(153.59795f, 21.23077f, -65.317726f), Jump: true, JumpFromStandstill: true),  // Punkt 2
+                new SightseeingPuzzleStep(new Vector3(153.61755f, 19.689455f, -72.9296f), Jump: false),  // Punkt 3
+                new SightseeingPuzzleStep(new Vector3(153.6243f, 21.255917f, -75.379036f), Jump: true, JumpFromStandstill: true),  // Punkt 4
+                new SightseeingPuzzleStep(new Vector3(153.70624f, 20.750458f, -78.66646f), Jump: true, JumpFromStandstill: true),  // Punkt 5
+                new SightseeingPuzzleStep(new Vector3(153.53201f, 20.750462f, -80.17001f), Jump: false, Exact: true), // Punkt 6 (Sightseeing-Punkt)
+            },
+            DismountAtStart: true),
+        [2162791] = new( // Voor Sian Siran (The Sea of Clouds)
+            new Vector3(870.33673f, 46.75179f, -36.361897f),
+            new[]
+            {
+                new SightseeingPuzzleStep(new Vector3(867.46326f, 47.197334f, -32.227554f), Jump: false, Exact: true), // Punkt 1 (Sightseeing-Punkt)
+            },
+            DismountAtStart: true),
+        [2162883] = new( // Rakuza District (Kugane)
+            new Vector3(-71.846275f, 18f, -165.14159f),
+            new[]
+            {
+                // Nutzer-Log: "Absturz bei Schritt 4" - plain Jump (wartet erst PuzzleJumpDelay) ließ
+                // den Sprung offenbar zu spät/unkontrolliert losgehen. Wie bei Sekiseigumi Barracks auf
+                // kontrollierte Stand-Sprünge umgestellt (springt sofort nach dem Stillstehen).
+                new SightseeingPuzzleStep(new Vector3(-70.492744f, 19.572945f, -163.8379f), Jump: true, JumpFromStandstill: true),  // Punkt 1
+                new SightseeingPuzzleStep(new Vector3(-68.518425f, 21.059195f, -162.93703f), Jump: true, JumpFromStandstill: true), // Punkt 2
+                new SightseeingPuzzleStep(new Vector3(-67.74781f, 22.7301f, -161.10625f), Jump: false),   // Punkt 3
+                new SightseeingPuzzleStep(new Vector3(-68.276405f, 23.954247f, -159.48534f), Jump: true, JumpFromStandstill: true), // Punkt 4
+                new SightseeingPuzzleStep(new Vector3(-67.99355f, 21.895826f, -158.19518f), Jump: false), // Punkt 5
+                new SightseeingPuzzleStep(new Vector3(-68.91015f, 20.230528f, -155.43037f), Jump: false, SprintBefore: true), // Punkt 6 - Sprint, dann ohne anzuhalten weiter
+                new SightseeingPuzzleStep(new Vector3(-70.13122f, 22.411118f, -151.73804f), Jump: true, RunUp: true),         // Punkt 7
+                new SightseeingPuzzleStep(new Vector3(-71.12391f, 23.246681f, -149.9942f), Jump: false),  // Punkt 8
+                new SightseeingPuzzleStep(new Vector3(-70.99506f, 23.116446f, -149.05579f), Jump: false), // Punkt 9 - ohne anzuhalten weiter
+                new SightseeingPuzzleStep(new Vector3(-69.70047f, 24.953295f, -146.38773f), Jump: true, RunUp: true),         // Punkt 10
+                new SightseeingPuzzleStep(new Vector3(-71.25161f, 25.817984f, -143.38527f), Jump: false, Exact: true),       // Punkt 11 (Sightseeing-Punkt)
+            },
+            DismountAtStart: true,
+            FallMargin: 3f),
+        [2162885] = new( // Kugane Ofunakura (Kugane)
+            new Vector3(-80.18498f, -2.9999993f, 48.48092f),
+            new[]
+            {
+                new SightseeingPuzzleStep(new Vector3(-68.29567f, -2.192749f, 52.919933f), Jump: false),  // Punkt 1
+                new SightseeingPuzzleStep(new Vector3(-61.374794f, -2.1644826f, 53.7701f), Jump: false),  // Punkt 2
+                new SightseeingPuzzleStep(new Vector3(-59.756123f, -2.2548056f, 68.79611f), Jump: false), // Punkt 3
+                new SightseeingPuzzleStep(new Vector3(-48.657715f, 4.26418f, 67.35098f), Jump: false),    // Punkt 4
+                new SightseeingPuzzleStep(new Vector3(-53.017887f, 4.268442f, 66.19997f), Jump: true),    // Punkt 5
+                new SightseeingPuzzleStep(new Vector3(-53.580807f, 4.268441f, 66.20624f), Jump: false),   // Punkt 6
+                new SightseeingPuzzleStep(new Vector3(-53.427197f, 4.146556f, 64.44568f), Jump: false),   // Punkt 7
+                new SightseeingPuzzleStep(new Vector3(-54.190655f, 4.148385f, 64.42824f), Jump: false),   // Punkt 8 - ohne anzuhalten weiter
+                new SightseeingPuzzleStep(new Vector3(-59.028927f, 4.150778f, 64.40542f), Jump: true, RunUp: true),          // Punkt 9
+                new SightseeingPuzzleStep(new Vector3(-58.954212f, 4.268442f, 66.17671f), Jump: false),   // Punkt 10
+                new SightseeingPuzzleStep(new Vector3(-61.520535f, 4.268442f, 66.168396f), Jump: false),  // Punkt 11
+                new SightseeingPuzzleStep(new Vector3(-61.401157f, 4.8534603f, 62.184834f), Jump: false, SprintBefore: true), // Punkt 12 - Sprint, dann ohne anzuhalten weiter
+                new SightseeingPuzzleStep(new Vector3(-62.028774f, 4.8650646f, 62.159527f), Jump: false), // Punkt 13
+                new SightseeingPuzzleStep(new Vector3(-66.99777f, 4.268442f, 62.56429f), Jump: true, RunUp: true),           // Punkt 14
+                new SightseeingPuzzleStep(new Vector3(-66.99777f, 4.268442f, 58.08868f), Jump: false, Exact: true),          // Punkt 15 (Sightseeing-Punkt)
+            },
+            DismountAtStart: true),
+        [2162814] = new( // Whilom River (The Dravanian Forelands)
+            new Vector3(29.013927f, -155.726f, 804.24194f),
+            new[]
+            {
+                new SightseeingPuzzleStep(new Vector3(27.790188f, -147.62448f, 811.62616f), Jump: false),   // Punkt 1
+                new SightseeingPuzzleStep(new Vector3(34.098663f, -145.17358f, 816.8122f), Jump: false),    // Punkt 2
+                new SightseeingPuzzleStep(new Vector3(34.132565f, -143.00221f, 818.16223f), Jump: true),    // Punkt 3
+                new SightseeingPuzzleStep(new Vector3(34.974407f, -138.72388f, 822.28076f), Jump: true),    // Punkt 4
+                new SightseeingPuzzleStep(new Vector3(38.17893f, -142.45721f, 823.0016f), Jump: false),     // Punkt 5
+                new SightseeingPuzzleStep(new Vector3(45.699116f, -134.51465f, 842.88184f), Jump: false),   // Punkt 6 (Sightseeing-Punkt)
+            },
+            DismountAtStart: true),
     };
 
     /// <summary>Siehe SightseeingJumpingPuzzles-Kommentar.</summary>
@@ -2529,13 +2951,22 @@ public sealed class Plugin : IDalamudPlugin
     // (Nutzeranforderung: "nicht zur Startposition zurück, sondern auf folgende Positionen" - direkt
     // zum letzten Punkt ist nicht begehbar, braucht einen Zwischenpunkt) - null bedeutet "zurück zu
     // Start" (bisheriges Verhalten).
-    public readonly record struct AetherCurrentJumpRoute(Vector3 Start, Vector3 RunUpPoint, Vector3 JumpTarget, Vector3[]? ReturnPath = null);
+    // PostJumpWaypoint: nach der Landung erst noch zu Fuß dorthin, BEVOR zur echten, exakten Position
+    // (entry.WorldPosition) weitergelaufen/interagiert wird - für Landestellen, von denen aus der
+    // direkte Weg zur echten Position nicht begehbar ist (Nutzeranforderung).
+    public readonly record struct AetherCurrentJumpRoute(Vector3 Start, Vector3 RunUpPoint, Vector3 JumpTarget, Vector3[]? ReturnPath = null, Vector3? PostJumpWaypoint = null);
 
     // Von Hand hinterlegte Ätherströmungen, die nur über einen kurzen Sprung erreichbar sind (Key =
     // AetherCurrent-RowId, siehe AetherCurrentAutomation-Kommentar) - z.B. "The Dravanian Forelands
     // (Loth ast Gnath past second door)".
     private static readonly Dictionary<uint, AetherCurrentJumpRoute> AetherCurrentJumpRoutes = new()
     {
+        [2818185] = new( // The Ruby Sea #3 - Sprung direkt ab Startpunkt, kein separater Anlaufpunkt
+                          // (RunUpPoint = Start), danach erst zum Zwischenpunkt, dann zur echten Position.
+            new Vector3(20.253834f, 25.111029f, -633.605f),
+            new Vector3(20.253834f, 25.111029f, -633.605f),
+            new Vector3(20.403925f, 26.060188f, -630.41046f),
+            PostJumpWaypoint: new Vector3(21.235165f, 24.011196f, -625.2854f)),
         [2818077] = new( // The Dravanian Forelands (Loth ast Gnath past second door)
             new Vector3(399.45297f, -92.03338f, 683.3449f),
             new Vector3(401.5101f, -92.208374f, 684.6267f),
@@ -3214,7 +3645,7 @@ public sealed class Plugin : IDalamudPlugin
         new(1179707, 622, new(569.0254f, -19.23943f, 269.9413f)),
         new(1179708, 622, new(501.4787f, 39.57227f, -464.447f)),
         new(1179709, 622, new(86.35071f, 116.043f, -37.39996f)),
-        new(1179702, 628, new(-108.0097f, -7f, -65.83353f)),
+        new(1179702, 628, new(-107.50014f, -7f, -63.59903f), "Eisai"),
         new(1179695, 635, new(42.6823f, -1.192093e-07f, 24.52322f)),
         new(1179723, 813, new(663.6119f, 45.41374f, -60.42229f)),
         new(1179722, 813, new(-589.0135f, 67.15491f, -173.8156f)),
@@ -3777,7 +4208,35 @@ public sealed class Plugin : IDalamudPlugin
         ("Yo-kai Watch Collaboration",
             new DateTime(2026, 8, 4, 8, 0, 0, DateTimeKind.Utc),
             new DateTime(2026, 10, 5, 14, 59, 0, DateTimeKind.Utc)),
+        // Fall Guys Collaboration ("Blunderville") - offiziell Mi. 07.10.2026 01:00 bis Di.
+        // 27.10.2026 07:59 (jeweils PDT/UTC-7), Quelle: offizielle SQUARE ENIX-/Lodestone-
+        // Ankündigung. Vorher stand Fall Guys fälschlich dauerhaft in CollaborationGatedItems
+        // als "wiederkehrend, aber ohne bekanntes aktuelles Zeitfenster" - genau derselbe
+        // False-Negative-Fehler wie zuvor bei Yo-kai Watch, diesmal per Nutzer-Report während das
+        // Event tatsächlich lief.
+        ("Fall Guys Collaboration",
+            new DateTime(2026, 10, 7, 8, 0, 0, DateTimeKind.Utc),
+            new DateTime(2026, 10, 27, 14, 59, 0, DateTimeKind.Utc)),
     };
+
+    /// <summary>
+    /// Ob ein per <see cref="KnownCollaborationWindows"/> hinterlegtes Zeitfenster gerade aktiv ist -
+    /// Lookup per exaktem Namen (nicht per entry.Source-Teilstring wie in
+    /// <see cref="IsSeasonalEventEntryCurrentlyActive"/>), für Einträge wie FrameKit-Portraitrahmen,
+    /// die keine Category "Saisonevent" haben und den generischen Pfad daher nie durchlaufen (siehe
+    /// CollaborationGatedItems-Nutzung in ComputeGrandCompanyOrTribeGateReason).
+    /// </summary>
+    private static bool IsKnownCollaborationWindowActive(string collaborationName)
+    {
+        var nowUtc = DateTime.UtcNow;
+        foreach (var (sourceContains, startUtc, endUtc) in KnownCollaborationWindows)
+        {
+            if (string.Equals(sourceContains, collaborationName, StringComparison.OrdinalIgnoreCase))
+                return nowUtc >= startUtc && nowUtc <= endUtc;
+        }
+
+        return false;
+    }
 
     // Offizielle Zeitfenster von Events, die (wie Kollaborationen) nicht über GameMain.ActiveFestivals
     // laufen - Schlüssel ist CollectibleEntry.EventName. Bei jedem neuen Durchlauf ergänzen (Quelle:
@@ -3981,8 +4440,9 @@ public sealed class Plugin : IDalamudPlugin
         [886] = new[] { 418u, 419u, 886u, 433u, 429u },
         [433] = new[] { 418u, 419u, 886u, 433u, 429u },
         [429] = new[] { 418u, 419u, 886u, 433u, 429u },
-        [144] = new[] { 144u, 388u },   // The Gold Saucer / Chocobo Square
-        [388] = new[] { 144u, 388u },
+        [144] = new[] { 144u, 388u, 1197u },   // The Gold Saucer / Chocobo Square / Blunderville Square (Fall Guys Crossover)
+        [388] = new[] { 144u, 388u, 1197u },
+        [1197] = new[] { 144u, 388u, 1197u },
         [628] = new[] { 628u, 629u },   // Kugane / Bokairo Inn
         [629] = new[] { 628u, 629u },
         [819] = new[] { 819u, 843u, 844u },   // The Crystarium / The Pendants Personal Suite / The Ocular
@@ -4094,6 +4554,17 @@ public sealed class Plugin : IDalamudPlugin
         ["Magicked Card"] = "The Adventurer with All the Cards",
     };
 
+    /// <summary>
+    /// Ätheryten mit einer manuell erfassten Zusatz-Voraussetzung (gleiches Prinzip wie
+    /// MountRequiredQuest - Lumina trägt für Ätheryten-Freischaltungen keine auslesbare Quest-
+    /// Voraussetzung) - Key = Ätheryten-Name, Wert = Name der zuvor abzuschließenden Quest.
+    /// Nutzer-Report: Dhoro Iloh (Azim Steppe) braucht die MSQ-Quest "In Crimson They Walked".
+    /// </summary>
+    private static readonly Dictionary<string, string> AetheryteRequiredQuest = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Dhoro Iloh"] = "In Crimson They Walked",
+    };
+
     // "Simply to Dye For" (schaltet Färben frei) braucht die abgeschlossene Artefakt-Rüstungsquest
     // EINES der ursprünglichen A-Realm-Reborn-Jobs (egal welcher) - in Lumina nur indirekt über
     // "Color Your World" verknüpft, das selbst KEINE auslesbare PreviousQuest-Voraussetzung trägt
@@ -4123,6 +4594,12 @@ public sealed class Plugin : IDalamudPlugin
     /// Collaboration", siehe KnownCollaborationWindows) kein verlässlich bekanntes, aktuelles
     /// Zeitfenster hat.
     /// </summary>
+    // Fall Guys hat seit 2026 ein bekanntes Zeitfenster (siehe KnownCollaborationWindows) - dieser
+    // Text wird daher nur noch für die FrameKit-Portraitrahmen verwendet, die keine Category
+    // "Saisonevent" haben (siehe GetFrameKitEntries) und den generischen Saisonevent-Pfad in
+    // IsSeasonalEventEntryCurrentlyActive deshalb nie durchlaufen; ComputeGrandCompanyOrTribeGateReason
+    // prüft für genau diese drei Einträge zusätzlich IsKnownCollaborationWindowActive, bevor dieser
+    // Text tatsächlich zurückgegeben wird.
     private static readonly (string De, string En) FallGuysCollaborationReason = (
         "Nur während des wiederkehrenden Fall-Guys-Kollaborations-Events (\"Blunderville\") erhältlich, das gerade nicht läuft.",
         "Only available during the recurring Fall Guys crossover event (\"Blunderville\"), which isn't currently running.");
@@ -4159,13 +4636,17 @@ public sealed class Plugin : IDalamudPlugin
         // Saisonevent-Prüfung, NICHT mehr hier (Nutzer-Report: Tooltip behauptete "läuft gerade
         // nicht", obwohl das Event zum Zeitpunkt des Reports tatsächlich lief).
 
-        // Fall Guys Collaboration ("Blunderville", wiederkehrend - MGF bleibt zwischen den
-        // Durchläufen erhalten, aber ohne bekanntes aktuelles Zeitfenster gerade nicht aktiv).
-        [(CollectibleType.Minion, "Pegwin")] = FallGuysCollaborationReason,
-        [(CollectibleType.Minion, "Pink Bean")] = FallGuysCollaborationReason,
-        [(CollectibleType.Mount, "Rhiyes")] = FallGuysCollaborationReason,
-        [(CollectibleType.Emote, "Victory Reveal")] = FallGuysCollaborationReason,
-        [(CollectibleType.Orchestrion, "Everybody Falls (Fall Guys Theme)")] = FallGuysCollaborationReason,
+        // Fall Guys Collaboration ("Blunderville") - hat seit 2026 ein bekanntes Zeitfenster (siehe
+        // KnownCollaborationWindows) und läuft für Minion/Mount/Emote/Orchestrion (alle Category
+        // "Saisonevent") daher über die generische Saisonevent-Prüfung, NICHT mehr hier (derselbe
+        // Fehler wie zuvor bei Yo-kai Watch). Die drei FrameKit-Portraitrahmen unten bleiben
+        // hier, weil FrameKit-Einträge nie Category "Saisonevent" haben (siehe
+        // GetFrameKitEntries) und den generischen Pfad deshalb nie erreichen - ihr Gate prüft
+        // IsKnownCollaborationWindowActive zusätzlich direkt (siehe
+        // ComputeGrandCompanyOrTribeGateReason).
+        [(CollectibleType.FrameKit, "Blunder-villed")] = FallGuysCollaborationReason,
+        [(CollectibleType.FrameKit, "Blunderful")] = FallGuysCollaborationReason,
+        [(CollectibleType.FrameKit, "Blunderous")] = FallGuysCollaborationReason,
 
         // Dragon Quest X Collaboration.
         [(CollectibleType.Minion, "Wind-up Brickman")] = DragonQuestXCollaborationReason,
@@ -4725,6 +5206,19 @@ public sealed class Plugin : IDalamudPlugin
             }
         }
 
+        // Ätheryten mit einer manuell erfassten Zusatz-Voraussetzung (siehe AetheryteRequiredQuest-
+        // Kommentar) - gleiches Prinzip wie MountRequiredQuest direkt oben.
+        if (entry.Type == CollectibleType.Aetheryte && AetheryteRequiredQuest.TryGetValue(entry.Name, out var requiredQuestForAetheryte))
+        {
+            var requiredQuestId = ResolveQuestIdByName(requiredQuestForAetheryte);
+            if (requiredQuestId == null || !QuestManager.IsQuestComplete((ushort)requiredQuestId.Value))
+            {
+                return Loc.T(
+                    $"Benötigt die abgeschlossene Quest \"{requiredQuestForAetheryte}\".",
+                    $"Requires the completed quest \"{requiredQuestForAetheryte}\".");
+            }
+        }
+
         // ALLE Ätherströmungen setzen die abgeschlossene Quest "Divine Intervention" voraus
         // (Nutzeranforderung: ohne die Quest sind alle Ätherströmungen gesperrt, in jeder Zone
         // gleichermaßen) - global statt per Eintrag in aethercurrents.json, gleiches Prinzip wie
@@ -4782,7 +5276,14 @@ public sealed class Plugin : IDalamudPlugin
         // VOR dem generischen Saisonevent-Fallback geprüft, da dieser sie sonst fälschlich als
         // "erhältlich" durchgehen lassen würde.
         if (CollaborationGatedItems.TryGetValue((entry.Type, entry.Name), out var collaborationReason))
-            return Loc.T(collaborationReason.De, collaborationReason.En);
+        {
+            // Die drei Fall-Guys-FrameKit-Einträge haben (anders als die übrigen Einträge in
+            // CollaborationGatedItems) seit 2026 ein bekanntes Zeitfenster (siehe
+            // KnownCollaborationWindows) - während das Event läuft, fällt das Gate hier durch und
+            // die normale Freischalt-Prüfung (IsFrameKitUnlocked) entscheidet stattdessen.
+            if (collaborationReason != FallGuysCollaborationReason || !IsKnownCollaborationWindowActive("Fall Guys Collaboration"))
+                return Loc.T(collaborationReason.De, collaborationReason.En);
+        }
 
         // Nur während eines saisonalen Events kaufbare Einträge (Category "Saisonevent", siehe
         // IsSeasonalEventEntryCurrentlyActive) - früher komplett aus der Liste gefiltert, statt
@@ -6376,12 +6877,6 @@ public sealed class Plugin : IDalamudPlugin
             .Where(e => e.Type != CollectibleType.TripleTriadCard || e.EventNpcId != 0 || !tripleTriadIdsWithLiveNpc.Contains(e.Id))
             .Where(e => !IsOwned(e))
             .Where(e => config.ShowAllItems || e.Type == CollectibleType.HuntingLog || !IsAchievementOrRankGated(e))
-            // Quests, die Questionable nach einem Versuch als nicht automatisierbar markiert hat
-            // (siehe QuestAutomation.IsKnownUnsupported) zählen auch nicht in GetZoneAutomationButtons'
-            // questCount - ohne diesen Filter hier zeigte die Liste in der Zone z.B. 2 Quests, der
-            // Auto-Quest-Knopf aber nur 1 (Nutzer-Report, Gold Saucer). Der Knopf macht ohnehin nur die
-            // tatsächlich machbaren, die Liste soll dasselbe zeigen.
-            .Where(e => e.Type != CollectibleType.Quest || !QuestAutomation.IsKnownUnsupported(e.Id))
             // Dieselbe benutzerdefinierte Typ-Reihenfolge wie im alten Overlay (Einstellungsmenü ->
             // Anzeige -> "Reihenfolge", config.TypeOrder) statt einer festen alphabetischen Sortierung
             // nach Typname (Nutzeranforderung) - siehe CompactOverlayWindow.DrawContent-Vorbild.
@@ -6391,8 +6886,11 @@ public sealed class Plugin : IDalamudPlugin
             .ToList();
     }
 
-    /// <summary>ToDo-Listen-Einträge für das neue Overlay-Design - alle Typen (siehe GetZoneOverlayItems-Kommentar).</summary>
-    public List<CollectibleEntry> GetToDoOverlayItems() => ResolveToDoEntries();
+    /// <summary>ToDo-Listen-Einträge für das neue Overlay-Design - alle Typen (siehe GetZoneOverlayItems-Kommentar).
+    /// Sortierung zuerst nach config.TypeOrder (gleiche benutzerdefinierte Kategorie-Reihenfolge wie im
+    /// Zonen-Overlay, OrderBy ist stabil - bisherige Reihenfolge innerhalb einer Kategorie bleibt unverändert).</summary>
+    public List<CollectibleEntry> GetToDoOverlayItems() =>
+        ResolveToDoEntries().OrderBy(e => Configuration.TypeOrder.IndexOf(e.Type)).ToList();
 
     /// <summary>
     /// Liefert für jedes sichtbare, echte native Spielfenster (z.B. Währungs-, Inventar- oder
@@ -7862,6 +8360,13 @@ public sealed class Plugin : IDalamudPlugin
     public static void TryRemountAfterForcedDismount(ref DateTime lastAttempt)
     {
         if (Condition[ConditionFlag.Mounted] || Condition[ConditionFlag.Swimming] || Condition[ConditionFlag.Diving])
+            return;
+
+        // In Städten (z.B. während eines zu Fuß laufenden Sightseeing-Jumping-Puzzles in Kugane) kann
+        // man ohnehin nicht aufmounten - ohne diese Prüfung rief diese Funktion alle 3s sinnlos
+        // TryRequestAetheryteMount auf (Nutzer-Report: wiederholtes "MountDebug: Abbruch..." im Log,
+        // obwohl kein Zwangs-Abstieg vorlag - einfach nur jede Zone ohne Mount-Erlaubnis).
+        if (IsInCity)
             return;
 
         if (DateTime.UtcNow - lastAttempt < RemountAfterForcedDismountRetryInterval)

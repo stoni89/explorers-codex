@@ -102,6 +102,7 @@ public sealed class TripleTriadAutomation
     private enum State
     {
         Idle,
+        TravelingToDistrict,
         Mounting,
         MovingTo,
         Approaching,
@@ -119,6 +120,11 @@ public sealed class TripleTriadAutomation
     private const float NpcSearchRadius = 30f;
     private static readonly TimeSpan StepMaxDuration = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan PathStartGracePeriod = TimeSpan.FromSeconds(5);
+
+    // Bezirkswechsel per Lifestream (siehe TryTravelToDistrict) - identische Werte/Begründung wie
+    // SightseeingAutomation/AetheryteAutomation.DistrictTravelTimeout/-SettleDelay.
+    private static readonly TimeSpan DistrictTravelTimeout = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan DistrictTravelSettleDelay = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan NpcNotFoundGracePeriod = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan DismountSettleDelay = TimeSpan.FromSeconds(1);
 
@@ -156,6 +162,9 @@ public sealed class TripleTriadAutomation
     private readonly ICallGateSubscriber<object> pathStop;
     private readonly ICallGateSubscriber<bool> navmeshIsReady;
     private readonly ICallGateSubscriber<Vector3?> queryFlagToPoint;
+    private readonly ICallGateSubscriber<uint, byte, bool> lifestreamTeleport;
+    private readonly ICallGateSubscriber<bool> lifestreamIsBusy;
+    private readonly ICallGateSubscriber<object> lifestreamAbort;
 
     private State state = State.Idle;
     private uint currentNpcId;
@@ -191,6 +200,8 @@ public sealed class TripleTriadAutomation
     private readonly HashSet<uint> skippedNpcIds = new();
     private readonly NavigationStuckDetector stuckDetector = new();
     private readonly FlightPathUpgrade flightUpgrade = new(); // siehe Plugin.FlightPathUpgrade (Flugverbots-Bereiche)
+    private DateTime? districtTravelFinishedAt;
+    private uint districtTravelDepartureTerritory;
 
     public bool IsActive { get; private set; }
 
@@ -217,6 +228,34 @@ public sealed class TripleTriadAutomation
         pathStop = Plugin.PluginInterface.GetIpcSubscriber<object>("vnavmesh.Path.Stop");
         navmeshIsReady = Plugin.PluginInterface.GetIpcSubscriber<bool>("vnavmesh.Nav.IsReady");
         queryFlagToPoint = Plugin.PluginInterface.GetIpcSubscriber<Vector3?>("vnavmesh.Query.Mesh.FlagToPoint");
+        lifestreamTeleport = Plugin.PluginInterface.GetIpcSubscriber<uint, byte, bool>("Lifestream.Teleport");
+        lifestreamIsBusy = Plugin.PluginInterface.GetIpcSubscriber<bool>("Lifestream.IsBusy");
+        lifestreamAbort = Plugin.PluginInterface.GetIpcSubscriber<object>("Lifestream.Abort");
+    }
+
+    private bool IsLifestreamAvailable()
+    {
+        try
+        {
+            return lifestreamTeleport.HasFunction && lifestreamIsBusy.HasFunction;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private void StopLifestream()
+    {
+        try
+        {
+            if (lifestreamAbort.HasAction)
+                lifestreamAbort.InvokeAction();
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error(ex, "Fehler beim Abbrechen von Lifestream.");
+        }
     }
 
     public static bool IsSaucyAvailable() =>
@@ -269,6 +308,7 @@ public sealed class TripleTriadAutomation
         StopPath();
         if (wasPlaying)
             SendCommand("/saucy tt stop");
+        StopLifestream();
         Plugin.ClearNavigationTarget();
 
         if (restoreSaucyAutoOpen)
@@ -319,6 +359,9 @@ public sealed class TripleTriadAutomation
             {
                 case State.Idle:
                     TryStartNext(missingNpcCardsInZone);
+                    break;
+                case State.TravelingToDistrict:
+                    UpdateTravelingToDistrict();
                     break;
                 case State.Mounting:
                     UpdateMounting();
@@ -384,6 +427,26 @@ public sealed class TripleTriadAutomation
 
         if (byNpc.Count == 0)
         {
+            // Keine Gegner in der ZONE, in der man physisch steht - missingNpcCardsInZone kann aber
+            // trotzdem Einträge aus einem Nachbarbezirk derselben "geteilten" Zonengruppe enthalten
+            // (siehe Plugin.SplitCityTerritories, z.B. Blunderville Square zeigt die Gold-Saucer-
+            // Gegner an). vnavmesh kann nicht über eine Ladezone hinweg navigieren, daher zuerst per
+            // Lifestream zum Hauptätheryten dieses Nachbarbezirks reisen, statt fälschlich "fertig" zu
+            // melden (Nutzer-Report: Start in Blunderville Square fand keinen Gegner).
+            var remoteTerritory = missingNpcCardsInZone
+                .Where(e => e.EventNpcId != 0 && e.TerritoryTypeId != currentTerritory)
+                .Where(e => !finishedNpcIds.Contains(e.EventNpcId) && !skippedNpcIds.Contains(e.EventNpcId))
+                .GroupBy(e => e.EventNpcId)
+                .Where(g => g.Any(card => !IsCardObtained(card)))
+                .Select(g => g.First().TerritoryTypeId)
+                .FirstOrDefault();
+
+            if (remoteTerritory != 0)
+            {
+                TryTravelToDistrict(remoteTerritory);
+                return;
+            }
+
             StatusText = Loc.T("Keine Triple-Triad-Gegner mit fehlenden Karten mehr in dieser Zone.", "No Triple Triad opponents with missing cards left in this zone.");
             Stop();
             return;
@@ -454,6 +517,75 @@ public sealed class TripleTriadAutomation
         }
 
         BeginPathfind(currentTargetPosition, pendingPathTolerance);
+    }
+
+    /// <summary>
+    /// Reist per Lifestream zum bereits freigeschalteten großen Aetheryten eines Nachbarbezirks
+    /// derselben "geteilten" Zonengruppe (siehe TryStartNext-Kommentar) - von dort übernimmt beim
+    /// nächsten Idle-Durchlauf wieder TryStartNext/vnavmesh wie gewohnt. Ohne Lifestream oder ohne
+    /// einen bereits freigeschalteten Aetheryten dort wird die Automation komplett gestoppt (anders
+    /// als AetheryteAutomation.TryTravelToDistrict, das nur einzelne Kandidaten überspringt - hier
+    /// gibt es nichts mehr zu tun, solange der einzig erreichbare Bezirk kein eigenes Ziel hat).
+    /// </summary>
+    private void TryTravelToDistrict(uint targetTerritory)
+    {
+        if (!IsLifestreamAvailable())
+        {
+            StatusText = Loc.T("Nachbarbezirk übersprungen (Lifestream nicht gefunden).", "Skipped neighboring district (Lifestream not found).");
+            Stop();
+            return;
+        }
+
+        var mainAetheryteId = Plugin.FindUnlockedMainAetheryteId(targetTerritory);
+        var accepted = mainAetheryteId.HasValue && lifestreamTeleport.InvokeFunc(mainAetheryteId.Value, (byte)0);
+        if (!accepted)
+        {
+            StatusText = Loc.T(
+                "Nachbarbezirk übersprungen (dort noch kein Aetheryte freigeschaltet oder Teleport abgelehnt).",
+                "Skipped neighboring district (no unlocked aetheryte there yet, or teleport rejected).");
+            Stop();
+            return;
+        }
+
+        state = State.TravelingToDistrict;
+        stateEnteredAt = DateTime.UtcNow;
+        districtTravelFinishedAt = null;
+        districtTravelDepartureTerritory = Plugin.ClientState.TerritoryType;
+        StatusText = Loc.T("Reise zum Hauptätheryten der Nachbarzone...", "Traveling to the main aetheryte of the neighboring zone...");
+    }
+
+    private void UpdateTravelingToDistrict()
+    {
+        // lifestreamIsBusy allein reicht hier nicht (Nutzer-Report: Automation setzte nach dem
+        // Teleport nicht fort) - Lifestream meldet "nicht mehr busy" offenbar schon während der
+        // Teleport-Besetzungszeit, deutlich VOR dem eigentlichen Ladebildschirm. Ein zweiter Aufruf
+        // von TryTravelToDistrict mitten in dieser Besetzungszeit (weil die Zone dafür noch als "alt"
+        // gilt) ließ den erneuten Lifestream.Teleport-Aufruf fehlschlagen und stoppte die Automation
+        // komplett, noch bevor der tatsächliche Zonenwechsel überhaupt stattfand. Daher: erst
+        // fortsetzen, wenn sich Plugin.ClientState.TerritoryType TATSÄCHLICH geändert hat (= der
+        // Ladebildschirm bereits durchlaufen ist), nicht nur, wenn Lifestream kurz "nicht busy" meldet.
+        if (Plugin.ClientState.TerritoryType == districtTravelDepartureTerritory)
+        {
+            districtTravelFinishedAt = null;
+            if (DateTime.UtcNow - stateEnteredAt > DistrictTravelTimeout)
+            {
+                Plugin.Log.Info("[TripleTriadAutomation] UpdateTravelingToDistrict: Reise dauert zu lange - Automation gestoppt.");
+                StatusText = Loc.T("Bezirkswechsel dauert zu lange - Automation gestoppt.", "District travel is taking too long - automation stopped.");
+                StopLifestream();
+                Stop();
+            }
+
+            return;
+        }
+
+        // Zone hat sich geändert (Ladebildschirm durchlaufen) - kurz warten, bis Position/Navmesh für
+        // die neue Zone tatsächlich bereitstehen, dann TryStartNext frisch versuchen lassen.
+        districtTravelFinishedAt ??= DateTime.UtcNow;
+        if (DateTime.UtcNow - districtTravelFinishedAt.Value < DistrictTravelSettleDelay)
+            return;
+
+        districtTravelFinishedAt = null;
+        state = State.Idle;
     }
 
     private void UpdateMounting()

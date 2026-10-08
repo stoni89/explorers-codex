@@ -50,6 +50,11 @@ public class CodexOverlayWindow : Window
     // Frame bestimmt und alle Draw-Methoden ihn danach lesen.
     private bool shadowActive;
 
+    // Multiplikator (0-1) für die Alpha der Filter-/Auto-Knöpfe und Kategorie-Badges, aus
+    // Configuration.CompactTransparency abgeleitet (siehe PreDraw) - 1 = voll deckend (0% Transparenz),
+    // 0 = unsichtbar (100% Transparenz).
+    private float overlayContentAlpha = 1f;
+
     // Abschnitt 5.1 - Einklappen (nur Kopfzeile sichtbar) und Positionssperre, analog zu
     // CompactOverlayWindow.collapsed/Configuration.CompactLocked. Die Sperre teilt sich bewusst
     // dieselbe Configuration.CompactLocked wie das alte Overlay (gleiche Grundidee wie
@@ -61,6 +66,10 @@ public class CodexOverlayWindow : Window
     // Doppelklick (ein-/ausklappen) nicht zusätzlich das Menü aufpoppen lässt. -1 = kein ausstehender
     // Einfachklick.
     private double pendingTitleSingleClickTime = -1d;
+
+    // Siehe DrawOverlayDebugInfo - wie CodexMenuWindow.debugCopyConfirmedUntil, eigener Zustand für
+    // den Kopieren-Knopf dieses Fensters.
+    private long overlayDebugCopyConfirmedUntil;
 
     public override bool DrawConditions() =>
         Plugin.ClientState.IsLoggedIn;
@@ -90,6 +99,10 @@ public class CodexOverlayWindow : Window
 
         var transparency = plugin.Configuration.CompactTransparency;
         shadowActive = transparency >= 0.7f;
+        // Nutzeranforderung: Filter-/Auto-Knöpfe und Kategorie-Badges sollen mit demselben Regler wie
+        // der Fensterhintergrund (CompactTransparency) ausbleichen, nicht erst binär ab der 70%-
+        // Schattenschwelle (shadowActive) komplett unverändert bleiben.
+        overlayContentAlpha = 1f - Math.Clamp(transparency, 0f, 1f);
 
         var flags = BaseFlags;
         if (plugin.Configuration.CompactLocked)
@@ -131,6 +144,8 @@ public class CodexOverlayWindow : Window
         if (!collapsed)
         {
             DrawZoneRow(scale, territoryId);
+            if (plugin.Configuration.ShowDebugInfo)
+                DrawOverlayDebugInfo(scale);
             DrawAutoButtonsRow(scale, territoryId);
             DrawAutomationStatusText(scale);
             // Trennlinie unter dem Zonen-Block - bewusst HIER (immer gezeichnet), nicht mehr am Ende
@@ -145,10 +160,7 @@ public class CodexOverlayWindow : Window
             DrawList(scale, territoryId);
         }
 
-        CodexTheme.DrawCornerOrnaments(
-            CodexTheme.CornerLenOverlay * scale,
-            CodexTheme.CornerThickOverlay * scale,
-            CodexTheme.CornerInsetOverlay * scale);
+        CodexTheme.DrawOverlayCornerOrnaments(CodexTheme.CornerInsetOverlay * scale);
 
         // Nutzeranforderung: Position persistieren - kein config.Save() bei jedem Frame während des
         // Ziehens (siehe CodexMenuWindow.Draw-Kommentar, dasselbe "database is locked"-Problem).
@@ -342,6 +354,89 @@ public class CodexOverlayWindow : Window
         ImGui.Unindent(14f * scale);
     }
 
+    /// <summary>Siehe Configuration.ShowDebugInfo - Zonen-Name/-Id und Weltposition
+    /// direkt im Overlay unterhalb der Zonen-Zeile, mit Kopieren-Knopf für die Weltposition daneben
+    /// (dasselbe "x f, y f, z f"-Format wie CodexMenuWindow.DrawDebugCopyButton) - erspart das Öffnen
+    /// des Hauptmenüs nur für diese Werte, z.B. beim Ermitteln von Sightseeing-/Angel-Positionen.</summary>
+    private void DrawOverlayDebugInfo(float scale)
+    {
+        ImGui.Indent(14f * scale);
+        ImGui.Dummy(new Vector2(0f, 2f * scale));
+
+        var playerPos = Plugin.ObjectTable.LocalPlayer?.Position;
+        var posText = playerPos.HasValue
+            ? $"X {playerPos.Value.X.ToString("F3", CultureInfo.InvariantCulture)}  " +
+              $"Y {playerPos.Value.Y.ToString("F3", CultureInfo.InvariantCulture)}  " +
+              $"Z {playerPos.Value.Z.ToString("F3", CultureInfo.InvariantCulture)}"
+            : Loc.T("Weltposition nicht verfügbar", "World position not available");
+
+        var rowStartX = ImGui.GetCursorPosX();
+        float maxPosTextWidth;
+        using (CodexTheme.FontBodySmall.Push())
+        {
+            // Feste Breite für den längsten realistisch vorkommenden Text reserviert (negative,
+            // vierstellige Koordinaten) statt die tatsächliche Textbreite zu nehmen (Nutzervorgabe:
+            // Kopieren-Knopf soll nicht wandern, wenn sich die Ziffernbreite der Koordinaten durch
+            // Vorzeichen/Stellenzahl ändert).
+            maxPosTextWidth = ImGui.CalcTextSize("X -9999.999  Y -9999.999  Z -9999.999").X;
+            CodexTheme.TextShadowed(posText, CodexTheme.TextTertiary, shadowActive);
+        }
+
+        if (playerPos.HasValue)
+        {
+            ImGui.SameLine(rowStartX + maxPosTextWidth + 6f * scale, 0f);
+            DrawOverlayDebugCopyButton(scale, playerPos.Value);
+        }
+
+        ImGui.Unindent(14f * scale);
+        ImGui.Dummy(new Vector2(0f, 2f * scale));
+    }
+
+    /// <summary>Kleiner Kopieren-Knopf neben der Weltposition (siehe DrawOverlayDebugInfo) - bewusst nur
+    /// ein Icon statt des vollen, beschrifteten Knopfs aus CodexMenuWindow.DrawDebugCopyButton, dafür
+    /// ist im schmalen Overlay kein Platz.</summary>
+    private void DrawOverlayDebugCopyButton(float scale, Vector3 position)
+    {
+        var confirmed = Environment.TickCount64 < overlayDebugCopyConfirmedUntil;
+        var icon = confirmed ? FontAwesomeIcon.Check : FontAwesomeIcon.Copy;
+        var fg = confirmed ? CodexTheme.OkFg : CodexTheme.TextHeading;
+        var border = confirmed ? CodexTheme.OkFg : CodexTheme.LineControl;
+
+        var size = new Vector2(18f * scale, 18f * scale);
+        var cursor = ImGui.GetCursorScreenPos();
+        var clicked = ImGui.InvisibleButton("##CodexOverlayDebugCopy", size);
+        var hovered = ImGui.IsItemHovered();
+
+        var drawList = ImGui.GetWindowDrawList();
+        drawList.AddRectFilled(cursor, cursor + size, ImGui.GetColorU32(hovered ? CodexTheme.BgSelected : new Vector4(0f, 0f, 0f, 0f)), CodexTheme.RoundingControl);
+        drawList.AddRect(cursor, cursor + size, ImGui.GetColorU32(border), CodexTheme.RoundingControl);
+
+        using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
+        {
+            var glyph = icon.ToIconString();
+            var nativeIconPx = ImGui.GetFontSize();
+            var desiredIconPx = 11f * scale;
+            ImGui.SetWindowFontScale(desiredIconPx / nativeIconPx);
+            var glyphSize = ImGui.CalcTextSize(glyph);
+            drawList.AddText(cursor + (size - glyphSize) / 2f, ImGui.GetColorU32(fg), glyph);
+            ImGui.SetWindowFontScale(1f);
+        }
+
+        if (hovered)
+        {
+            ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
+            ShowTooltip(confirmed ? Loc.T("Kopiert", "Copied") : Loc.T("Weltposition kopieren", "Copy world position"));
+        }
+
+        if (clicked)
+        {
+            ImGui.SetClipboardText($"{position.X.ToString(CultureInfo.InvariantCulture)}f, " +
+                                    $"{position.Y.ToString(CultureInfo.InvariantCulture)}f, " +
+                                    $"{position.Z.ToString(CultureInfo.InvariantCulture)}f");
+            overlayDebugCopyConfirmedUntil = Environment.TickCount64 + 1500;
+        }
+    }
+
     // ---- Abschnitt 5.2: Auto-Knöpfe ----
 
     internal static string AutoButtonLabel(string key) => key switch
@@ -380,6 +475,11 @@ public class CodexOverlayWindow : Window
             return;
 
         var anyRunning = buttons.Any(b => b.IsActive);
+        // Nutzeranforderung: Auto-Knöpfe während MSQ-Quest-Kämpfen (solo-instanzierte Bosskämpfe wie
+        // bei "Containment Bay" o.ä.) deaktivieren - Questionable/die Automation soll dort nicht
+        // hineinfunken. Condition[InCombat] deckt jeden Kampf ab, nicht nur MSQ-spezifische - bewusst
+        // so (jeder Kampf ist ein Grund, die Automation nicht gerade jetzt starten zu lassen).
+        var inCombat = Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat];
 
         ImGui.Dummy(new Vector2(0f, 2f * scale));
         ImGui.Indent(14f * scale);
@@ -404,7 +504,7 @@ public class CodexOverlayWindow : Window
                 }
 
                 ImGui.SetCursorPos(new Vector2(cursorX, cursorY));
-                DrawAutoButton(button, label, new Vector2(width, buttonHeight), anyRunning, scale, shadowActive);
+                DrawAutoButton(button, label, new Vector2(width, buttonHeight), anyRunning, scale, shadowActive, inCombat, overlayContentAlpha);
 
                 cursorX += width + AutoButtonGap * scale;
             }
@@ -431,9 +531,9 @@ public class CodexOverlayWindow : Window
     /// shadowActive: wird auch von CodexMenuWindow.DrawOverlayPreviewWindow (Dummy-Vorschau im neuen
     /// Einstellungsmenü) wiederverwendet, damit die Vorschau exakt wie das echte Overlay aussieht.
     /// </summary>
-    internal static void DrawAutoButton(Plugin.ZoneAutomationButton button, string label, Vector2 size, bool anyRunning, float scale, bool shadow)
+    internal static void DrawAutoButton(Plugin.ZoneAutomationButton button, string label, Vector2 size, bool anyRunning, float scale, bool shadow, bool inCombat = false, float contentAlpha = 1f)
     {
-        var locked = anyRunning && !button.IsActive;
+        var locked = (anyRunning && !button.IsActive) || (inCombat && !button.IsActive);
 
         Vector4 bg, border, fg, countFg, iconColor;
         if (button.IsActive)
@@ -463,6 +563,10 @@ public class CodexOverlayWindow : Window
             countFg = CodexTheme.TextTertiary;
             iconColor = CodexTheme.Accent;
         }
+
+        // Mit der Overlay-Deckkraft ausbleichen (Nutzeranforderung) - aber NUR die Füllung, nicht
+        // Umriss/Text/Icon (Nutzervorgabe: die sollen auch bei 0% Opacity noch lesbar bleiben).
+        bg = bg with { W = bg.W * contentAlpha };
 
         var cursor = ImGui.GetCursorScreenPos();
         var clicked = ImGui.InvisibleButton($"##CodexAuto_{button.Key}", size);
@@ -508,7 +612,11 @@ public class CodexOverlayWindow : Window
         if (locked)
         {
             if (hovered)
-                ShowTooltip(Loc.T("Es läuft bereits eine andere Auto-Funktion", "Another auto function is already running"));
+            {
+                ShowTooltip(inCombat
+                    ? Loc.T("Im Kampf nicht verfügbar", "Not available during combat")
+                    : Loc.T("Es läuft bereits eine andere Auto-Funktion", "Another auto function is already running"));
+            }
             return;
         }
 
@@ -556,7 +664,7 @@ public class CodexOverlayWindow : Window
 
         ImGui.Indent(14f * scale);
         ImGui.Dummy(new Vector2(0f, 4f * scale));
-        using (CodexTheme.FontBodySmall.Push())
+        using (CodexTheme.FontOverlayStatusText.Push())
             CodexTheme.TextShadowed(text, active ? CodexTheme.Accent : CodexTheme.TextTertiary, shadowActive);
         ImGui.Unindent(14f * scale);
     }
@@ -600,7 +708,11 @@ public class CodexOverlayWindow : Window
 
         var culture = CultureInfo.GetCultureInfo(Loc.T("de-DE", "en-US"));
 
-        if (ImGui.BeginTable("##CodexCurrencyGrid", 2, ImGuiTableFlags.None))
+        // Rechter Randabstand identisch zum linken Indent (14px) - ohne explizite Tabellenbreite nutzte
+        // die Tabelle die volle verfügbare Breite bis zum Fensterrand, wodurch rechts außen (anders als
+        // links) kein Randabstand blieb und Inhalt dort abgeschnitten wirkte (Nutzer-Report).
+        var tableWidth = ImGui.GetContentRegionAvail().X - 14f * scale;
+        if (ImGui.BeginTable("##CodexCurrencyGrid", 2, ImGuiTableFlags.None, new Vector2(tableWidth, 0f)))
         {
             ImGui.TableSetupColumn("##CodexCurrencyCol0", ImGuiTableColumnFlags.WidthStretch, 1f);
             ImGui.TableSetupColumn("##CodexCurrencyCol1", ImGuiTableColumnFlags.WidthStretch, 1f);
@@ -734,10 +846,10 @@ public class CodexOverlayWindow : Window
         var zoneCount = plugin.GetZoneOverlayItems(territoryId).Count;
         var todoCount = plugin.GetToDoOverlayItems().Count;
 
-        if (DrawTab("zone", Loc.T("Zone", "Zone"), zoneCount, activeView == OverlayView.Zone, scale, shadowActive))
+        if (DrawTab("zone", Loc.T("Zone", "Zone"), zoneCount, activeView == OverlayView.Zone, scale, shadowActive, overlayContentAlpha))
             activeView = OverlayView.Zone;
         ImGui.SameLine(0f, 18f * scale);
-        if (DrawTab("todo", Loc.T("ToDo-Liste", "To-do list"), todoCount, activeView == OverlayView.ToDo, scale, shadowActive))
+        if (DrawTab("todo", Loc.T("ToDo-Liste", "To-do list"), todoCount, activeView == OverlayView.ToDo, scale, shadowActive, overlayContentAlpha))
             activeView = OverlayView.ToDo;
 
         var config = plugin.Configuration;
@@ -797,11 +909,11 @@ public class CodexOverlayWindow : Window
         // desselben Überlappungs-Bugs.
         var rightEdge = ImGui.GetWindowContentRegionMax().X - 10f * scale;
         ImGui.SameLine(rightEdge - typeWidth - currencyWidth - 6f * scale);
-        var (typeButtonMin, typeButtonSize, typeClicked) = DrawFilterButton("type", typeLabel, typeActive, typeWidth, scale, shadowActive);
+        var (typeButtonMin, typeButtonSize, typeClicked) = DrawFilterButton("type", typeLabel, typeActive, typeWidth, scale, shadowActive, overlayContentAlpha);
         if (typeClicked)
             openFilterPopup = openFilterPopup == "type" ? null : "type";
         ImGui.SameLine(0f, 6f * scale);
-        var (currencyButtonMin, currencyButtonSize, currencyClicked) = DrawFilterButton("cur", currencyLabel, currencyActive, currencyWidth, scale, shadowActive);
+        var (currencyButtonMin, currencyButtonSize, currencyClicked) = DrawFilterButton("cur", currencyLabel, currencyActive, currencyWidth, scale, shadowActive, overlayContentAlpha);
         if (currencyClicked)
             openFilterPopup = openFilterPopup == "cur" ? null : "cur";
 
@@ -821,7 +933,7 @@ public class CodexOverlayWindow : Window
     /// zurück, wenn der Reiter gerade angeklickt wurde - der Aufrufer entscheidet selbst, was das
     /// bedeutet (im echten Overlay: activeView umschalten, in der Vorschau: nichts).
     /// </summary>
-    internal static bool DrawTab(string id, string label, int count, bool selected, float scale, bool shadow)
+    internal static bool DrawTab(string id, string label, int count, bool selected, float scale, bool shadow, float contentAlpha = 1f)
     {
         var countText = count.ToString();
 
@@ -843,13 +955,17 @@ public class CodexOverlayWindow : Window
 
         var clicked = ImGui.InvisibleButton($"##CodexTab_{id}", size);
 
+        // Kein Hintergrund hier, nur Text/Linie - bleibt unabhängig von contentAlpha immer voll
+        // sichtbar (Nutzervorgabe: nur Füllungen sollen mit der Opacity ausbleichen).
         var drawList = ImGui.GetWindowDrawList();
+        var labelColor = selected ? CodexTheme.TextHeading : CodexTheme.TextTertiary;
+        var countColor = selected ? CodexTheme.Accent : CodexTheme.TextDim;
         using (CodexTheme.FontTabLabel.Push())
-            CodexTheme.DrawTextShadowed(drawList, cursor, selected ? CodexTheme.TextHeading : CodexTheme.TextTertiary, label + " ", shadow);
+            CodexTheme.DrawTextShadowed(drawList, cursor, labelColor, label + " ", shadow);
         // Auf der Grundlinie des (größeren) Label-Texts ausgerichtet, statt oben - sonst wirkt die
         // kleinere Zahl bei unterschiedlichen Schriftgrößen visuell zu hoch.
         using (CodexTheme.FontTabRow.Push())
-            CodexTheme.DrawTextShadowed(drawList, cursor + new Vector2(labelWidth, labelHeight - countHeight), selected ? CodexTheme.Accent : CodexTheme.TextDim, countText, shadow);
+            CodexTheme.DrawTextShadowed(drawList, cursor + new Vector2(labelWidth, labelHeight - countHeight), countColor, countText, shadow);
 
         if (selected)
         {
@@ -866,7 +982,7 @@ public class CodexOverlayWindow : Window
     /// CodexMenuWindow.DrawOverlayPreviewWindow wiederverwendet, damit die Vorschau exakt dieselben
     /// Filter-Knöpfe wie das echte Overlay zeigt.
     /// </summary>
-    internal static (Vector2 Min, Vector2 Size, bool Clicked) DrawFilterButton(string key, string label, bool active, float width, float scale, bool shadow)
+    internal static (Vector2 Min, Vector2 Size, bool Clicked) DrawFilterButton(string key, string label, bool active, float width, float scale, bool shadow, float contentAlpha = 1f)
     {
         float labelHeight;
         using (CodexTheme.FontFilterButton.Push())
@@ -886,6 +1002,9 @@ public class CodexOverlayWindow : Window
         // deckenden Ton, damit der Knopf auf dem fast unsichtbaren Fenster lesbar bleibt.
         var bg = active ? CodexTheme.BgSelectedStrong : shadow ? CodexTheme.TranslucentButtonBg : new Vector4(0f, 0f, 0f, 0f);
         var fg = active ? CodexTheme.TextHeading : CodexTheme.TextPrimary;
+        // Nur die Füllung blasst mit der Opacity aus, nicht Rahmen/Text/Diamant (Nutzervorgabe: die
+        // sollen auch bei 0% Opacity noch zu sehen sein).
+        bg = bg with { W = bg.W * contentAlpha };
 
         var drawList = ImGui.GetWindowDrawList();
         drawList.AddRectFilled(cursor, cursor + size, ImGui.GetColorU32(bg), CodexTheme.RoundingControl);
@@ -1206,6 +1325,10 @@ public class CodexOverlayWindow : Window
         }
 
         ImGui.BeginChild("##CodexOverlayList", new Vector2(0f, 290f * scale), false);
+        // Etwas Luft ÜBER der ersten Zeile (Nutzer-Report: Schloss-Symbol in der ersten Zeile oben
+        // etwas abgeschnitten) - das Schloss-Icon (22px hoch) reicht bei Zeile 0 sonst bis an den
+        // oberen Rand des Scroll-Childs, dessen Clip-Rect exakt dort beginnt.
+        ImGui.Dummy(new Vector2(0f, 3f * scale));
         ImGui.Indent(8f * scale);
 
         // Zeilenhöhe (Nutzeranforderung, Display-Karte im neuen Menü) - die Badge-Höhe (fester
@@ -1234,7 +1357,13 @@ public class CodexOverlayWindow : Window
             // abgedunkelt, Name und Preis gedämpft, zusätzliches Schloss-Symbol mit Tooltip. Nur
             // sichtbar, wenn Configuration.ShowAllItems aktiviert ist - sonst tauchen diese Einträge
             // laut Plugin.GetZoneOverlayItems erst gar nicht in der Liste auf (siehe dessen Kommentar).
-            var isGated = Plugin.IsAchievementOrRankGated(item);
+            // Zusätzlich (Nutzeranforderung): Quests, die Questionable selbst als nicht unterstützt
+            // meldet (siehe QuestAutomation.IsKnownUnsupported) - die stehen weiterhin in der Liste
+            // (seit der Entfernung des entsprechenden Filters aus ComputeZoneOverlayItems), bekommen
+            // aber dasselbe Schloss-Symbol, nur mit eigenem Hinweistext statt des generischen
+            // Achievement-/Rang-Grundes.
+            var isQuestUnsupportedByQuestionable = item.Type == CollectibleType.Quest && plugin.QuestAutomation.IsKnownUnsupported(item.Id);
+            var isGated = Plugin.IsAchievementOrRankGated(item) || isQuestUnsupportedByQuestionable;
 
             var (badgeBg, badgeFg) = GetTypeBadgeColors(item.Type);
             if (isGated)
@@ -1242,6 +1371,9 @@ public class CodexOverlayWindow : Window
                 badgeBg = badgeBg with { W = badgeBg.W * 0.55f };
                 badgeFg = badgeFg with { W = badgeFg.W * 0.55f };
             }
+            // Nutzervorgabe: nur die Füllung blasst mit der Overlay-Deckkraft aus, der Beschriftungstext
+            // bleibt auch bei 0% Opacity lesbar.
+            badgeBg = badgeBg with { W = badgeBg.W * overlayContentAlpha };
 
             var badgeLabel = GetBadgeLabel(item.Type);
 
@@ -1310,7 +1442,10 @@ public class CodexOverlayWindow : Window
             {
                 var lockSize = new Vector2(22f * scale, 22f * scale);
                 ImGui.SameLine(0f, 6f * scale);
-                DrawGateLockButton(item, lockSize, scale);
+                var gateReason = isQuestUnsupportedByQuestionable
+                    ? Loc.T("Unsupported Quest by Questionable", "Unsupported Quest by Questionable")
+                    : Plugin.GetAchievementOrRankGateReason(item);
+                DrawGateLockButton(item, lockSize, scale, gateReason);
             }
 
             // 4. Währung - Nutzeranforderung: statt des ausgeschriebenen Namens (z.B. "500,000 Gil")
@@ -1328,7 +1463,8 @@ public class CodexOverlayWindow : Window
                 var iconSize = 16f * scale;
                 var totalWidth = amountWidth + 4f * scale + iconSize;
 
-                ImGui.SameLine(ImGui.GetWindowContentRegionMax().X - totalWidth - 3f * scale);
+                // Nutzeranforderung: 2px weiter nach links als zuvor (war 3px Randabstand).
+                ImGui.SameLine(ImGui.GetWindowContentRegionMax().X - totalWidth - 5f * scale);
                 ImGui.AlignTextToFramePadding();
                 ImGui.BeginGroup();
                 CodexTheme.TextShadowed(amountText, isGated ? CodexTheme.TextDim : CodexTheme.TextMuted, shadowActive);
@@ -1450,11 +1586,12 @@ public class CodexOverlayWindow : Window
 
     /// <summary>
     /// Abschnitt 5.7 - Schloss-Knopf vor dem Preis eines Eintrags mit nicht erfüllter Voraussetzung
-    /// (Achievement/Rang). Tooltip übernimmt den Grund aus der bisherigen Plugin-Logik (Plugin.
-    /// GetAchievementOrRankGateReason, dieselbe Methode wie im alten Overlay) - nur die Darstellung
-    /// (Titelzeile + "◆"-Aufzählung statt Fließtext) ist neu.
+    /// (Achievement/Rang) ODER einer von Questionable als nicht unterstützt gemeldeten Quest (siehe
+    /// Aufrufer) - der Tooltip-Grund wird dafür vom Aufrufer übergeben statt hier fest
+    /// Plugin.GetAchievementOrRankGateReason aufzurufen, damit beide Fälle dasselbe Schloss-Symbol
+    /// nutzen können.
     /// </summary>
-    private static void DrawGateLockButton(CollectibleEntry item, Vector2 size, float scale)
+    private static void DrawGateLockButton(CollectibleEntry item, Vector2 size, float scale, string reason)
     {
         var cursor = ImGui.GetCursorScreenPos();
         ImGui.InvisibleButton($"##CodexGateLock{item.Type}{item.Id}", size);
@@ -1510,7 +1647,7 @@ public class CodexOverlayWindow : Window
         // Keine "◆"-Aufzählung mehr davor (Nutzer-Report: wird im Standard-ImGui-Font als
         // Fragezeichen/Tofu-Glyph dargestellt, da dessen Zeichensatz diesen Unicode-Punkt nicht
         // enthält).
-        ImGui.TextColored(CodexTheme.TextValue, Plugin.GetAchievementOrRankGateReason(item));
+        ImGui.TextColored(CodexTheme.TextValue, reason);
         ImGui.PopTextWrapPos();
         ImGui.Unindent(2f * scale);
         ImGui.Dummy(new Vector2(0f, 2f * scale));
