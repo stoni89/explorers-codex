@@ -65,9 +65,6 @@ The Explorer's Codex is distributed through a custom Dalamud repository.
 > [!IMPORTANT]
 > Only add repositories you trust. Custom plugins are not reviewed by the Dalamud team.
 
-> [!NOTE]
-> Used the old `https://raw.githubusercontent.com/stoni89/explorers-codex/main/repo.json` URL before? It still works for now, but remove it once you have added the URL above, so the plugin does not show up twice.
-
 ---
 
 ## 🚀 Getting started
