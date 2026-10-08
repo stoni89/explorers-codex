@@ -13,6 +13,17 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Das Submodule unter external/PluginUiKit ist ein EIGENES Projekt (siehe ProjectReference
+         weiter unten), kein Teil dieses Projekts - ohne diesen Ausschluss greift der SDK-Standard-
+         Glob "**/*.cs" trotzdem zu, seit das Submodule (anders als vorher der Sibling-Ordner
+         außerhalb des Repos) INNERHALB dieses Projektordners liegt, und kompiliert jede Datei doppelt
+         (einmal direkt hier, einmal über die referenzierte PluginUiKit.dll) - "conflicts with the
+         imported type"-Warnungen plus Duplicate-Attribute-Fehler aus den doppelten obj/-Dateien. -->
+    <Compile Remove="external\**\*.cs" />
+    <None Remove="external\**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Liefert vorberechnete NPC<->Shop- und NPC<->Position-Zuordnungen (ENpcShop/ENpcPlace), die
          aus Square Enix' eigenen Rohdaten allein nicht sauber auflösbar sind - für die Händler-
          Auflösung bei per Framer's-Kit-Item kaufbaren Portrait-Rahmen (siehe Plugin.EnrichFrameKitVendors).
@@ -22,9 +33,14 @@
 
   <ItemGroup>
     <!-- Das aus diesem Projekt herausgelöste, wiederverwendbare UI-Paket (siehe
-         C:\FF14Mods\PluginUiKit\README.md) - CodexTheme.cs/CodexWidgets.cs sind nur noch eine dünne
-         Weiterleitungsschicht darauf, keine eigene Implementierung mehr. -->
-    <ProjectReference Include="..\PluginUiKit\PluginUiKit.csproj" />
+         external/PluginUiKit/README.md) - CodexTheme.cs/CodexWidgets.cs sind nur noch eine dünne
+         Weiterleitungsschicht darauf, keine eigene Implementierung mehr. Eigenes Repo
+         (github.com/stoni89/plugin-ui-kit, auch von Big Fish Helper genutzt), hier als Git-Submodule
+         eingebunden (siehe .gitmodules) statt eines Sibling-Ordners außerhalb dieses Repos - ein
+         Projektverweis nach "..\" liegt außerhalb des Checkouts und war in GitHub Actions nicht
+         auflösbar (Build schlug dort fehl, lokal unbemerkt, da der Sibling-Ordner dort existierte).
+         .github/workflows/release.yml checkt das Submodule deshalb jetzt mit aus (submodules: true). -->
+    <ProjectReference Include="external\PluginUiKit\PluginUiKit.csproj" />
   </ItemGroup>
 
   <ItemGroup>
