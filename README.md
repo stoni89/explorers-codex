@@ -46,7 +46,6 @@ The Explorer's Codex answers that the moment you step in. A compact overlay list
 - **Category order:** decide whether mounts, minions, cards or emotes come first.
 - **Collectible database:** every collectible the plugin can track, across every zone, with your current status.
 - **Statistics:** totals per category and your overall completion, at a glance.
-- Adjustable transparency, so it can sit quietly over your game.
 
 ---
 
@@ -75,7 +74,6 @@ The Explorer's Codex is distributed through a custom Dalamud repository.
 
 1. Open the menu with `/exc` (run it again to close it) and choose your language under **General**. By default the plugin follows your game client.
 2. Turn on the overlay. It appears automatically in every zone with something left to collect.
-3. Hover an entry for details, or click the pin to add it to your to-do list.
 
 ---
 
@@ -85,7 +83,7 @@ These plugins are needed for the automation features:
 
 | Plugin | Used for |
 |---|---|
-| vnavmesh | Pathfinding and walking for every automation (aetheryte, quest, hunting log, go-to). |
+| vnavmesh | Pathfinding and walking for every automation (aetheryte, quest, hunting log). |
 | Questionable | Drives the quest automation to accept and complete quests automatically. |
 | Lifestream | Traveling between districts of a split capital city during automation. |
 | Saucy | Plays the Triple Triad matches against NPC opponents during the Triple Triad automation, until all of their cards have dropped. |
@@ -96,7 +94,7 @@ These plugins are needed for the automation features:
 
 | Plugin | Used for |
 |---|---|
-| Allagan Tools | Shows retainer stock next to your currencies. |
+| Allagan Tools | Shows retainer stock next to your currencies, and adds a "More information" option to an entry's right-click menu. |
 
 The **Plugins** page in the menu shows what is installed and what is missing.
 
