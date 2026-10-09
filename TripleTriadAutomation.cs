@@ -277,6 +277,9 @@ public sealed class TripleTriadAutomation
     // am Ende wieder einschalten.
     private bool restoreSaucyAutoOpen;
 
+    /// <summary>Siehe AetheryteAutomation.RestrictedToToDo-Kommentar.</summary>
+    public bool RestrictedToToDo { get; set; }
+
     public void Start()
     {
         // Saucys Fenster soll während der Automation nicht bei jeder Herausforderung aufgehen.

@@ -264,6 +264,9 @@ public sealed class SightseeingAutomation
         }
     }
 
+    /// <summary>Siehe AetheryteAutomation.RestrictedToToDo-Kommentar.</summary>
+    public bool RestrictedToToDo { get; set; }
+
     public void Start()
     {
         IsActive = true;

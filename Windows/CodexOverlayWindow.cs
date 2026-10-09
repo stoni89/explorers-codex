@@ -470,7 +470,10 @@ public class CodexOverlayWindow : Window
     /// <summary>Abschnitt 5.2 - Knopfreihe mit den drei "endgültigen" Auto-Funktionen (siehe Plugin.GetZoneAutomationButtons).</summary>
     private void DrawAutoButtonsRow(float scale, uint territoryId)
     {
-        var buttons = plugin.GetZoneAutomationButtons(territoryId);
+        // Nutzeranforderung: im ToDo-Tab nur die Auto-Knöpfe zeigen, die für ToDo-Einträge auch
+        // etwas zu tun haben, mit einer auf die ToDo-Liste bezogenen Anzahl statt der Zonen-Anzahl
+        // (siehe Plugin.GetZoneAutomationButtons-Kommentar zum restrictToToDo-Parameter).
+        var buttons = plugin.GetZoneAutomationButtons(territoryId, restrictToToDo: activeView == OverlayView.ToDo);
         if (buttons.Count == 0)
             return;
 
@@ -658,6 +661,7 @@ public class CodexOverlayWindow : Window
         Check(plugin.ChocobokeepAutomation.ShouldShowStatusText, plugin.ChocobokeepAutomation.StatusText, plugin.ChocobokeepAutomation.IsActive);
         Check(plugin.TripleTriadAutomation.ShouldShowStatusText, plugin.TripleTriadAutomation.StatusText, plugin.TripleTriadAutomation.IsActive);
         Check(plugin.NoFlyAreaExit.IsBusy, plugin.NoFlyAreaExit.StatusText, true);
+        Check(plugin.ToDoCrossZoneTraveler.IsBusy, plugin.ToDoCrossZoneTraveler.StatusText, true);
 
         if (text == null)
             return;
@@ -684,11 +688,12 @@ public class CodexOverlayWindow : Window
         if (!config.ShowCurrencyWallet)
             return;
 
-        // Dieselbe Grundmenge wie die Zonen-Liste (siehe GetZoneOverlayItems) - jeder Eintrag mit
-        // Hauptwährung UND etwaigen Zusatzwährungen (CollectibleEntry.AdditionalCurrencies), auf die
-        // jeweilige Item-Id dedupliziert (der alte Vorbild-Wortlaut in CompactOverlayWindow.
-        // DrawCurrencyWallet macht dasselbe).
-        var items = plugin.GetZoneOverlayItems(territoryId);
+        // Dieselbe Grundmenge wie die aktuell sichtbare Liste (siehe GetZoneOverlayItems/
+        // GetToDoOverlayItems) - jeder Eintrag mit Hauptwährung UND etwaigen Zusatzwährungen
+        // (CollectibleEntry.AdditionalCurrencies), auf die jeweilige Item-Id dedupliziert (der alte
+        // Vorbild-Wortlaut in CompactOverlayWindow.DrawCurrencyWallet macht dasselbe). Im ToDo-Tab
+        // (Nutzeranforderung) die Währungen der ToDo-Liste statt der aktuellen Zone zeigen.
+        var items = activeView == OverlayView.ToDo ? plugin.GetToDoOverlayItems() : plugin.GetZoneOverlayItems(territoryId);
         var currencies = items
             .SelectMany(e => new[] { new CollectibleCurrency { Currency = e.Currency, CurrencyIconId = e.CurrencyIconId, CurrencyItemId = e.CurrencyItemId, CurrencyAmount = e.CurrencyAmount } }
                 .Concat(e.AdditionalCurrencies ?? Enumerable.Empty<CollectibleCurrency>()))
@@ -1363,7 +1368,11 @@ public class CodexOverlayWindow : Window
             // aber dasselbe Schloss-Symbol, nur mit eigenem Hinweistext statt des generischen
             // Achievement-/Rang-Grundes.
             var isQuestUnsupportedByQuestionable = item.Type == CollectibleType.Quest && plugin.QuestAutomation.IsKnownUnsupported(item.Id);
-            var isGated = Plugin.IsAchievementOrRankGated(item) || isQuestUnsupportedByQuestionable;
+            // Wie oben bei Quests, nur für Ätherströmungen mit bekanntermaßen nicht automatisierbarer
+            // Handroute (siehe AetherCurrentAutomation.KnownUnsupportedIds-Kommentar, z.B. "The Ruby
+            // Sea #1" - der Tauchgang ab der Wasseroberfläche).
+            var isAetherCurrentUnsupported = item.Type == CollectibleType.AetherCurrent && AetherCurrentAutomation.IsKnownUnsupported(item.Id);
+            var isGated = Plugin.IsAchievementOrRankGated(item) || isQuestUnsupportedByQuestionable || isAetherCurrentUnsupported;
 
             var (badgeBg, badgeFg) = GetTypeBadgeColors(item.Type);
             if (isGated)
@@ -1436,6 +1445,16 @@ public class CodexOverlayWindow : Window
 
             DrawEntryContextMenu(item);
 
+            // Nutzeranforderung: Quests, deren Abschluss automatisch eine Ätherströmung freischaltet
+            // (siehe Plugin.QuestGrantsAetherCurrent-Kommentar), bekommen "(Aether Current)" hinter dem
+            // Namen - in derselben Farbe wie die Ätherströmungs-Badges/-Kategorie, damit sofort
+            // erkennbar ist, welche Quests das mitbringen.
+            if (item.Type == CollectibleType.Quest && Plugin.QuestGrantsAetherCurrent(item.Id))
+            {
+                ImGui.SameLine(0f, 4f * scale);
+                CodexTheme.TextShadowed(Loc.T("(Ätherströmung)", "(Aether Current)"), TypeColors[CollectibleType.AetherCurrent], shadowActive);
+            }
+
             // 3. Schloss-Knopf (Abschnitt 5.7) - nur bei nicht erfüllter Voraussetzung, direkt neben
             // dem Namen (Nutzeranforderung), nicht mehr vor dem Preis.
             if (isGated)
@@ -1444,7 +1463,9 @@ public class CodexOverlayWindow : Window
                 ImGui.SameLine(0f, 6f * scale);
                 var gateReason = isQuestUnsupportedByQuestionable
                     ? Loc.T("Unsupported Quest by Questionable", "Unsupported Quest by Questionable")
-                    : Plugin.GetAchievementOrRankGateReason(item);
+                    : isAetherCurrentUnsupported
+                        ? Loc.T("Currently unsupported", "Currently unsupported")
+                        : Plugin.GetAchievementOrRankGateReason(item);
                 DrawGateLockButton(item, lockSize, scale, gateReason);
             }
 

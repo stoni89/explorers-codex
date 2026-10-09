@@ -27,8 +27,21 @@ public sealed class AetherCurrentAutomation
         MovingTo,
         Interacting,
         JumpRoute,
+        ManualRoute,
+        GateRoute,
         ReturningToStart,
         TeleportingHomeAfterCompletion,
+        TeleportingToStart,
+    }
+
+    // Siehe Plugin.AetherCurrentGateRoute-Kommentar - State.MovingTo läuft zuerst ganz normal zum Tor
+    // (Route.GatePosition), erst DANACH übernimmt dieser Zustand: interagieren, Ja/Nein bestätigen,
+    // Ladeanimation abwarten, dann normal weiter (Mount anfordern, BeginPathfind zum echten Ziel).
+    private enum GatePhase
+    {
+        Approaching,
+        Interacting,
+        WaitingForLoadingScreen,
     }
 
     // Manche Ätherströmungen sind nur über einen kurzen Sprung erreichbar (z.B. "The Dravanian
@@ -42,6 +55,29 @@ public sealed class AetherCurrentAutomation
         WalkingToRunUp,
         RunningToJump,
         WalkingToPostJumpWaypoint,
+    }
+
+    // Wie JumpPhase, aber für Plugin.AetherCurrentManualRoute (z.B. "The Ruby Sea #1" - schwimmen/
+    // auftauchen/laufen bis zu einer Stelle, dort aufmounten, dann reiten) - State.MovingTo läuft
+    // zuerst ganz normal zum Startpunkt (Route.Start), erst DANACH übernimmt State.ManualRoute: zu
+    // Fuß/schwimmend durch WalkWaypoints, aufmounten, dann geritten durch RideWaypoints (letzter Punkt
+    // = entry.WorldPosition), danach normal weiter zur Interaktion.
+    private enum ManualRoutePhase
+    {
+        // Nur, wenn Plugin.AetherCurrentManualRoute.CrossingWaypoints gesetzt ist (z.B. "The Ruby Sea
+        // #1": beritten ein Stück in einen Tunnel hineinreiten, der eine Ladeanimation/
+        // Unterbereichswechsel auslöst) - GANZ VOR allem anderen, noch vor Start.
+        CrossingWaypoints,
+        WaitingForCrossingLoadingScreen,
+        // Nur, wenn Plugin.AetherCurrentManualRoute.MountedApproachTarget gesetzt ist (z.B. "The Ruby
+        // Sea #1": ab Start UNBERITTEN zur ehemaligen Startposition abtauchen) - VOR WalkingWaypoints.
+        RidingToMountedApproach,
+        WalkingWaypoints,
+        // Nur, wenn Plugin.AetherCurrentManualRoute.WalkWaypointsFlying gesetzt ist - nach einem
+        // Tauchgang erst das Auftauchen abwarten (Condition[Diving]==false), bevor es normal weitergeht.
+        WaitingToSurface,
+        Mounting,
+        RidingWaypoints,
     }
 
     private static readonly TimeSpan MountWaitTimeout = TimeSpan.FromSeconds(6);
@@ -76,8 +112,25 @@ public sealed class AetherCurrentAutomation
 
     // Wie lange nach dem Interagieren auf die tatsächliche Freischaltung gewartet wird (der
     // "Entdecken"-Effekt braucht evtl. einen kurzen Moment, ähnlich AetheryteAutomation.
-    // UnlockWaitTimeout).
+    // UnlockWaitTimeout). Gilt nur noch für den LETZTEN Versuch (siehe InteractRetryWaitTimeout für
+    // die Versuche davor, Nutzeranforderung: "Abstand zwischen den interacting Versuchen verringern").
     private static readonly TimeSpan UnlockWaitTimeout = TimeSpan.FromSeconds(15);
+
+    // Kürzerer Abstand zwischen den einzelnen Interact-Wiederholversuchen (Nutzeranforderung: "alle 2
+    // Sekunden") - ein fehlgeschlagener Interact (z.B. durch eine noch laufende Abmount-Animation)
+    // zeigt sich praktisch sofort, ein voller UnlockWaitTimeout-Wartezyklus pro Versuch war unnötig
+    // langsam. Nur der allerletzte Versuch (siehe InteractMaxAttempts) wartet weiterhin die volle
+    // UnlockWaitTimeout, falls die Freischaltung selbst (nicht der Interact) noch etwas Zeit braucht.
+    private static readonly TimeSpan InteractRetryWaitTimeout = TimeSpan.FromSeconds(2);
+
+    // Wie AetheryteAutomation.InteractPathSettleDuration - kurz bestätigt abwarten, dass der Laufweg
+    // wirklich steht, bevor interagiert wird (siehe UpdateInteracting-Kommentar).
+    private static readonly TimeSpan InteractPathSettleDuration = TimeSpan.FromMilliseconds(500);
+    private DateTime? interactPathSettleConfirmedSince;
+
+    // Sicherheitsnetz, falls pathIsRunning nie (lange genug) false meldet (siehe UpdateInteracting-
+    // Kommentar) - danach trotzdem interagieren, statt endlos zu warten.
+    private static readonly TimeSpan InteractPathSettleMaxWait = TimeSpan.FromSeconds(3);
 
     private const int MaxAttemptsPerTarget = 2;
     private readonly Dictionary<uint, int> attemptCounts = new();
@@ -111,12 +164,46 @@ public sealed class AetherCurrentAutomation
 
     // Siehe TryTeleportHomeAfterCompletion-Kommentar - Punkte, nach denen zum Haupt-Ätheryten der
     // Zone teleportiert wird, bevor der nächste Punkt gewählt wird (Nutzeranforderung, z.B. "The Ruby
-    // Sea #3" - die Landestelle/der Rückweg der Sprungroute liegt ungünstig für den nächsten Punkt).
-    private static readonly HashSet<uint> TeleportHomeAfterCompletionIds = new() { 2818185 };
+    // Sea #2"/"#1" - die Landestelle/der Rückweg der Sprung-/Handroute liegt ungünstig für den
+    // nächsten Punkt).
+    private static readonly HashSet<uint> TeleportHomeAfterCompletionIds = new() { 2818182, 2818187 };
+
+    // Für Ätherströmungen, deren Handroute bekanntermaßen (noch) nicht zuverlässig automatisierbar ist
+    // (Nutzeranforderung: "The Ruby Sea #1" - der Tauchgang ab der freien Wasseroberfläche lässt sich
+    // über vnavmesh bisher nicht nachbilden, siehe Plugin.AetherCurrentManualRoutes-Kommentar) - werden
+    // von TryStartNext NIE automatisch angelaufen (müssen von Hand erledigt werden), bekommen aber
+    // trotzdem wie Plugin.QuestAutomation.IsKnownUnsupported ein Schloss-Symbol mit Hinweistext im
+    // Overlay statt einfach aus der Liste zu verschwinden.
+    private static readonly HashSet<uint> KnownUnsupportedIds = new();
+
+    /// <summary>Siehe KnownUnsupportedIds-Kommentar.</summary>
+    public static bool IsKnownUnsupported(uint aetherCurrentId) => KnownUnsupportedIds.Contains(aetherCurrentId);
+
     private bool postCompletionTeleportHasSeenLoadingScreen;
     private static readonly TimeSpan PostCompletionTeleportTimeout = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan PostCompletionTeleportSettleDelay = TimeSpan.FromSeconds(2);
+
+    // Nutzer-Report (Azim Steppe #3): von der normalen Ankunftsposition aus kaum sauber erreichbar -
+    // erst per Lifestream zu diesem Ätheryten teleportieren, danach ganz normal weiter (siehe
+    // StartMovingTo/TryTeleportToStart). Key = Ätherströmungs-Id, Wert = Name des Ziel-Ätheryten.
+    private static readonly Dictionary<uint, string> PreStartTeleportAetheryteNames = new()
+    {
+        [2818212] = "The Dawn Throne", // The Azim Steppe #3
+        [2818139] = "The Peering Stones", // The Fringes #3
+        [2818154] = "Ala Ghiri", // The Peaks #3
+        [2818157] = "Ala Ghiri", // The Peaks #4
+        [2818187] = "Tamamizu", // The Ruby Sea #1
+    };
+    private bool preStartTeleportHasSeenLoadingScreen;
     private float? savedPathTolerance;
+
+    // Wie AetheryteAutomation.postInteractDiagnosticStartedAt - jeden Frame für kurze Zeit NACH dem
+    // Interact loggen, was mit Position/Condition-Flags passiert (Nutzer-Report: "interagiert... macht
+    // nix" - ohne das lässt sich nicht unterscheiden, ob z.B. noch beritten, ein Cast abbricht, oder
+    // der Laufweg doch wieder anläuft und wegschiebt).
+    private DateTime? postInteractDiagnosticStartedAt;
+    private Vector3? postInteractDiagnosticLastPos;
+    private static readonly TimeSpan PostInteractDiagnosticDuration = TimeSpan.FromSeconds(3);
 
     private State state = State.Idle;
     private CollectibleEntry? currentTargetEntry;
@@ -127,7 +214,25 @@ public sealed class AetherCurrentAutomation
     private readonly NavigationStuckDetector stuckDetector = new();
     private readonly FlightPathUpgrade flightUpgrade = new(); // siehe Plugin.FlightPathUpgrade (Flugverbots-Bereiche)
     private bool hasInteractedThisCycle;
+    private int interactAttemptCount;
+    private const int InteractMaxAttempts = 3;
     private DateTime? interactObjectNotFoundSince;
+
+    // Siehe UpdateInteracting-Kommentar - genaues Nachlaufen zum tatsächlich gefundenen Spielobjekt,
+    // falls die hinterlegte WorldPosition etwas danebenliegt. hasApproachedInteractObject bleibt true,
+    // sobald einmal nah genug dran (kein wiederholtes Nachlaufen nötig); approachingInteractObject nur
+    // während der eine Laufauftrag dafür noch läuft.
+    private bool hasApproachedInteractObject;
+    private bool approachingInteractObject;
+    private bool interactObjectDismounting;
+    private DateTime? interactObjectDismountedAt;
+    // Fallback, falls der Fußweg zum Objekt nicht nah genug herankommt (z.B. Ätherströmung über einem
+    // Abgrund/in der Luft, zu Fuß unerreichbar - Nutzer-Report "bleibt wie immer so weit weg stehen"):
+    // einmalig fliegend direkt auf die exakte Position versuchen, statt den Fußweg-Stand als "angekommen"
+    // zu akzeptieren.
+    private bool interactObjectTriedFlyingApproach;
+    private bool interactObjectMountingForFlight;
+    private const float InteractObjectApproachThreshold = 1f;
 
     // Siehe UpdateInteracting-Kommentar zu Configuration.SimulateAetherCurrentAutomation - kurze
     // künstliche Pause statt auf ein eventuell gar nicht mehr vorhandenes Objekt zu warten.
@@ -148,6 +253,28 @@ public sealed class AetherCurrentAutomation
     private Plugin.AetherCurrentJumpRoute? activeJumpRoute;
     private JumpPhase jumpPhase;
     private DateTime? jumpDismountedAt;
+
+    // Wie activeJumpRoute, nur für Plugin.AetherCurrentManualRoutes/State.ManualRoute.
+    private Plugin.AetherCurrentManualRoute? activeManualRoute;
+    private ManualRoutePhase manualRoutePhase;
+    private int manualRouteWaypointIndex;
+    private bool manualRouteCrossingDone;
+    private bool manualRouteCrossingHasSeenLoadingScreen;
+    private DateTime? manualRouteCrossingLoadingEndedAt;
+
+    // Wie activeJumpRoute, nur für Plugin.AetherCurrentGateRoutes/State.GateRoute.
+    private Plugin.AetherCurrentGateRoute? activeGateRoute;
+    private GatePhase gatePhase;
+    private DateTime? gateDismountedAt;
+    private int gateInteractAttempts;
+    private DateTime gateInteractedAt;
+    private bool gateHasSeenLoadingScreen;
+    private DateTime? gateLoadingEndedAt;
+    private const int GateMaxInteractAttempts = 3;
+    private const float GateObjectSearchRadius = 8f;
+    private static readonly TimeSpan GateDismountSettleDelay = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan GateInteractRetryInterval = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan GateLoadingTimeout = TimeSpan.FromSeconds(30);
 
     // Bleibt (anders als activeJumpRoute, das schon nach der Landung wieder null wird) für die
     // GESAMTE Dauer des aktuellen Ziels gesetzt, sobald eine Sprungroute hinterlegt ist - nach
@@ -265,6 +392,9 @@ public sealed class AetherCurrentAutomation
         }
     }
 
+    /// <summary>Siehe AetheryteAutomation.RestrictedToToDo-Kommentar.</summary>
+    public bool RestrictedToToDo { get; set; }
+
     public void Start()
     {
         IsActive = true;
@@ -279,6 +409,9 @@ public sealed class AetherCurrentAutomation
         jumpRouteReturnPath = null;
         returnWaypointIndex = 0;
         returnToStartArrivedAt = null;
+        activeManualRoute = null;
+        manualRouteWaypointIndex = 0;
+        activeGateRoute = null;
         lastFinishedId = null;
         StatusText = Loc.T("Automation gestartet...", "Automation started...");
     }
@@ -292,12 +425,15 @@ public sealed class AetherCurrentAutomation
         StopLifestream();
         Plugin.ClearNavigationTarget();
 
-        // Mitten in einer Sprungroute gestoppt - enge vnavmesh-Toleranz nicht dauerhaft gesetzt lassen.
+        // Mitten in einer Sprung-/Handroute gestoppt - enge vnavmesh-Toleranz nicht dauerhaft gesetzt lassen.
         RestorePathTolerance();
         activeJumpRoute = null;
         jumpRouteReturnPath = null;
         returnWaypointIndex = 0;
         returnToStartArrivedAt = null;
+        activeManualRoute = null;
+        manualRouteWaypointIndex = 0;
+        activeGateRoute = null;
     }
 
     public void MarkUnavailable()
@@ -393,7 +529,11 @@ public sealed class AetherCurrentAutomation
             {
                 Plugin.Log.Info($"[AetherCurrentAutomation] Kampf vorbei - Kampf-Plugin wieder aus, starte Sprungroute neu: {currentTargetEntry.Name}.");
                 activeJumpRoute = route;
-                jumpRouteReturnPath = (route.ReturnPath ?? new[] { route.Start }).ToList();
+                // Siehe StartMovingTo-Kommentar zu TeleportHomeAfterCompletionIds - derselbe Sonderfall
+                // gilt auch beim Neustart der Sprungroute nach einem Kampf.
+                jumpRouteReturnPath = route.ReturnPath != null
+                    ? route.ReturnPath.ToList()
+                    : TeleportHomeAfterCompletionIds.Contains(currentTargetEntry.Id) ? null : new List<Vector3> { route.Start };
                 returnWaypointIndex = 0;
                 didFinalApproach = false;
                 currentTargetPosition = route.Start;
@@ -477,12 +617,24 @@ public sealed class AetherCurrentAutomation
                     UpdateJumpRoute(aetherCurrentsInZone);
                     break;
 
+                case State.ManualRoute:
+                    UpdateManualRoute();
+                    break;
+
+                case State.GateRoute:
+                    UpdateGateRoute();
+                    break;
+
                 case State.ReturningToStart:
                     UpdateReturningToStart();
                     break;
 
                 case State.TeleportingHomeAfterCompletion:
                     UpdateTeleportingHomeAfterCompletion();
+                    break;
+
+                case State.TeleportingToStart:
+                    UpdateTeleportingToStart();
                     break;
             }
         }
@@ -502,7 +654,7 @@ public sealed class AetherCurrentAutomation
         // Hunting-Log-Monster) meist als reine Kartenkoordinate (VendorMapX/Y) aus einem Community-
         // Export, ohne eigene rohe Weltposition (siehe aethercurrents.json-Kommentar in
         // CollectionData.cs). Plugin.OpenEntryMap in StartMovingTo kommt mit beiden Varianten klar.
-        var candidates = entries.Where(e => e.HasGoToTarget && !skippedIds.Contains(e.Id)).ToList();
+        var candidates = entries.Where(e => e.HasGoToTarget && !skippedIds.Contains(e.Id) && !IsKnownUnsupported(e.Id)).ToList();
 
         // Siehe lastFinishedId-Kommentar - nur ausschließen, wenn tatsächlich noch etwas ANDERES zur
         // Auswahl steht, sonst (einzige verbleibende Ätherströmung, z.B. Simulation mit nur einem
@@ -589,7 +741,17 @@ public sealed class AetherCurrentAutomation
         currentTargetEntry = entry;
         currentTargetPosition = floorPoint.Value;
         hasInteractedThisCycle = false;
+        interactAttemptCount = 0;
+        hasApproachedInteractObject = false;
+        approachingInteractObject = false;
+        interactObjectDismounting = false;
+        interactObjectDismountedAt = null;
+        interactObjectTriedFlyingApproach = false;
+        interactObjectMountingForFlight = false;
         interactObjectNotFoundSince = null;
+        interactPathSettleConfirmedSince = null;
+        postInteractDiagnosticStartedAt = null;
+        postInteractDiagnosticLastPos = null;
         simulatedActivationStartedAt = null;
         didFinalApproach = false;
         hasIntentionallyDismounted = false;
@@ -601,16 +763,69 @@ public sealed class AetherCurrentAutomation
         if (Plugin.TryGetAetherCurrentJumpRoute(entry.Id, out var jumpRoute))
         {
             activeJumpRoute = jumpRoute;
-            jumpRouteReturnPath = (jumpRoute.ReturnPath ?? new[] { jumpRoute.Start }).ToList();
+            // Ohne eigenen ReturnPath normalerweise zurück zum Startpunkt (Default unten) - AUSSER der
+            // Punkt ist in TeleportHomeAfterCompletionIds gelistet, dann soll nach der Freischaltung
+            // direkt zum Haupt-Ätheryten teleportiert werden (siehe FinishCurrent/
+            // TryTeleportHomeAfterCompletion), kein Rückweg zum Startpunkt (Nutzer-Report: lief sonst
+            // immer zum Startpunkt zurück statt zu teleportieren).
+            jumpRouteReturnPath = jumpRoute.ReturnPath != null
+                ? jumpRoute.ReturnPath.ToList()
+                : TeleportHomeAfterCompletionIds.Contains(entry.Id) ? null : new List<Vector3> { jumpRoute.Start };
             returnWaypointIndex = 0;
             currentTargetPosition = jumpRoute.Start;
+            activeManualRoute = null;
+            activeGateRoute = null;
+        }
+        // Handroute hinterlegt (siehe Plugin.AetherCurrentManualRoutes)? Dann wie bei der Sprungroute
+        // erst zum Startpunkt laufen - der eigentliche Lauf-/Reitweg passiert erst nach Ankunft dort
+        // (siehe UpdateMoving/State.ManualRoute).
+        else if (Plugin.TryGetAetherCurrentManualRoute(entry.Id, out var manualRoute))
+        {
+            activeJumpRoute = null;
+            jumpRouteReturnPath = null;
+            activeManualRoute = manualRoute;
+            activeGateRoute = null;
+            manualRouteCrossingDone = false;
+            manualRouteCrossingHasSeenLoadingScreen = false;
+            manualRouteCrossingLoadingEndedAt = null;
+            currentTargetPosition = manualRoute.CrossingWaypoints is { Length: > 0 } crossingWaypoints
+                ? crossingWaypoints[0]
+                : manualRoute.Start;
+        }
+        // Tor-Route hinterlegt (siehe Plugin.AetherCurrentGateRoutes)? Dann erst zum Tor laufen (ganz
+        // normal, siehe unten) - das Interagieren/Bestätigen/Warten passiert erst nach Ankunft dort
+        // (siehe UpdateMoving/State.GateRoute).
+        else if (Plugin.TryGetAetherCurrentGateRoute(entry.Id, out var gateRoute))
+        {
+            activeJumpRoute = null;
+            jumpRouteReturnPath = null;
+            activeManualRoute = null;
+            activeGateRoute = gateRoute;
+            currentTargetPosition = gateRoute.GatePosition;
         }
         else
         {
             activeJumpRoute = null;
             jumpRouteReturnPath = null;
+            activeManualRoute = null;
+            activeGateRoute = null;
         }
 
+        // Manche Ätherströmungen sind von der normalen Ankunftsposition aus zu Fuß/fliegend kaum
+        // sauber erreichbar (Nutzer-Report, z.B. Azim Steppe #3) - dort erst per Lifestream zu einem
+        // konkreten, bekannten Ätheryten teleportieren, DANACH ganz normal weiter (Mount anfordern,
+        // BeginPathfind) wie unten.
+        var hasPreStartTeleport = PreStartTeleportAetheryteNames.TryGetValue(entry.Id, out var teleportAetheryteName);
+        Plugin.Log.Info($"[AetherCurrentAutomation] StartMovingTo({entry.Name}, Id={entry.Id}): PreStartTeleport hinterlegt={hasPreStartTeleport}{(hasPreStartTeleport ? $" ({teleportAetheryteName})" : "")}.");
+        if (hasPreStartTeleport && TryTeleportToStart(teleportAetheryteName!, entry))
+            return;
+
+        BeginMountAndPathfind(entry);
+    }
+
+    /// <summary>Siehe PreStartTeleportAetheryteNames-Kommentar - Mount anfordern (falls möglich), dann BeginPathfind, identisch zum bisherigen Ende von StartMovingTo.</summary>
+    private void BeginMountAndPathfind(CollectibleEntry entry)
+    {
         if (Plugin.TryRequestAetheryteMount())
         {
             state = State.Mounting;
@@ -620,6 +835,67 @@ public sealed class AetherCurrentAutomation
         }
 
         BeginPathfind();
+    }
+
+    /// <summary>
+    /// Siehe PreStartTeleportAetheryteNames-Kommentar. Klappt der Teleport nicht (Lifestream fehlt/
+    /// Ätheryte-Name nicht auflösbar/noch nicht freigeschaltet), einfach normal weiter wie bisher -
+    /// der nachfolgende Lauf-/Flugweg bleibt dann der bisherige, ungünstigere Startpunkt, aber die
+    /// Automation bleibt nicht hängen.
+    /// </summary>
+    private bool TryTeleportToStart(string aetheryteName, CollectibleEntry entry)
+    {
+        if (!IsLifestreamAvailable())
+        {
+            Plugin.Log.Info($"[AetherCurrentAutomation] TryTeleportToStart({entry.Name}): Lifestream-IPC nicht verfügbar - teleportiere nicht.");
+            return false;
+        }
+
+        var aetheryteId = Plugin.ResolveAetheryteIdByName(aetheryteName);
+        if (aetheryteId == null)
+        {
+            Plugin.Log.Warning($"[AetherCurrentAutomation] TryTeleportToStart({entry.Name}): Ätheryte \"{aetheryteName}\" nicht im Aetheryte-Sheet gefunden (Name/Sprache falsch?) - teleportiere nicht.");
+            return false;
+        }
+
+        if (!lifestreamTeleport.InvokeFunc(aetheryteId.Value, (byte)0))
+        {
+            Plugin.Log.Warning($"[AetherCurrentAutomation] TryTeleportToStart({entry.Name}): Lifestream.Teleport zu \"{aetheryteName}\" (Id={aetheryteId.Value}) abgelehnt (noch nicht freigeschaltet?) - teleportiere nicht.");
+            return false;
+        }
+
+        preStartTeleportHasSeenLoadingScreen = false;
+        state = State.TeleportingToStart;
+        stateEnteredAt = DateTime.UtcNow;
+        StatusText = Loc.T($"Teleportiere zu {aetheryteName}, dann: {entry.Name}...", $"Teleporting to {aetheryteName}, then: {entry.Name}...");
+        return true;
+    }
+
+    /// <summary>Wie UpdateTeleportingHomeAfterCompletion, aber führt danach BeginMountAndPathfind statt FinishCurrentImmediate aus.</summary>
+    private void UpdateTeleportingToStart()
+    {
+        if (currentTargetEntry == null)
+        {
+            state = State.Idle;
+            return;
+        }
+
+        var loading = Plugin.Condition[ConditionFlag.BetweenAreas] || Plugin.Condition[ConditionFlag.BetweenAreas51];
+        if (loading)
+            preStartTeleportHasSeenLoadingScreen = true;
+
+        if (loading || !preStartTeleportHasSeenLoadingScreen)
+        {
+            if (DateTime.UtcNow - stateEnteredAt > PostCompletionTeleportTimeout)
+                BeginMountAndPathfind(currentTargetEntry);
+
+            return;
+        }
+
+        if (DateTime.UtcNow - stateEnteredAt < PostCompletionTeleportSettleDelay)
+            return;
+
+        BeginMountAndPathfind(currentTargetEntry);
     }
 
     /// <param name="forceGround">
@@ -634,6 +910,26 @@ public sealed class AetherCurrentAutomation
         var accepted = false;
         var flyingAccepted = false;
 
+        // Ist eine exakte WorldPosition hinterlegt, den ZU-FUSS-Laufauftrag von Anfang an mit der engen
+        // FinalApproachTolerance stellen statt der großzügigen ArrivalTolerance (Nutzer-Report: "immer
+        // viel zu weit weg zum interagieren") - der bisherige zweite, enge Laufauftrag danach (siehe
+        // UpdateMoving/BeginFinalApproach) lehnte vnavmesh in dem Fall teils ab, mit dersselben
+        // Mehrdeutigkeit wie "schon nah genug dran" ("false" bedeutet beides) - dann blieb der erste,
+        // grobe Anlauf als tatsächliches Ergebnis stehen. Fliegend bewusst weiterhin die großzügigere
+        // ArrivalTolerance (wie gehabt) - die enge Toleranz lässt sich fliegend oft gar nicht erreichen
+        // (siehe BeginFinalApproach-Kommentar "NIE fliegend"), der anschließende Final-Approach-
+        // Laufauftrag zu Fuß übernimmt die letzten Meter dann wie bisher. Ohne bekannte WorldPosition
+        // (reine Kartenkoordinate) bleibt es überall bei der großzügigeren ArrivalTolerance, da deren
+        // Zielpunkt selbst schon ungenau ist.
+        // Eine aktive Tor-/Sprung-/Handroute läuft immer zuerst zu einem exakten, von Hand erfassten
+        // Punkt (route.GatePosition/Start) - auch wenn entry.WorldPosition selbst noch unbekannt ist
+        // (z.B. "The Peaks #4": das echte Ziel liegt erst hinter dem Tor und wird erst danach
+        // aufgelöst), sonst bliebe der Charakter mit der groben ArrivalTolerance zu weit vom Tor
+        // entfernt stehen (Nutzer-Report: "Gate Position bitte exakt sonst ist er zu weit weg").
+        var hasExactPosition = currentTargetEntry?.WorldPosition != null
+            || activeJumpRoute != null || activeManualRoute != null || activeGateRoute != null;
+        var groundTolerance = hasExactPosition ? FinalApproachTolerance : ArrivalTolerance;
+
         // Fliegend zuerst versuchen, aber nur wenn Plugin.CanFly gerade true ist (Fliegen in dieser
         // Zone bereits freigeschaltet) - vnavmesh nimmt einen Flugauftrag sonst teils trotzdem an,
         // obwohl der Charakter gar nicht abheben kann, und hüpft nur sinnlos am Boden herum statt zu
@@ -645,7 +941,7 @@ public sealed class AetherCurrentAutomation
             accepted = flyingAccepted = pathfindAndMoveCloseTo.InvokeFunc(currentTargetPosition, true, ArrivalTolerance);
 
         if (!accepted)
-            accepted = pathfindAndMoveCloseTo.InvokeFunc(currentTargetPosition, false, ArrivalTolerance);
+            accepted = pathfindAndMoveCloseTo.InvokeFunc(currentTargetPosition, false, groundTolerance);
 
         if (!accepted)
         {
@@ -688,7 +984,21 @@ public sealed class AetherCurrentAutomation
 
         Plugin.TryDismount();
         hasIntentionallyDismounted = true;
+
+        var playerPos = Plugin.ObjectTable.LocalPlayer?.Position ?? target;
+        var distance = Vector3.Distance(playerPos, target);
         var accepted = pathfindAndMoveCloseTo.InvokeFunc(target, false, FinalApproachTolerance);
+
+        // vnavmeshs "false" ist mehrdeutig (siehe Klassenkommentar: "schon nah genug dran" ODER
+        // "abgelehnt, obwohl noch weit weg") - hier selbst nachmessen statt dem Rückgabewert allein zu
+        // vertrauen (Nutzer-Report: "bleibt zu weit entfernt"/"interagiert nicht", obwohl eine exakte
+        // WorldPosition hinterlegt ist). Nur falls WIRKLICH noch weit weg: erneuter Versuch mit der
+        // großzügigeren ArrivalTolerance statt stillschweigend von hier aus zu interagieren.
+        if (!accepted && distance > FinalApproachTolerance * 3f)
+        {
+            Plugin.Log.Warning($"[AetherCurrentAutomation] BeginFinalApproach({currentTargetEntry?.Name}): vnavmesh lehnte den engen Laufweg ab, Entfernung noch {distance:F2}y - versuche erneut mit Standardtoleranz.");
+            accepted = pathfindAndMoveCloseTo.InvokeFunc(target, false, ArrivalTolerance);
+        }
 
         return accepted;
     }
@@ -836,6 +1146,535 @@ public sealed class AetherCurrentAutomation
         StatusText = Loc.T($"Interagiere: {currentTargetEntry.Name}...", $"Interacting: {currentTargetEntry.Name}...");
     }
 
+    /// <summary>Startpunkt einer Handroute erreicht (siehe Plugin.AetherCurrentManualRoutes) - erst die
+    /// WalkWaypoints zu Fuß/schwimmend ablaufen, siehe UpdateManualRoute.</summary>
+    private void BeginManualRoute()
+    {
+        state = State.ManualRoute;
+
+        // CrossingWaypoints gesetzt und noch nicht abgefahren (z.B. "The Ruby Sea #1": beritten ein
+        // Stück in einen Tunnel hineinreiten, der eine Ladeanimation auslöst) - GANZ VOR Start/
+        // MountedApproachTarget/WalkWaypoints, siehe UpdateManualRoute.
+        if (!manualRouteCrossingDone && activeManualRoute!.Value.CrossingWaypoints is { Length: > 0 } crossingWaypoints)
+        {
+            manualRoutePhase = ManualRoutePhase.CrossingWaypoints;
+            stateEnteredAt = DateTime.UtcNow;
+            StatusText = Loc.T($"Reite in den Tunnel: {currentTargetEntry?.Name}...", $"Riding into the tunnel: {currentTargetEntry?.Name}...");
+            // Wegpunkt 0 ist bereits erreicht (das war das vorherige BeginPathfind-Ziel) - weiter zum
+            // nächsten, falls vorhanden, sonst direkt die Ladeanimation abwarten.
+            if (crossingWaypoints.Length > 1)
+            {
+                manualRouteWaypointIndex = 1;
+                IssueManualRouteWaypointMove(crossingWaypoints[1], flying: false);
+            }
+            else
+            {
+                manualRoutePhase = ManualRoutePhase.WaitingForCrossingLoadingScreen;
+                manualRouteCrossingHasSeenLoadingScreen = false;
+                manualRouteCrossingLoadingEndedAt = null;
+            }
+
+            return;
+        }
+
+        // MountedApproachTarget gesetzt (z.B. "The Ruby Sea #1": ab Start zur ehemaligen Startposition
+        // abtauchen)? Nutzer-Report bestätigt: Aufsitzen klappt an dieser Stelle schwimmend GAR NICHT
+        // (weder von Hand noch automatisiert), Abtauchen klappt dagegen von Hand einwandfrei - also
+        // UNBERITTEN bleiben/abmounten und direkt dorthin tauchen. fly:true (nicht false), da ein reiner
+        // Bodenlaufweg (fly:false) sich an die begehbare Navmesh-Oberfläche hält, die an der freien
+        // Wasseroberfläche offenbar nicht tiefer reicht - der direkte 3D-Laufweg (sonst fürs Fliegen
+        // gedacht) ist der einzige vnavmesh-Modus, der überhaupt eine Tiefe jenseits der Oberfläche
+        // ansteuert, und wird hier testweise auch unberitten versucht.
+        if (activeManualRoute!.Value.MountedApproachTarget is { } mountedApproachTarget)
+        {
+            manualRoutePhase = ManualRoutePhase.RidingToMountedApproach;
+            stateEnteredAt = DateTime.UtcNow;
+            StatusText = Loc.T($"Tauche zur ehemaligen Startposition: {currentTargetEntry?.Name}...", $"Diving to the former start position: {currentTargetEntry?.Name}...");
+            LogManualRouteState("BeginManualRoute (vor Tauchgang)");
+            Plugin.TryDismount();
+            var accepted = IssueManualRouteWaypointMove(mountedApproachTarget, flying: true);
+            Plugin.Log.Info($"[AetherCurrentAutomation] BeginManualRoute({currentTargetEntry?.Name}): Tauchgang zu {mountedApproachTarget} mit fly:true ausgelöst, angenommen={accepted}.");
+            return;
+        }
+
+        BeginManualRouteWalkingPhase();
+    }
+
+    /// <summary>
+    /// Tiefen-Fade am Taucheingang passiert (siehe ManualRoutePhase.CrossingWaypoints) - NICHT über
+    /// die normale State.MovingTo/BeginPathfind (die nutzt fly:false für den Bodenlaufauftrag, der in
+    /// dieser Tiefe keinen Weg findet - Nutzer-Report "Movement never started"), sondern direkt in die
+    /// WalkWaypoints-Phase mit vnavmeshs 3D-Laufauftrag (fly:true, siehe WalkWaypointsFlying-Kommentar),
+    /// beginnend bei WalkWaypoints[0]. manualRouteCrossingDone verhindert, dass BeginManualRoute die
+    /// Taucheingangs-Fahrt bei einem erneuten Aufruf (z.B. nach erfolgreichem Auftauchen) nochmal von
+    /// vorne beginnt.
+    /// </summary>
+    private void ResumeAfterManualRouteCrossing()
+    {
+        manualRouteCrossingDone = true;
+        LogManualRouteState("ResumeAfterManualRouteCrossing (vor WalkWaypoints)");
+        BeginManualRouteWalkingPhase();
+    }
+
+    /// <summary>Für die Diagnose des Tauchgangs (Nutzer-Report: "kannst du ein Log einbauen, das ich dir
+    /// schicken kann?") - Mounted/Swimming/Diving/Position in einer Zeile.</summary>
+    private void LogManualRouteState(string context)
+    {
+        var pos = Plugin.ObjectTable.LocalPlayer?.Position ?? Vector3.Zero;
+        Plugin.Log.Info($"[AetherCurrentAutomation] {context}({currentTargetEntry?.Name}): pos={pos}, Mounted={Plugin.Condition[ConditionFlag.Mounted]}, " +
+                         $"Swimming={Plugin.Condition[ConditionFlag.Swimming]}, Diving={Plugin.Condition[ConditionFlag.Diving]}, pathIsRunning={pathIsRunning.InvokeFunc()}.");
+    }
+
+    private static readonly TimeSpan SurfaceWaitTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>Alle Lauf-/Schwimm-/Tauchpunkte erreicht - jetzt für den Reitweg aufmounten (bzw. direkt weiter, falls schon beritten).</summary>
+    private void BeginRidingWaypoints(Plugin.AetherCurrentManualRoute route)
+    {
+        manualRoutePhase = ManualRoutePhase.Mounting;
+        stateEnteredAt = DateTime.UtcNow;
+        if (!Plugin.TryRequestAetheryteMount())
+        {
+            // Kein Mount konfiguriert/Zone erlaubt kein Aufsitzen (oder schon beritten) - trotzdem
+            // weiter, statt hier stehen zu bleiben (Nutzeranforderung: Automation soll nicht hängen bleiben).
+            manualRoutePhase = ManualRoutePhase.RidingWaypoints;
+            manualRouteWaypointIndex = 0;
+            IssueManualRouteWaypointMove(route.RideWaypoints[0], flying: false);
+        }
+    }
+
+    private void BeginManualRouteWalkingPhase()
+    {
+        manualRoutePhase = ManualRoutePhase.WalkingWaypoints;
+        manualRouteWaypointIndex = 0;
+        stateEnteredAt = DateTime.UtcNow;
+
+        // Nur abmounten, wenn die Route das zwingend braucht (MountedApproachTarget gesetzt, z.B. "The
+        // Ruby Sea #1" - dort müssen die WalkWaypoints unberitten geschwommen/getaucht werden). Sonst
+        // (Nutzer-Report: "Er soll nicht abmounten zwischen den Punkten, nur dann am Aether Current")
+        // beritten bleiben - das Abmounten direkt am Objekt übernimmt ohnehin schon UpdateInteracting.
+        if (activeManualRoute!.Value.MountedApproachTarget != null)
+        {
+            Plugin.TryDismount();
+            hasIntentionallyDismounted = true;
+        }
+
+        StatusText = Loc.T($"Laufe zur Ätherströmung: {currentTargetEntry?.Name}...", $"Walking to the aether current: {currentTargetEntry?.Name}...");
+        IssueManualRouteWaypointMove(activeManualRoute!.Value.WalkWaypoints[0], flying: activeManualRoute!.Value.WalkWaypointsFlying);
+    }
+
+    /// <summary>Löst den Laufauftrag zu einem einzelnen Handroute-Wegpunkt aus - immer mit der engen
+    /// JumpRoutePreciseTolerance (Nutzeranforderung: "ohne große Toleranz"), siehe UpdateManualRoute.</summary>
+    private bool IssueManualRouteWaypointMove(Vector3 waypoint, bool flying)
+    {
+        SetExactPathTolerance(true);
+        var accepted = pathfindAndMoveCloseTo.InvokeFunc(waypoint, flying, JumpRoutePreciseTolerance);
+        stuckDetector.Reset();
+        return accepted;
+    }
+
+    /// <summary>
+    /// Läuft die von Hand hinterlegten Wegpunkte einer Plugin.AetherCurrentManualRoute ab: erst zu Fuß/
+    /// schwimmend durch WalkWaypoints, dann aufmounten und durch RideWaypoints reiten (letzter Punkt =
+    /// entry.WorldPosition) - danach normal weiter zur Interaktion (wie CompleteJumpRoute, aber ohne
+    /// erneuten BeginFinalApproach, die Ankunft am letzten RideWaypoint ist bereits exakt genug).
+    /// </summary>
+    private void UpdateManualRoute()
+    {
+        if (currentTargetEntry == null || activeManualRoute is not { } route)
+        {
+            state = State.Idle;
+            return;
+        }
+
+        switch (manualRoutePhase)
+        {
+            case ManualRoutePhase.CrossingWaypoints:
+            {
+                if (pathIsRunning.InvokeFunc())
+                {
+                    if (DateTime.UtcNow - stateEnteredAt > StepMaxDuration)
+                        SkipCurrent(Loc.T("Anfahrt zum Tunnel dauert zu lange", "Approach to the tunnel is taking too long"));
+                    return;
+                }
+
+                var crossingWaypoints = route.CrossingWaypoints!;
+                manualRouteWaypointIndex++;
+                if (manualRouteWaypointIndex < crossingWaypoints.Length)
+                {
+                    stateEnteredAt = DateTime.UtcNow;
+                    IssueManualRouteWaypointMove(crossingWaypoints[manualRouteWaypointIndex], flying: false);
+                    return;
+                }
+
+                manualRoutePhase = ManualRoutePhase.WaitingForCrossingLoadingScreen;
+                manualRouteCrossingHasSeenLoadingScreen = false;
+                manualRouteCrossingLoadingEndedAt = null;
+                stateEnteredAt = DateTime.UtcNow;
+                StatusText = Loc.T($"Warte auf Ladeanimation: {currentTargetEntry.Name}...", $"Waiting for the loading animation: {currentTargetEntry.Name}...");
+                return;
+            }
+
+            case ManualRoutePhase.WaitingForCrossingLoadingScreen:
+            {
+                var loading = Plugin.Condition[ConditionFlag.BetweenAreas] || Plugin.Condition[ConditionFlag.BetweenAreas51];
+                if (loading)
+                    manualRouteCrossingHasSeenLoadingScreen = true;
+
+                if (loading || !manualRouteCrossingHasSeenLoadingScreen)
+                {
+                    manualRouteCrossingLoadingEndedAt = null;
+                    if (DateTime.UtcNow - stateEnteredAt > GateLoadingTimeout)
+                        ResumeAfterManualRouteCrossing();
+
+                    return;
+                }
+
+                // Settle-Delay wie bei UpdateGateRoute.WaitingForLoadingScreen - direkt nach Ende der
+                // Ladeanimation ist der Charakter noch nicht wieder voll "steuerbar".
+                manualRouteCrossingLoadingEndedAt ??= DateTime.UtcNow;
+                if (DateTime.UtcNow - manualRouteCrossingLoadingEndedAt.Value < PostCompletionTeleportSettleDelay)
+                    return;
+
+                // vnavmesh braucht nach einem Unterbereichswechsel einen Moment, bis die Navmesh für
+                // den neuen Bereich aufgebaut ist - ein Laufauftrag davor wird abgelehnt, was ohne
+                // diesen Check zu SkipCurrent("vnavmesh lehnt Laufweg ab") führte und die GESAMTE
+                // Route (inkl. erneutem Teleport zu Tamamizu!) von vorne starten ließ (Nutzer-Report:
+                // "will er immer wieder zurück zum Aetheryten").
+                if (!navmeshIsReady.InvokeFunc())
+                {
+                    if (DateTime.UtcNow - stateEnteredAt > GateLoadingTimeout)
+                        ResumeAfterManualRouteCrossing();
+
+                    StatusText = Loc.T("Warte auf vnavmesh-Navmesh für diesen Bereich...", "Waiting for vnavmesh's navmesh for this area...");
+                    return;
+                }
+
+                ResumeAfterManualRouteCrossing();
+                return;
+            }
+
+            case ManualRoutePhase.RidingToMountedApproach:
+            {
+                if (pathIsRunning.InvokeFunc())
+                {
+                    if (DateTime.UtcNow - stateEnteredAt > StepMaxDuration)
+                        SkipCurrent(Loc.T("Anfahrt zur Ätherströmung dauert zu lange", "Approach to the aether current is taking too long"));
+                    return;
+                }
+
+                LogManualRouteState("UpdateManualRoute.RidingToMountedApproach->WalkingWaypoints (arrived)");
+                BeginManualRouteWalkingPhase();
+                return;
+            }
+
+            case ManualRoutePhase.WalkingWaypoints:
+            {
+                if (pathIsRunning.InvokeFunc())
+                {
+                    if (DateTime.UtcNow - stateEnteredAt > StepMaxDuration)
+                        SkipCurrent(Loc.T("Laufweg zur Ätherströmung dauert zu lange", "Path to the aether current is taking too long"));
+                    return;
+                }
+
+                manualRouteWaypointIndex++;
+                if (manualRouteWaypointIndex < route.WalkWaypoints.Length)
+                {
+                    stateEnteredAt = DateTime.UtcNow;
+                    IssueManualRouteWaypointMove(route.WalkWaypoints[manualRouteWaypointIndex], flying: route.WalkWaypointsFlying);
+                    return;
+                }
+
+                // Nach einem Tauchgang (WalkWaypointsFlying) erst das Auftauchen abwarten (Nutzer-
+                // Anforderung "Nach der Animation zum Aether Current Punkt") - ein Bodenlaufauftrag
+                // direkt im Tauchgang-Zustand würde sonst wieder nicht starten (siehe
+                // ResumeAfterManualRouteCrossing-Kommentar).
+                if (route.WalkWaypointsFlying)
+                {
+                    manualRoutePhase = ManualRoutePhase.WaitingToSurface;
+                    manualRouteCrossingHasSeenLoadingScreen = false;
+                    manualRouteCrossingLoadingEndedAt = null;
+                    stateEnteredAt = DateTime.UtcNow;
+                    StatusText = Loc.T($"Warte auf das Auftauchen: {currentTargetEntry.Name}...", $"Waiting to surface: {currentTargetEntry.Name}...");
+                    return;
+                }
+
+                BeginRidingWaypoints(route);
+                return;
+            }
+
+            case ManualRoutePhase.WaitingToSurface:
+            {
+                // Wie ManualRoutePhase.WaitingForCrossingLoadingScreen - das Auftauchen an Punkt 6 löst
+                // laut Nutzer-Anforderung ebenfalls eine Ladeanimation aus, nicht nur ein Ende von
+                // Condition[Diving].
+                var loading = Plugin.Condition[ConditionFlag.BetweenAreas] || Plugin.Condition[ConditionFlag.BetweenAreas51];
+                if (loading)
+                    manualRouteCrossingHasSeenLoadingScreen = true;
+
+                if (Plugin.Condition[ConditionFlag.Diving] || loading || (!manualRouteCrossingHasSeenLoadingScreen && DateTime.UtcNow - stateEnteredAt < SurfaceWaitTimeout))
+                {
+                    manualRouteCrossingLoadingEndedAt = null;
+                    if (DateTime.UtcNow - stateEnteredAt > GateLoadingTimeout)
+                        BeginRidingWaypoints(route);
+
+                    return;
+                }
+
+                manualRouteCrossingLoadingEndedAt ??= DateTime.UtcNow;
+                if (DateTime.UtcNow - manualRouteCrossingLoadingEndedAt.Value < PostCompletionTeleportSettleDelay)
+                    return;
+
+                if (!navmeshIsReady.InvokeFunc())
+                {
+                    if (DateTime.UtcNow - stateEnteredAt > GateLoadingTimeout)
+                        BeginRidingWaypoints(route);
+
+                    StatusText = Loc.T("Warte auf vnavmesh-Navmesh für diesen Bereich...", "Waiting for vnavmesh's navmesh for this area...");
+                    return;
+                }
+
+                BeginRidingWaypoints(route);
+                return;
+            }
+
+            case ManualRoutePhase.Mounting:
+            {
+                if (Plugin.Condition[ConditionFlag.Mounted] || DateTime.UtcNow - stateEnteredAt > MountWaitTimeout)
+                {
+                    manualRoutePhase = ManualRoutePhase.RidingWaypoints;
+                    manualRouteWaypointIndex = 0;
+                    stateEnteredAt = DateTime.UtcNow;
+                    IssueManualRouteWaypointMove(route.RideWaypoints[0], flying: false);
+                }
+                return;
+            }
+
+            case ManualRoutePhase.RidingWaypoints:
+            {
+                if (pathIsRunning.InvokeFunc())
+                {
+                    if (DateTime.UtcNow - stateEnteredAt > StepMaxDuration)
+                        SkipCurrent(Loc.T("Reitweg zur Ätherströmung dauert zu lange", "Riding path to the aether current is taking too long"));
+                    return;
+                }
+
+                manualRouteWaypointIndex++;
+                if (manualRouteWaypointIndex < route.RideWaypoints.Length)
+                {
+                    stateEnteredAt = DateTime.UtcNow;
+                    IssueManualRouteWaypointMove(route.RideWaypoints[manualRouteWaypointIndex], flying: false);
+                    return;
+                }
+
+                // Letzter Punkt (= entry.WorldPosition) erreicht - normal weiter zur Interaktion. OHNE
+                // dieses Update bliebe currentTargetPosition auf route.Start stehen (Nutzer-Report:
+                // "klickt den Aether Current nicht an") - FindNearestEventObj würde dann am weit
+                // entfernten Startpunkt statt am echten Ziel nach dem Objekt suchen.
+                currentTargetPosition = currentTargetEntry.WorldPosition ?? route.RideWaypoints[^1];
+                RestorePathTolerance();
+                activeManualRoute = null;
+                didFinalApproach = true;
+                state = State.Interacting;
+                stateEnteredAt = DateTime.UtcNow;
+                StatusText = Loc.T($"Interagiere: {currentTargetEntry.Name}...", $"Interacting: {currentTargetEntry.Name}...");
+                return;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Grobe Ankunft in der Nähe des Tors (siehe Plugin.AetherCurrentGateRoutes) - erst noch GENAU zum
+    /// Tor laufen (BeginFinalApproach, wie bei Sprung-/Handrouten üblich), denn ein fliegend
+    /// akzeptierter erster Laufauftrag landet nur innerhalb der großzügigen ArrivalTolerance
+    /// (Nutzer-Report: "Gate Position bitte exakt sonst ist er zu weit weg") - erst DANACH
+    /// interagieren.
+    /// </summary>
+    private void BeginGateRoute()
+    {
+        gatePhase = GatePhase.Approaching;
+        stateEnteredAt = DateTime.UtcNow;
+        state = State.GateRoute;
+        BeginFinalApproach(activeGateRoute!.Value.GatePosition);
+        StatusText = Loc.T($"Laufe genau zum Tor: {currentTargetEntry?.Name}...", $"Walking precisely to the gate: {currentTargetEntry?.Name}...");
+    }
+
+    /// <summary>
+    /// Läuft eine Plugin.AetherCurrentGateRoute ab: abmounten, mit dem Tor-Objekt interagieren, ein
+    /// aufkommendes Ja/Nein-Fenster bestätigen (wie NoFlyAreaExit.UpdateInteracting/
+    /// Plugin.TryConfirmSelectYesno), dann die Ladeanimation abwarten - danach normal weiter (Mount
+    /// anfordern, BeginPathfind zum echten Ziel, dessen Position jetzt - nach dem Öffnen des Tors -
+    /// erst zuverlässig per queryFlagToPoint auflösbar ist, falls keine WorldPosition hinterlegt ist).
+    /// </summary>
+    private void UpdateGateRoute()
+    {
+        if (currentTargetEntry == null || activeGateRoute is not { } route)
+        {
+            state = State.Idle;
+            return;
+        }
+
+        switch (gatePhase)
+        {
+            case GatePhase.Approaching:
+            {
+                if (pathIsRunning.InvokeFunc())
+                {
+                    if (DateTime.UtcNow - stateEnteredAt > StepMaxDuration)
+                        SkipCurrent(Loc.T("Laufweg zum Tor dauert zu lange", "Path to the gate is taking too long"));
+                    return;
+                }
+
+                gatePhase = GatePhase.Interacting;
+                gateInteractAttempts = 0;
+                gateDismountedAt = null;
+                stateEnteredAt = DateTime.UtcNow;
+                StatusText = Loc.T($"Öffne das Tor: {currentTargetEntry.Name}...", $"Opening the gate: {currentTargetEntry.Name}...");
+                return;
+            }
+
+            case GatePhase.Interacting:
+            {
+                if (Plugin.TryConfirmSelectYesno())
+                {
+                    gatePhase = GatePhase.WaitingForLoadingScreen;
+                    gateHasSeenLoadingScreen = false;
+                    gateLoadingEndedAt = null;
+                    stateEnteredAt = DateTime.UtcNow;
+                    StatusText = Loc.T($"Warte auf Ladeanimation: {currentTargetEntry.Name}...", $"Waiting for the loading animation: {currentTargetEntry.Name}...");
+                    return;
+                }
+
+                if (Plugin.Condition[ConditionFlag.Mounted])
+                {
+                    Plugin.TryDismount();
+                    gateDismountedAt = null;
+                    return;
+                }
+
+                gateDismountedAt ??= DateTime.UtcNow;
+                if (DateTime.UtcNow - gateDismountedAt.Value < GateDismountSettleDelay)
+                    return;
+
+                if (gateInteractAttempts > 0 && DateTime.UtcNow - gateInteractedAt < GateInteractRetryInterval)
+                    return;
+
+                if (gateInteractAttempts >= GateMaxInteractAttempts)
+                {
+                    SkipCurrent(Loc.T("Tor reagiert nicht", "The gate does not respond"));
+                    return;
+                }
+
+                if (DateTime.UtcNow - stateEnteredAt > StepMaxDuration)
+                {
+                    SkipCurrent(Loc.T("Tor-Objekt nicht gefunden", "Gate object not found"));
+                    return;
+                }
+
+                var gateObject = FindNearestNamedObject(route.GatePosition, GateObjectSearchRadius, route.GateObjectName);
+                if (gateObject == null)
+                    return;
+
+                if (!Plugin.IsCurrentTarget(gateObject))
+                {
+                    Plugin.SetTarget(gateObject);
+                    return;
+                }
+
+                Plugin.Log.Info($"[AetherCurrentAutomation] UpdateGateRoute({currentTargetEntry.Name}): interagiere mit '{gateObject.Name}'.");
+                Plugin.InteractWithGameObject(gateObject);
+                gateInteractAttempts++;
+                gateInteractedAt = DateTime.UtcNow;
+                return;
+            }
+
+            case GatePhase.WaitingForLoadingScreen:
+            {
+                // Falls das Fenster ein zweites Mal kommt (siehe NoFlyAreaExit.UpdateWaitingForExit).
+                Plugin.TryConfirmSelectYesno();
+
+                var loading = Plugin.Condition[ConditionFlag.BetweenAreas] || Plugin.Condition[ConditionFlag.BetweenAreas51];
+                if (loading)
+                    gateHasSeenLoadingScreen = true;
+
+                if (loading || !gateHasSeenLoadingScreen)
+                {
+                    gateLoadingEndedAt = null;
+                    if (DateTime.UtcNow - stateEnteredAt > GateLoadingTimeout)
+                        ResumeAfterGateRoute();
+
+                    return;
+                }
+
+                // Kurz nach Ende der Ladeanimation ist der Charakter noch nicht wieder voll
+                // "steuerbar" (Nutzer-Report: "Nach der Gate Animation hat er nicht aufgemountet") -
+                // derselbe Effekt wie bei TryTeleportHomeAfterCompletion/
+                // PostCompletionTeleportSettleDelay, ein /mount-Befehl direkt im ersten Frame danach
+                // verhallt sonst ungenutzt.
+                gateLoadingEndedAt ??= DateTime.UtcNow;
+                if (DateTime.UtcNow - gateLoadingEndedAt.Value < PostCompletionTeleportSettleDelay)
+                    return;
+
+                ResumeAfterGateRoute();
+                return;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Tor passiert - jetzt die echte Zielposition auflösen (entry.WorldPosition, falls bekannt,
+    /// sonst erst JETZT per queryFlagToPoint, da der Bereich hinter dem Tor vorher ggf. gar nicht
+    /// begehbar/auflösbar war) und ganz normal weiter wie nach einer Sprung-/Handroute.
+    /// </summary>
+    private void ResumeAfterGateRoute()
+    {
+        activeGateRoute = null;
+
+        Vector3? floorPoint;
+        if (currentTargetEntry!.WorldPosition is { } exactPosition)
+        {
+            floorPoint = exactPosition;
+        }
+        else
+        {
+            Plugin.OpenEntryMap(currentTargetEntry, showMapWindow: false);
+            floorPoint = queryFlagToPoint.InvokeFunc();
+        }
+
+        if (floorPoint == null)
+        {
+            SkipCurrent(Loc.T("Nicht erreichbar", "Not reachable"));
+            return;
+        }
+
+        currentTargetPosition = floorPoint.Value;
+        BeginMountAndPathfind(currentTargetEntry);
+    }
+
+    /// <summary>Wie FindNearestEventObj, aber ohne ObjectKind-Einschränkung und mit Namensfilter (Teilstring, Groß-/Kleinschreibung egal) - für Torobjekte wie "Cermet Bulkhead" (siehe NoFlyAreaExit.FindGateObject).</summary>
+    private static Dalamud.Game.ClientState.Objects.Types.IGameObject? FindNearestNamedObject(Vector3 nearPosition, float maxDistance, string nameContains)
+    {
+        Dalamud.Game.ClientState.Objects.Types.IGameObject? nearest = null;
+        var bestDistance = maxDistance;
+
+        foreach (var obj in Plugin.ObjectTable)
+        {
+            if (!obj.IsTargetable || obj is Dalamud.Game.ClientState.Objects.Types.ICharacter)
+                continue;
+
+            if (obj.Name.TextValue.IndexOf(nameContains, StringComparison.OrdinalIgnoreCase) < 0)
+                continue;
+
+            var distance = Vector3.Distance(obj.Position, nearPosition);
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                nearest = obj;
+            }
+        }
+
+        return nearest;
+    }
+
     // Für die Sprungroute: enge vnavmesh-Wegpunkt-Toleranz, sonst wieder die ursprüngliche - gleiches
     // Prinzip wie SightseeingAutomation.SetExactPathTolerance/RestorePathTolerance.
     private void SetExactPathTolerance(bool exact)
@@ -938,6 +1777,23 @@ public sealed class AetherCurrentAutomation
                 return;
             }
 
+            // Gerade am Startpunkt einer Handroute angekommen (siehe StartMovingTo/
+            // Plugin.AetherCurrentManualRoutes) - jetzt die festen Wegpunkte abgehen, statt normal
+            // weiterzumachen.
+            if (activeManualRoute != null)
+            {
+                BeginManualRoute();
+                return;
+            }
+
+            // Gerade am Tor einer Torroute angekommen (siehe StartMovingTo/Plugin.AetherCurrentGateRoutes) -
+            // jetzt interagieren/bestätigen/warten, statt normal weiterzumachen.
+            if (activeGateRoute != null)
+            {
+                BeginGateRoute();
+                return;
+            }
+
             // Zweiter, engerer Laufauftrag direkt zur bekannten WorldPosition, falls hinterlegt (siehe
             // FinalApproachTolerance-Kommentar) - nur einmal pro Ziel, danach normal weiter zu Interacting.
             if (!didFinalApproach)
@@ -1027,8 +1883,149 @@ public sealed class AetherCurrentAutomation
             return;
         }
 
+        // Die hinterlegte WorldPosition ist nur so genau wie ihre Quelle (von Hand/Community erfasst) -
+        // auch nach exaktem Anlaufen DIESER Koordinate (siehe FinalApproachTolerance) kann das wirkliche
+        // Spielobjekt noch ein paar Yalm danebenliegen (Nutzer-Report: "steht an ihm dran, markiert ihn,
+        // interagiert aber nicht" - laut PostInteractDiag tatsächlich 2.7y vom gefundenen Objekt
+        // entfernt). Jetzt, wo das echte Objekt bekannt ist, einmal noch genau DORTHIN laufen, statt dem
+        // ungenauen Datenwert blind zu vertrauen - erst NACH bestätigter Ankunft (pathIsRunning==false)
+        // mit dem eigentlichen Interact weitermachen.
+        if (!hasApproachedInteractObject)
+        {
+            if (interactObjectMountingForFlight)
+            {
+                if (!Plugin.Condition[ConditionFlag.Mounted])
+                {
+                    if (DateTime.UtcNow - stateEnteredAt > MountWaitTimeout)
+                    {
+                        interactObjectMountingForFlight = false;
+                        hasApproachedInteractObject = true;
+                        Plugin.Log.Warning($"[AetherCurrentAutomation] UpdateInteracting({currentTargetEntry.Name}): Aufsitzen für den Flug-Anflug hat zu lange gedauert - akzeptiere Fußweg-Stand.");
+                    }
+                    return;
+                }
+
+                pathfindAndMoveCloseTo.InvokeFunc(gameObject.Position, true, FinalApproachTolerance);
+                stuckDetector.Reset();
+                stateEnteredAt = DateTime.UtcNow;
+                interactObjectMountingForFlight = false;
+                approachingInteractObject = true;
+                Plugin.Log.Info($"[AetherCurrentAutomation] UpdateInteracting({currentTargetEntry.Name}): aufgesessen - fliege jetzt genau zum Objekt ({gameObject.Position}).");
+                StatusText = Loc.T($"Fliege genau zum Objekt: {currentTargetEntry.Name}...", $"Flying precisely to the object: {currentTargetEntry.Name}...");
+                return;
+            }
+
+            if (!approachingInteractObject && !interactObjectDismounting)
+            {
+                var playerPos = Plugin.ObjectTable.LocalPlayer?.Position ?? gameObject.Position;
+                var distanceToObject = Vector3.Distance(playerPos, gameObject.Position);
+                if (distanceToObject <= InteractObjectApproachThreshold)
+                {
+                    hasApproachedInteractObject = true;
+                }
+                else
+                {
+                    interactObjectDismounting = true;
+                    interactObjectDismountedAt = null;
+                    SetExactPathTolerance(true);
+                    Plugin.TryDismount();
+                    hasIntentionallyDismounted = true;
+                    stateEnteredAt = DateTime.UtcNow;
+                    Plugin.Log.Info($"[AetherCurrentAutomation] UpdateInteracting({currentTargetEntry.Name}): Objekt {distanceToObject:F2}y entfernt gefunden - steige erst ab, bevor dorthin gelaufen wird ({gameObject.Position}).");
+                    StatusText = Loc.T($"Steige ab, bevor zum Objekt gelaufen wird: {currentTargetEntry.Name}...", $"Dismounting before walking to the object: {currentTargetEntry.Name}...");
+                    return;
+                }
+            }
+            else if (interactObjectDismounting)
+            {
+                // Condition[Mounted] wird schon VOR dem Ende der sichtbaren Absteige-Animation false -
+                // ein Laufauftrag mitten in dieser Animation greift nicht (identisches Problem/dieselbe
+                // Lösung wie JumpDismountSettleDelay in UpdateJumpRoute).
+                if (Plugin.Condition[ConditionFlag.Mounted])
+                {
+                    Plugin.TryDismount();
+                    return;
+                }
+
+                interactObjectDismountedAt ??= DateTime.UtcNow;
+                if (DateTime.UtcNow - interactObjectDismountedAt.Value < JumpDismountSettleDelay)
+                    return;
+
+                pathfindAndMoveCloseTo.InvokeFunc(gameObject.Position, false, FinalApproachTolerance);
+                stuckDetector.Reset();
+                stateEnteredAt = DateTime.UtcNow;
+                interactObjectDismounting = false;
+                approachingInteractObject = true;
+                Plugin.Log.Info($"[AetherCurrentAutomation] UpdateInteracting({currentTargetEntry.Name}): abgestiegen und eingependelt - laufe jetzt genau zum Objekt ({gameObject.Position}).");
+                StatusText = Loc.T($"Laufe genau zum Objekt: {currentTargetEntry.Name}...", $"Walking precisely to the object: {currentTargetEntry.Name}...");
+                return;
+            }
+            else
+            {
+                if (pathIsRunning.InvokeFunc())
+                {
+                    if (DateTime.UtcNow - stateEnteredAt > StepMaxDuration)
+                        SkipCurrent(Loc.T("Laufweg zum Objekt dauert zu lange", "Path to the object is taking too long"));
+                    return;
+                }
+
+                approachingInteractObject = false;
+
+                var arrivedPos = Plugin.ObjectTable.LocalPlayer?.Position ?? gameObject.Position;
+                var remainingDistance = Vector3.Distance(arrivedPos, gameObject.Position);
+                if (remainingDistance <= InteractObjectApproachThreshold || interactObjectTriedFlyingApproach)
+                {
+                    hasApproachedInteractObject = true;
+                }
+                else
+                {
+                    // Fußweg kam nicht nah genug heran (z.B. Ätherströmung über einem Abgrund/in der
+                    // Luft, zu Fuß unerreichbar - Nutzer-Report "bleibt wie immer so weit weg stehen").
+                    // Einmalig per Flug-Anflug direkt auf die exakte Position versuchen.
+                    interactObjectTriedFlyingApproach = true;
+                    if (Plugin.CanFly && Plugin.TryRequestAetheryteMount())
+                    {
+                        interactObjectMountingForFlight = true;
+                        stateEnteredAt = DateTime.UtcNow;
+                        Plugin.Log.Info($"[AetherCurrentAutomation] UpdateInteracting({currentTargetEntry.Name}): noch {remainingDistance:F2}y entfernt nach Fußweg - versuche Flug-Anflug.");
+                        StatusText = Loc.T($"Steige auf für den Flug-Anflug: {currentTargetEntry.Name}...", $"Mounting for the flight approach: {currentTargetEntry.Name}...");
+                    }
+                    else
+                    {
+                        hasApproachedInteractObject = true;
+                    }
+                }
+            }
+        }
+
         if (!hasInteractedThisCycle)
         {
+            // Wie AetheryteAutomation.UpdateInteracting (dort per Diagnose-Log bestätigt): ein einzelner
+            // StopPath()-Aufruf reicht nicht - ein eben erst als "angekommen" gewerteter, enger
+            // Laufauftrag (siehe die neue, enge FinalApproachTolerance-Anfahrt) läuft manchmal noch 1-2
+            // Frames nach, schiebt den Charakter dabei aus der Interagieren-Reichweite und lässt den
+            // Interact-Aufruf ins Leere laufen (Nutzer-Report: "interagiert nicht mit dem Aether
+            // Current", wiederkehrend). Deshalb jeden Frame erneut stoppen UND eine kurze Zeit lang
+            // bestätigt bekommen, dass wirklich nichts mehr läuft, bevor Ziel gesetzt/interagiert wird -
+            // läuft es währenddessen doch wieder an, fängt die Bestätigung neu an.
+            StopPath();
+
+            // Sicherheitsnetz: meldet vnavmesh IsRunning==true dauerhaft (z.B. IPC-Hänger, die enge
+            // FinalApproachTolerance wird nie als "angekommen" bestätigt), würde das Warten auf
+            // pathIsRunning==false HIER sonst für immer blockieren, noch VOR jedem Timeout (UnlockWait-
+            // Timeout greift erst NACH dem Interact) - "steht davor und macht nix" (Nutzer-Report).
+            // Nach InteractPathSettleMaxWait trotzdem interagieren, unabhängig vom IsRunning-Zustand.
+            if (pathIsRunning.InvokeFunc() && DateTime.UtcNow - stateEnteredAt < InteractPathSettleMaxWait)
+            {
+                interactPathSettleConfirmedSince = null;
+                return;
+            }
+
+            interactPathSettleConfirmedSince ??= DateTime.UtcNow;
+            if (DateTime.UtcNow - interactPathSettleConfirmedSince.Value < InteractPathSettleDuration
+                && DateTime.UtcNow - stateEnteredAt < InteractPathSettleMaxWait)
+                return;
+
             // Interact braucht das Objekt als aktuelles Ziel - das muss erst einen Frame lang
             // angewendet worden sein, bevor der eigentliche Interact-Aufruf greift (siehe
             // AetheryteAutomation.UpdateInteracting).
@@ -1041,8 +2038,31 @@ public sealed class AetherCurrentAutomation
             Plugin.InteractWithGameObject(gameObject);
             hasInteractedThisCycle = true;
             stateEnteredAt = DateTime.UtcNow;
+            postInteractDiagnosticStartedAt = DateTime.UtcNow;
+            postInteractDiagnosticLastPos = Plugin.ObjectTable.LocalPlayer?.Position;
             Plugin.Log.Info($"[AetherCurrentAutomation] UpdateInteracting({currentTargetEntry.Name}): interagiert mit BaseId={gameObject.BaseId} @ {gameObject.Position}, warte auf Freischaltung...");
             return;
+        }
+
+        // Siehe postInteractDiagnosticStartedAt-Kommentar - jeden Frame für kurze Zeit NACH dem
+        // Interact loggen, was mit der Position passiert und welche Condition-Flags aktiv sind.
+        if (postInteractDiagnosticStartedAt is { } diagStart)
+        {
+            if (DateTime.UtcNow - diagStart < PostInteractDiagnosticDuration)
+            {
+                var diagPos = Plugin.ObjectTable.LocalPlayer?.Position ?? Vector3.Zero;
+                var movedSinceLastFrame = postInteractDiagnosticLastPos.HasValue ? Vector3.Distance(postInteractDiagnosticLastPos.Value, diagPos) : 0f;
+                postInteractDiagnosticLastPos = diagPos;
+                Plugin.Log.Info($"[AetherCurrentAutomation] PostInteractDiag({currentTargetEntry.Name}): pos={diagPos}, movedSinceLastFrame={movedSinceLastFrame:F4}, " +
+                                 $"distToObject={Vector3.Distance(diagPos, gameObject.Position):F3}, Mounted={Plugin.Condition[ConditionFlag.Mounted]}, " +
+                                 $"Casting={Plugin.Condition[ConditionFlag.Casting]}, OccupiedInEvent={Plugin.Condition[ConditionFlag.OccupiedInEvent]}, " +
+                                 $"InCombat={Plugin.Condition[ConditionFlag.InCombat]}, BetweenAreas={Plugin.Condition[ConditionFlag.BetweenAreas]}, " +
+                                 $"pathIsRunning={pathIsRunning.InvokeFunc()}, unlocked={Plugin.IsAetherCurrentUnlocked(currentTargetEntry.Id)}");
+            }
+            else
+            {
+                postInteractDiagnosticStartedAt = null;
+            }
         }
 
         if (Plugin.IsAetherCurrentUnlocked(currentTargetEntry.Id))
@@ -1059,8 +2079,26 @@ public sealed class AetherCurrentAutomation
             return;
         }
 
-        if (DateTime.UtcNow - stateEnteredAt > UnlockWaitTimeout)
+        var isLastAttempt = interactAttemptCount >= InteractMaxAttempts - 1;
+        var currentTimeout = isLastAttempt ? UnlockWaitTimeout : InteractRetryWaitTimeout;
+        if (DateTime.UtcNow - stateEnteredAt > currentTimeout)
+        {
+            interactAttemptCount++;
+            if (interactAttemptCount < InteractMaxAttempts)
+            {
+                // Erster Interact kann z.B. durch eine noch laufende Abmount-Animation ins Leere laufen
+                // (Nutzer-Report: "versucht beim Abmounten zu schnell zu interagieren") - statt direkt
+                // aufzugeben, bis zu InteractMaxAttempts erneut versuchen.
+                Plugin.Log.Info($"[AetherCurrentAutomation] UpdateInteracting({currentTargetEntry.Name}): Freischalten nicht erfolgt (Versuch {interactAttemptCount}/{InteractMaxAttempts}) - versuche erneut zu interagieren.");
+                hasInteractedThisCycle = false;
+                interactPathSettleConfirmedSince = null;
+                postInteractDiagnosticStartedAt = null;
+                stateEnteredAt = DateTime.UtcNow;
+                return;
+            }
+
             SkipCurrent(Loc.T("Freischalten hat nicht geklappt", "unlocking did not go through"));
+        }
     }
 
     private static Dalamud.Game.ClientState.Objects.Types.IGameObject? FindNearestEventObj(Vector3 nearPosition, float maxDistance)
@@ -1109,6 +2147,9 @@ public sealed class AetherCurrentAutomation
         jumpRouteReturnPath = null;
         returnWaypointIndex = 0;
         returnToStartArrivedAt = null;
+        activeManualRoute = null;
+        manualRouteWaypointIndex = 0;
+        activeGateRoute = null;
         // Enge Toleranz (siehe IssueReturnWaypointMove) nicht dauerhaft gesetzt lassen - das nächste
         // Ziel wird wieder ganz normal mit der großzügigeren ArrivalTolerance angelaufen.
         RestorePathTolerance();

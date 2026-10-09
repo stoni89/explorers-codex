@@ -108,6 +108,7 @@ public sealed class Plugin : IDalamudPlugin
     public TripleTriadAutomation TripleTriadAutomation { get; init; }
     public NoFlyAreaExit NoFlyAreaExit { get; init; }
     public KuganeTowerJump KuganeTowerJump { get; init; }
+    public ToDoCrossZoneTraveler ToDoCrossZoneTraveler { get; init; }
 
     /// <summary>Für Klassen ohne eigene Plugin-Referenz (z.B. TripleTriadAutomation), die IsOwned/GetCurrencyAmount brauchen.</summary>
     public static Plugin Instance => instance;
@@ -391,6 +392,7 @@ public sealed class Plugin : IDalamudPlugin
         TripleTriadAutomation = new TripleTriadAutomation();
         NoFlyAreaExit = new NoFlyAreaExit();
         KuganeTowerJump = new KuganeTowerJump();
+        ToDoCrossZoneTraveler = new ToDoCrossZoneTraveler();
 
         // Das Codex-Theme (Farben/Fonts/Bausteine) lebt jetzt in PluginUiKit (siehe dessen README) -
         // CodexTheme/CodexWidgets sind nur noch eine dünne Weiterleitung darauf. Muss VOR jeder
@@ -2961,7 +2963,7 @@ public sealed class Plugin : IDalamudPlugin
     // (Loth ast Gnath past second door)".
     private static readonly Dictionary<uint, AetherCurrentJumpRoute> AetherCurrentJumpRoutes = new()
     {
-        [2818185] = new( // The Ruby Sea #3 - Sprung direkt ab Startpunkt, kein separater Anlaufpunkt
+        [2818182] = new( // The Ruby Sea #2 - Sprung direkt ab Startpunkt, kein separater Anlaufpunkt
                           // (RunUpPoint = Start), danach erst zum Zwischenpunkt, dann zur echten Position.
             new Vector3(20.253834f, 25.111029f, -633.605f),
             new Vector3(20.253834f, 25.111029f, -633.605f),
@@ -2988,6 +2990,100 @@ public sealed class Plugin : IDalamudPlugin
     /// <summary>Siehe AetherCurrentJumpRoutes-Kommentar.</summary>
     public static bool TryGetAetherCurrentJumpRoute(uint aetherCurrentId, out AetherCurrentJumpRoute route) =>
         AetherCurrentJumpRoutes.TryGetValue(aetherCurrentId, out route);
+
+    // Für Ätherströmungen, die über einen längeren, von Hand erfassten Weg aus mehreren festen Punkten
+    // erreicht werden (kein einzelner Sprung wie bei AetherCurrentJumpRoute, sondern z.B. schwimmen/
+    // auftauchen/laufen bis zu einer Stelle, dort aufmounten, dann reiten) - Start = ganz normal
+    // (Mount/vnavmesh) angesteuert wie bei AetherCurrentJumpRoute.Start. Optional VOR WalkWaypoints:
+    // MountedApproachTarget - direkt ab Start aufmounten (z.B. zum Untertauchen) und zu diesem EINEN
+    // Punkt reiten (der frühere, zu Fuß nicht erreichbare Startpunkt), erst DANACH wie bisher
+    // abmounten und WalkWaypoints NACHEINANDER zu Fuß/schwimmend (eng, ohne große Toleranz) ablaufen,
+    // dann erneut aufmounten und RideWaypoints NACHEINANDER reiten (letzter Punkt = die echte, exakte
+    // Position, identisch zu entry.WorldPosition) - danach normal weiter zur Interaktion (siehe
+    // AetherCurrentAutomation.State.ManualRoute). Optional VOR Start: CrossingWaypoints - beritten
+    // NACHEINANDER abfahren (z.B. in einen Tunnel hinein, der eine Ladeanimation/Unterbereichswechsel
+    // auslöst, OHNE dass man dafür interagieren muss - reiner Lauf-Trigger, siehe "The Ruby Sea #1":
+    // Tamamizu -> ein Stück in den Tunnel hinein -> Ladeanimation -> DANACH erst normal weiter zu
+    // Start), danach wird die Ladeanimation abgewartet, bevor es zu Start weitergeht. WalkWaypointsFlying
+    // = true lässt WalkWaypoints NACHEINANDER mit vnavmeshs 3D-Laufauftrag (fly:true) statt der
+    // normalen Bodenbewegung anfahren - nötig für echte Tauchgänge (siehe "The Ruby Sea #1": fly:false
+    // erreicht keine Tiefe jenseits der Wasseroberfläche, nur fly:true schafft das, siehe BeginManualRoute-
+    // Kommentar zum früheren MountedApproachTarget-Versuch). Bei gesetztem CrossingWaypoints übernimmt
+    // ResumeAfterManualRouteCrossing direkt WalkWaypoints[0] als ersten Zielpunkt (Start dient dort nur
+    // noch der Diagnose/Logging, NICHT mehr einem eigenen BeginPathfind-Aufruf - ein einzelner, weiter
+    // Bodenlaufauftrag quer durch tiefes Wasser startete nie, siehe Nutzer-Report "Movement never started").
+    public readonly record struct AetherCurrentManualRoute(Vector3 Start, Vector3[] WalkWaypoints, Vector3[] RideWaypoints, Vector3? MountedApproachTarget = null, Vector3[]? CrossingWaypoints = null, bool WalkWaypointsFlying = false);
+
+    private static readonly Dictionary<uint, AetherCurrentManualRoute> AetherCurrentManualRoutes = new()
+    {
+        [2818187] = new( // The Ruby Sea #1 (nach Teleport zu Tamamizu, siehe AetherCurrentAutomation.PreStartTeleportAetheryteNames - ersetzt den alten, nie zuverlässig funktionierenden Tauchgang-Ansatz über MountedApproachTarget)
+            new Vector3(172.23804f, -100.98644f, -313.07962f), // Start = Punkt 1 (nach dem Tiefen-Fade am Taucheingang, siehe WalkWaypointsFlying-Kommentar)
+            new[]
+            {
+                new Vector3(172.23804f, -100.98644f, -313.07962f), // Punkt 1
+                new Vector3(-92.16961f, -98.15209f, -112.60906f), // Punkt 2
+                new Vector3(-295.71503f, -115.002525f, 38.178562f), // Punkt 3
+                new Vector3(-471.1743f, -97.3288f, 198.60437f), // Punkt 4
+                new Vector3(-623.5474f, -47.869774f, 262.16324f), // Punkt 5
+                new Vector3(-647.56067f, -0.60000086f, 269.27853f), // Punkt 6 (Wasseroberfläche - löst die Auftauch-Ladeanimation aus)
+            },
+            new[]
+            {
+                new Vector3(-804.2868f, 36.194447f, 235.21162f), // nach dem Auftauchen normal per vnav zum Aether-Current-Punkt
+            },
+            CrossingWaypoints: new[]
+            {
+                new Vector3(326.59732f, -120.31646f, -308.93497f), // Reiten zum Tunneleingang
+                new Vector3(323.76932f, -120.31646f, -311.76297f), // ca. 4y weiter Richtung Nordwest, um den Tiefen-Fade auszulösen
+            },
+            WalkWaypointsFlying: true),
+
+        [2818201] = new( // Yanxia #4
+            new Vector3(-120.839005f, 7.892681f, 567.7139f), // Start
+            new[]
+            {
+                new Vector3(-98.344f, 12.973045f, 563.757f), // Laufen zu Punkt 1 (Aether Current)
+            },
+            new[]
+            {
+                new Vector3(-98.344f, 12.973045f, 563.757f), // identisch zu Punkt 1 (reiner Laufweg, kein Reitabschnitt nötig)
+            }),
+
+        [2818208] = new( // The Azim Steppe #1
+            new Vector3(552.8944f, -22.200125f, 484.78488f), // Start
+            new[]
+            {
+                new Vector3(554.3976f, -19.514624f, 431.67844f), // Laufen zu Punkt 1
+                new Vector3(569.5393f, -19.50716f, 437.52484f), // Laufen zu Punkt 2 (Aether Current)
+            },
+            new[]
+            {
+                new Vector3(569.5393f, -19.50716f, 437.52484f), // identisch zu Punkt 2 (reiner Laufweg, kein Reitabschnitt nötig)
+            }),
+    };
+
+    /// <summary>Siehe AetherCurrentManualRoutes-Kommentar.</summary>
+    public static bool TryGetAetherCurrentManualRoute(uint aetherCurrentId, out AetherCurrentManualRoute route) =>
+        AetherCurrentManualRoutes.TryGetValue(aetherCurrentId, out route);
+
+    /// <summary>
+    /// Manche Ätherströmungen liegen hinter einem Tor, das erst per Interact + Ja/Nein-Bestätigung
+    /// geöffnet werden muss (Nutzer-Report, z.B. "The Peaks #4" - Teleport zu Ala Ghiri, zum Tor
+    /// laufen, "Cermet Bulkhead" interagieren, "Proceed through the gate" bestätigen, Ladeanimation
+    /// abwarten, DANACH ganz normal per vnavmesh zum eigentlichen Ätherströmungs-Punkt) - siehe
+    /// AetherCurrentAutomation.State.GateRoute/UpdateGateRoute. GateObjectName = Teilstring des
+    /// Objektnamens (Groß-/Kleinschreibung egal), GatePosition = wo man dafür stehen muss.
+    /// </summary>
+    public readonly record struct AetherCurrentGateRoute(Vector3 GatePosition, string GateObjectName);
+
+    private static readonly Dictionary<uint, AetherCurrentGateRoute> AetherCurrentGateRoutes = new()
+    {
+        [2818157] = new(new Vector3(-129.62204f, 305.38147f, 189.1158f), "Cermet Bulkhead"), // The Peaks #4
+    };
+
+    /// <summary>Siehe AetherCurrentGateRoutes-Kommentar.</summary>
+    public static bool TryGetAetherCurrentGateRoute(uint aetherCurrentId, out AetherCurrentGateRoute route) =>
+        AetherCurrentGateRoutes.TryGetValue(aetherCurrentId, out route);
 
     private const uint JumpGeneralActionId = 2;
 
@@ -4558,11 +4654,27 @@ public sealed class Plugin : IDalamudPlugin
     /// Ätheryten mit einer manuell erfassten Zusatz-Voraussetzung (gleiches Prinzip wie
     /// MountRequiredQuest - Lumina trägt für Ätheryten-Freischaltungen keine auslesbare Quest-
     /// Voraussetzung) - Key = Ätheryten-Name, Wert = Name der zuvor abzuschließenden Quest.
-    /// Nutzer-Report: Dhoro Iloh (Azim Steppe) braucht die MSQ-Quest "In Crimson They Walked".
+    /// Nutzer-Report: Dhoro Iloh (Azim Steppe) braucht die MSQ-Quest "In Crimson They Walked" (DE:
+    /// "Der Pfad der Furchtlosigkeit") - ResolveQuestIdByName sucht im Quest-Sheet in der tatsächlichen
+    /// DataManager-Sprache (bei diesem Nutzer Deutsch), der deutsche Name muss hier also stehen,
+    /// sonst bleibt die Voraussetzung dauerhaft als "nicht erfüllt" hängen.
     /// </summary>
     private static readonly Dictionary<string, string> AetheryteRequiredQuest = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["Dhoro Iloh"] = "In Crimson They Walked",
+        ["Dhoro Iloh"] = "Der Pfad der Furchtlosigkeit",
+    };
+
+    /// <summary>
+    /// Ätherströmungen mit einer manuell erfassten Zusatz-Voraussetzung - Key = Ätherströmungs-Id,
+    /// Wert = Name des benötigten Ätheryten. Nutzer-Report: The Ruby Sea #1 ist ohne den
+    /// freigeschalteten Ätheryten "Tamamizu" (für den Teleport-Startpunkt der Handroute) gar nicht
+    /// erreichbar - damit der "Auto-Ätherströmung"-Knopf nicht klickbar bleibt, wenn #1 der letzte
+    /// übrige Punkt einer Zone ist, aber die Voraussetzung fehlt (siehe
+    /// GetZoneAutomationButtons/IsAchievementOrRankGated).
+    /// </summary>
+    private static readonly Dictionary<uint, string> AetherCurrentRequiredAetheryte = new()
+    {
+        [2818187] = "Tamamizu", // The Ruby Sea #1
     };
 
     // "Simply to Dye For" (schaltet Färben frei) braucht die abgeschlossene Artefakt-Rüstungsquest
@@ -5232,6 +5344,20 @@ public sealed class Plugin : IDalamudPlugin
                 return Loc.T(
                     $"Benötigt die abgeschlossene Quest \"{requiredQuestForAetherCurrent}\".",
                     $"Requires the completed quest \"{requiredQuestForAetherCurrent}\".");
+            }
+        }
+
+        // Ätherströmungen mit einer manuell erfassten Zusatz-Voraussetzung (siehe
+        // AetherCurrentRequiredAetheryte-Kommentar) - gleiches Prinzip wie AetheryteRequiredQuest
+        // oben, nur Ätheryte statt Quest als Voraussetzung.
+        if (entry.Type == CollectibleType.AetherCurrent && AetherCurrentRequiredAetheryte.TryGetValue(entry.Id, out var requiredAetheryteForCurrent))
+        {
+            var requiredAetheryteId = ResolveAetheryteIdByName(requiredAetheryteForCurrent);
+            if (requiredAetheryteId == null || !IsAetheryteUnlocked(requiredAetheryteId.Value))
+            {
+                return Loc.T(
+                    $"Benötigt den freigeschalteten Ätheryten \"{requiredAetheryteForCurrent}\".",
+                    $"Requires the unlocked aetheryte \"{requiredAetheryteForCurrent}\".");
             }
         }
 
@@ -6555,6 +6681,29 @@ public sealed class Plugin : IDalamudPlugin
     }
 
     /// <summary>
+    /// Findet die Aetheryte-RowId über den Anzeigenamen (z.B. "The Dawn Throne") - für
+    /// AetherCurrentAutomation.PreStartTeleportAetheryteNames, um per Lifestream gezielt zu EINEM
+    /// bekannten Ätheryten statt zum nächstgelegenen/Haupt-Ätheryten zu teleportieren. Unabhängig
+    /// davon, ob dieser Ätheryte schon freigeschaltet ist (das prüft lifestreamTeleport.InvokeFunc
+    /// selbst über dessen Rückgabewert).
+    /// </summary>
+    public static uint? ResolveAetheryteIdByName(string aetheryteName)
+    {
+        var aetheryteSheet = DataManager.GetExcelSheet<Aetheryte>();
+        if (aetheryteSheet == null)
+            return null;
+
+        foreach (var row in aetheryteSheet)
+        {
+            var placeName = row.PlaceName.ValueNullable?.Name.ToString();
+            if (string.Equals(placeName, aetheryteName, StringComparison.OrdinalIgnoreCase))
+                return row.RowId;
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Nächstgelegener bereits freigeschalteter Aetheryte/Aethernetz-Kristall EINER Zone (nicht der
     /// ganzen geteilten Hauptstadt, siehe FlagTerritoryTypeId) zu einer rohen Weltposition IN
     /// DERSELBEN Zone - über Kartenkoordinaten-Distanz als Näherung (funktioniert daher auch für
@@ -6674,11 +6823,27 @@ public sealed class Plugin : IDalamudPlugin
             .Where(e => config.ShowAllItems || e.Type == CollectibleType.HuntingLog || !IsAchievementOrRankGated(e))
             .ToList();
 
+        // Einmal für alle Typen aufgelöst (statt wie bisher nur für Quest) - für die ToDo-Einschränkung
+        // der übrigen sechs Automationen (siehe *.RestrictedToToDo-Kommentar/RestrictToToDo lokal unten),
+        // ausgelöst über die ToDo-Auto-Knöpfe (siehe GetZoneAutomationButtons(restrictToToDo: true)).
+        var toDoEntries = ResolveToDoEntries();
+
+        // Schränkt eine Zonen-Liste auf die ToDo-Liste EIN (nach Typ+Id), falls die jeweilige
+        // Automation gerade im ToDo-Modus gestartet wurde - sonst unverändert.
+        List<CollectibleEntry> RestrictToToDo(List<CollectibleEntry> entries, CollectibleType type, bool restricted)
+        {
+            if (!restricted)
+                return entries;
+
+            var toDoIds = toDoEntries.Where(e => e.Type == type).Select(e => e.Id).ToHashSet();
+            return entries.Where(e => toDoIds.Contains(e.Id)).ToList();
+        }
+
         var missingQuests = allForZone
             .Where(e => e.Type == CollectibleType.Quest && !IsOwned(e) && !IsAchievementOrRankGated(e))
             .ToList();
         QuestAutomation.RefreshSupportStatus(missingQuests);
-        var toDoQuestEntries = ResolveToDoEntries().Where(e => e.Type == CollectibleType.Quest).ToList();
+        var toDoQuestEntries = toDoEntries.Where(e => e.Type == CollectibleType.Quest).ToList();
         QuestAutomation.Update(missingQuests, effectiveTerritoryId, toDoQuestEntries);
 
         var exitingNoFlyArea = NoFlyAreaExit.Update(new (Func<bool> IsActive, System.Action Restart)[]
@@ -6692,53 +6857,59 @@ public sealed class Plugin : IDalamudPlugin
             (() => GoToAutomation.ActiveEntry != null, () => { if (GoToAutomation.ActiveEntry is { } goToEntry) GoToAutomation.GoTo(goToEntry); }),
         });
 
-        var missingAetherytesCity = allForZone
+        var missingAetherytesCity = RestrictToToDo(allForZone
             .Where(e => e.Type == CollectibleType.Aetheryte && (config.SimulateAetheryteAutomation || !IsOwned(e)))
-            .ToList();
-        if (!exitingNoFlyArea)
+            .ToList(), CollectibleType.Aetheryte, AetheryteAutomation.RestrictedToToDo);
+        ToDoCrossZoneTraveler.Advance(CollectibleType.Aetheryte, AetheryteAutomation.IsActive, AetheryteAutomation.RestrictedToToDo, missingAetherytesCity, toDoEntries, effectiveTerritoryId);
+        if (!exitingNoFlyArea && !ToDoCrossZoneTraveler.IsBusy)
             AetheryteAutomation.Update(missingAetherytesCity);
 
-        var missingHuntingLogInZone = allForZone
+        var missingHuntingLogInZone = RestrictToToDo(allForZone
             .Where(e => e.Type == CollectibleType.HuntingLog && !IsAchievementOrRankGated(e))
-            .ToList();
-        if (!exitingNoFlyArea)
+            .ToList(), CollectibleType.HuntingLog, HuntingLogAutomation.RestrictedToToDo);
+        ToDoCrossZoneTraveler.Advance(CollectibleType.HuntingLog, HuntingLogAutomation.IsActive, HuntingLogAutomation.RestrictedToToDo, missingHuntingLogInZone, toDoEntries, effectiveTerritoryId);
+        if (!exitingNoFlyArea && !ToDoCrossZoneTraveler.IsBusy)
             HuntingLogAutomation.Update(missingHuntingLogInZone);
 
-        var missingAetherCurrentsInZone = allForZone
+        var missingAetherCurrentsInZone = RestrictToToDo(allForZone
             .Where(e => e.Type == CollectibleType.AetherCurrent && (config.SimulateAetherCurrentAutomation || !IsOwned(e)) && !IsAchievementOrRankGated(e))
-            .ToList();
-        if (!exitingNoFlyArea)
+            .ToList(), CollectibleType.AetherCurrent, AetherCurrentAutomation.RestrictedToToDo);
+        ToDoCrossZoneTraveler.Advance(CollectibleType.AetherCurrent, AetherCurrentAutomation.IsActive, AetherCurrentAutomation.RestrictedToToDo, missingAetherCurrentsInZone, toDoEntries, effectiveTerritoryId);
+        if (!exitingNoFlyArea && !ToDoCrossZoneTraveler.IsBusy)
             AetherCurrentAutomation.Update(missingAetherCurrentsInZone);
 
-        var missingSightseeingInZone = GetLiveZoneEntries(effectiveTerritoryId)
+        var missingSightseeingInZone = RestrictToToDo(GetLiveZoneEntries(effectiveTerritoryId)
             .Where(e => e.Type == CollectibleType.Sightseeing && siblingTerritories.Contains(e.TerritoryTypeId))
             .Where(e => !IsBlacklisted(e))
             .Where(e => (!IsSightseeingUnsupportedByAutomation(e.Id)
                          || (config.SimulateSightseeingAutomation && TryGetSightseeingJumpingPuzzle(e.Id, out _)))
                         && !IsSightseeingBlockedByFlying(e))
             .Where(e => config.SimulateSightseeingAutomation || (!IsOwned(e) && IsSightseeingBookAccessible(e)))
-            .ToList();
+            .ToList(), CollectibleType.Sightseeing, SightseeingAutomation.RestrictedToToDo);
         var pendingSightseeingInZone = GetLiveZoneEntries(effectiveTerritoryId)
             .Where(e => e.Type == CollectibleType.Sightseeing && siblingTerritories.Contains(e.TerritoryTypeId))
             .Where(e => !IsBlacklisted(e) && !IsOwned(e) && IsSightseeingOnlyTemporarilyUnavailable(e))
             .ToList();
-        if (!exitingNoFlyArea)
+        ToDoCrossZoneTraveler.Advance(CollectibleType.Sightseeing, SightseeingAutomation.IsActive, SightseeingAutomation.RestrictedToToDo, missingSightseeingInZone, toDoEntries, effectiveTerritoryId);
+        if (!exitingNoFlyArea && !ToDoCrossZoneTraveler.IsBusy)
             SightseeingAutomation.Update(missingSightseeingInZone, pendingSightseeingInZone);
 
-        var missingChocobokeepsInZone = allForZone
+        var missingChocobokeepsInZone = RestrictToToDo(allForZone
             .Where(e => e.Type == CollectibleType.Chocobokeep && (config.SimulateChocobokeepAutomation || !IsOwned(e)))
-            .ToList();
-        if (!exitingNoFlyArea)
+            .ToList(), CollectibleType.Chocobokeep, ChocobokeepAutomation.RestrictedToToDo);
+        ToDoCrossZoneTraveler.Advance(CollectibleType.Chocobokeep, ChocobokeepAutomation.IsActive, ChocobokeepAutomation.RestrictedToToDo, missingChocobokeepsInZone, toDoEntries, effectiveTerritoryId);
+        if (!exitingNoFlyArea && !ToDoCrossZoneTraveler.IsBusy)
             ChocobokeepAutomation.Update(missingChocobokeepsInZone);
 
-        var missingNpcCardsInZone = allForZone
+        var missingNpcCardsInZone = RestrictToToDo(allForZone
             .Where(e => e.Type == CollectibleType.TripleTriadCard && e.Category == TripleTriadNpcCategory && e.EventNpcId != 0)
             .Where(e => !IsOwned(e) && !IsAchievementOrRankGated(e))
-            .ToList();
-        if (!exitingNoFlyArea)
+            .ToList(), CollectibleType.TripleTriadCard, TripleTriadAutomation.RestrictedToToDo);
+        ToDoCrossZoneTraveler.Advance(CollectibleType.TripleTriadCard, TripleTriadAutomation.IsActive, TripleTriadAutomation.RestrictedToToDo, missingNpcCardsInZone, toDoEntries, effectiveTerritoryId);
+        if (!exitingNoFlyArea && !ToDoCrossZoneTraveler.IsBusy)
             TripleTriadAutomation.Update(missingNpcCardsInZone);
 
-        if (!exitingNoFlyArea)
+        if (!exitingNoFlyArea && !ToDoCrossZoneTraveler.IsBusy)
             GoToAutomation.Update();
     }
 
@@ -6759,11 +6930,54 @@ public sealed class Plugin : IDalamudPlugin
     /// Nur Knöpfe mit Count &gt; 0 ODER die gerade laufen gehören in die Liste (Abschnitt 5.2:
     /// "Ausblenden").
     /// </summary>
-    public List<ZoneAutomationButton> GetZoneAutomationButtons(uint currentTerritoryId)
+    /// <param name="restrictToToDo">
+    /// Nutzeranforderung: im ToDo-Tab nur die Auto-Knöpfe zeigen, die für ToDo-Einträge etwas zu tun
+    /// haben, mit einer auf die ToDo-Liste bezogenen Anzahl statt der Zonen-Anzahl - UND die jeweilige
+    /// Automation beim Start auf die ToDo-Liste einschränken (Quest über den bestehenden
+    /// restrictToQuestIds-Parameter, die übrigen sechs über *.RestrictedToToDo, siehe dort und
+    /// Plugin.UpdateZoneAutomations/RestrictToToDo).
+    /// </param>
+    public List<ZoneAutomationButton> GetZoneAutomationButtons(uint currentTerritoryId, bool restrictToToDo = false)
     {
         var config = Configuration;
         var effectiveTerritoryId = ResolveEffectiveTerritoryId(currentTerritoryId);
         var siblingTerritories = GetSplitCityTerritories(effectiveTerritoryId);
+
+        var result = new List<ZoneAutomationButton>();
+        void Add(string key, int count, bool isActive, System.Action start, System.Action stop)
+        {
+            if (count > 0 || isActive)
+                result.Add(new ZoneAutomationButton(key, count, isActive, count > 0, start, stop));
+        }
+
+        if (restrictToToDo)
+        {
+            var toDoEntries = ResolveToDoEntries();
+
+            var toDoQuestIds = toDoEntries.Where(e => e.Type == CollectibleType.Quest && !IsOwned(e) && !IsAchievementOrRankGated(e)
+                                                       && !QuestAutomation.IsKnownUnsupported(e.Id))
+                .Select(e => e.Id).ToList();
+            var toDoAetheryteCount = toDoEntries.Count(e => e.Type == CollectibleType.Aetheryte && (config.SimulateAetheryteAutomation || !IsOwned(e)) && !IsAchievementOrRankGated(e));
+            var toDoSightseeingCount = toDoEntries.Count(e => e.Type == CollectibleType.Sightseeing
+                        && (!IsSightseeingUnsupportedByAutomation(e.Id) || (config.SimulateSightseeingAutomation && TryGetSightseeingJumpingPuzzle(e.Id, out _)))
+                        && !IsSightseeingBlockedByFlying(e)
+                        && (config.SimulateSightseeingAutomation || (!IsOwned(e) && IsSightseeingBookAccessible(e))));
+            var toDoHuntingLogCount = toDoEntries.Count(e => e.Type == CollectibleType.HuntingLog && !IsAchievementOrRankGated(e) && e.WorldPosition.HasValue);
+            var toDoAetherCurrentCount = toDoEntries.Count(e => e.Type == CollectibleType.AetherCurrent && (config.SimulateAetherCurrentAutomation || !IsOwned(e))
+                        && !IsAchievementOrRankGated(e) && e.HasGoToTarget);
+            var toDoChocobokeepCount = toDoEntries.Count(e => e.Type == CollectibleType.Chocobokeep && (config.SimulateChocobokeepAutomation || !IsOwned(e)) && e.HasGoToTarget);
+            var toDoTripleTriadCount = toDoEntries.Count(e => e.Type == CollectibleType.TripleTriadCard && e.Category == TripleTriadNpcCategory && e.EventNpcId != 0
+                        && !IsOwned(e) && !IsAchievementOrRankGated(e));
+
+            Add("quest", toDoQuestIds.Count, QuestAutomation.IsActive, () => QuestAutomation.Start(effectiveTerritoryId, toDoQuestIds), QuestAutomation.Stop);
+            Add("sight", toDoSightseeingCount, SightseeingAutomation.IsActive, () => { SightseeingAutomation.RestrictedToToDo = true; SightseeingAutomation.Start(); }, SightseeingAutomation.Stop);
+            Add("aeth", toDoAetheryteCount, AetheryteAutomation.IsActive, () => { AetheryteAutomation.RestrictedToToDo = true; AetheryteAutomation.Start(); }, AetheryteAutomation.Stop);
+            Add("huntinglog", toDoHuntingLogCount, HuntingLogAutomation.IsActive, () => { HuntingLogAutomation.RestrictedToToDo = true; HuntingLogAutomation.Start(); }, HuntingLogAutomation.Stop);
+            Add("aethercurrent", toDoAetherCurrentCount, AetherCurrentAutomation.IsActive, () => { AetherCurrentAutomation.RestrictedToToDo = true; AetherCurrentAutomation.Start(); }, AetherCurrentAutomation.Stop);
+            Add("chocobokeep", toDoChocobokeepCount, ChocobokeepAutomation.IsActive, () => { ChocobokeepAutomation.RestrictedToToDo = true; ChocobokeepAutomation.Start(); }, ChocobokeepAutomation.Stop);
+            Add("tripletriad", toDoTripleTriadCount, TripleTriadAutomation.IsActive, () => { TripleTriadAutomation.RestrictedToToDo = true; TripleTriadAutomation.Start(); }, TripleTriadAutomation.Stop);
+            return result;
+        }
 
         var allForZone = CollectionData.GetAllEntries()
             .Concat(GetLiveZoneEntries(effectiveTerritoryId))
@@ -6778,7 +6992,7 @@ public sealed class Plugin : IDalamudPlugin
         var questCount = missingQuests.Count(q => !QuestAutomation.IsKnownUnsupported(q.Id));
 
         var aetheryteCount = allForZone
-            .Count(e => e.Type == CollectibleType.Aetheryte && (config.SimulateAetheryteAutomation || !IsOwned(e)));
+            .Count(e => e.Type == CollectibleType.Aetheryte && (config.SimulateAetheryteAutomation || !IsOwned(e)) && !IsAchievementOrRankGated(e));
 
         var sightseeingCount = GetLiveZoneEntries(effectiveTerritoryId)
             .Count(e => e.Type == CollectibleType.Sightseeing && siblingTerritories.Contains(e.TerritoryTypeId)
@@ -6803,20 +7017,13 @@ public sealed class Plugin : IDalamudPlugin
             .Count(e => e.Type == CollectibleType.TripleTriadCard && e.Category == TripleTriadNpcCategory && e.EventNpcId != 0
                         && !IsOwned(e) && !IsAchievementOrRankGated(e));
 
-        var result = new List<ZoneAutomationButton>();
-        void Add(string key, int count, bool isActive, System.Action start, System.Action stop)
-        {
-            if (count > 0 || isActive)
-                result.Add(new ZoneAutomationButton(key, count, isActive, count > 0, start, stop));
-        }
-
         Add("quest", questCount, QuestAutomation.IsActive, () => QuestAutomation.Start(effectiveTerritoryId), QuestAutomation.Stop);
-        Add("sight", sightseeingCount, SightseeingAutomation.IsActive, () => SightseeingAutomation.Start(), SightseeingAutomation.Stop);
-        Add("aeth", aetheryteCount, AetheryteAutomation.IsActive, () => AetheryteAutomation.Start(), AetheryteAutomation.Stop);
-        Add("huntinglog", huntingLogCount, HuntingLogAutomation.IsActive, () => HuntingLogAutomation.Start(), HuntingLogAutomation.Stop);
-        Add("aethercurrent", aetherCurrentCount, AetherCurrentAutomation.IsActive, () => AetherCurrentAutomation.Start(), AetherCurrentAutomation.Stop);
-        Add("chocobokeep", chocobokeepCount, ChocobokeepAutomation.IsActive, () => ChocobokeepAutomation.Start(), ChocobokeepAutomation.Stop);
-        Add("tripletriad", tripleTriadCount, TripleTriadAutomation.IsActive, () => TripleTriadAutomation.Start(), TripleTriadAutomation.Stop);
+        Add("sight", sightseeingCount, SightseeingAutomation.IsActive, () => { SightseeingAutomation.RestrictedToToDo = false; SightseeingAutomation.Start(); }, SightseeingAutomation.Stop);
+        Add("aeth", aetheryteCount, AetheryteAutomation.IsActive, () => { AetheryteAutomation.RestrictedToToDo = false; AetheryteAutomation.Start(); }, AetheryteAutomation.Stop);
+        Add("huntinglog", huntingLogCount, HuntingLogAutomation.IsActive, () => { HuntingLogAutomation.RestrictedToToDo = false; HuntingLogAutomation.Start(); }, HuntingLogAutomation.Stop);
+        Add("aethercurrent", aetherCurrentCount, AetherCurrentAutomation.IsActive, () => { AetherCurrentAutomation.RestrictedToToDo = false; AetherCurrentAutomation.Start(); }, AetherCurrentAutomation.Stop);
+        Add("chocobokeep", chocobokeepCount, ChocobokeepAutomation.IsActive, () => { ChocobokeepAutomation.RestrictedToToDo = false; ChocobokeepAutomation.Start(); }, ChocobokeepAutomation.Stop);
+        Add("tripletriad", tripleTriadCount, TripleTriadAutomation.IsActive, () => { TripleTriadAutomation.RestrictedToToDo = false; TripleTriadAutomation.Start(); }, TripleTriadAutomation.Stop);
         return result;
     }
 
@@ -8401,6 +8608,20 @@ public sealed class Plugin : IDalamudPlugin
         if (Condition[ConditionFlag.Mounted])
         {
             Log.Info("[MountDebug] Abbruch: bereits beritten.");
+            return false;
+        }
+
+        // Aufsitzen klappt nicht, während man gerade (voll) taucht (Nutzer-Report: "versucht weiterhin
+        // aufzumounten, obwohl man bereits im Wasser ist"). NUR Diving, NICHT Swimming prüfen - an der
+        // Wasseroberfläche schwimmend kann (zumindest ein Flugmount) ganz normal aufgesessen werden
+        // (so steigt man im Spiel überhaupt erst vom Wasser aus auf), das brauchen z.B. Ätherströmungen
+        // mit Tauchgang (Plugin.AetherCurrentManualRoute.MountedApproachTarget) ausdrücklich - ein
+        // Swimming-Check hier hätte genau das wieder verhindert (Nutzer-Report: "schwimmt zum Start
+        // und macht danach kein Tauchvorgang", weil der Aufmount-Versuch an der Oberfläche fälschlich
+        // abgebrochen wurde).
+        if (Condition[ConditionFlag.Diving])
+        {
+            Log.Info("[MountDebug] Abbruch: taucht gerade (Aufsitzen dabei nicht möglich).");
             return false;
         }
 

@@ -353,6 +353,15 @@ public sealed class AetheryteAutomation
         }
     }
 
+    /// <summary>
+    /// Vom ToDo-Auto-Knopf gesetzt, BEVOR Start() aufgerufen wird (Nutzeranforderung: im ToDo-Tab
+    /// soll die Automation nur ToDo-Einträge bearbeiten) - Plugin.UpdateZoneAutomations filtert die an
+    /// Update() übergebene Liste dann zusätzlich auf Plugin.ResolveToDoEntries(). Bewusst NICHT von
+    /// Start()/Stop() selbst verändert, damit ein interner Neustart (z.B. NoFlyAreaExit) den zuletzt
+    /// gesetzten Modus beibehält, statt ihn stillschweigend auf "nicht eingeschränkt" zurückzusetzen.
+    /// </summary>
+    public bool RestrictedToToDo { get; set; }
+
     public void Start()
     {
         IsActive = true;
