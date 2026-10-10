@@ -2368,7 +2368,15 @@ public class CodexMenuWindow : Window
             return;
         }
 
-        DrawDatabaseTypePills(scale, availableTypes);
+        // Nutzeranforderung: während der (typübergreifenden, siehe RecomputeDatabaseView) Suche eine
+        // eigene "Suchergebnisse"-Pille statt der normalen Typ-Pillen zeigen - sonst wirkte es
+        // irreführend, wenn z.B. der "Mount"-Tab markiert blieb, obwohl die Suche auch/nur ein
+        // Minion gefunden hat. Verschwindet wieder, sobald das Suchfeld leer ist.
+        var hasSearch = !string.IsNullOrWhiteSpace(databaseSearch);
+        if (hasSearch)
+            DrawDatabaseSearchResultsPill(scale);
+        else
+            DrawDatabaseTypePills(scale, availableTypes);
         ImGui.Dummy(new Vector2(0f, 14f * scale));
 
         var filtered = databaseFilteredCache!;
@@ -2382,7 +2390,7 @@ public class CodexMenuWindow : Window
             return;
         }
 
-        DrawDatabaseTable(scale, databaseSelectedType, filtered);
+        DrawDatabaseTable(scale, filtered, showTypeBadge: hasSearch);
     }
 
     private void RecomputeDatabaseView(Configuration config)
@@ -2406,12 +2414,16 @@ public class CodexMenuWindow : Window
         if (!availableTypes.Contains(databaseSelectedType))
             databaseSelectedType = availableTypes[0];
 
-        var typeEntries = allEntries.Where(e => e.Type == databaseSelectedType).ToList();
+        // Nutzeranforderung: Suche gilt typübergreifend (Mount, Minion etc. zusammen), nicht mehr nur
+        // innerhalb des aktuell per Pille gewählten Typs - der Typ-Filter greift deshalb nur noch,
+        // solange das Suchfeld leer ist.
+        var hasSearch = !string.IsNullOrWhiteSpace(databaseSearch);
+        var typeEntries = hasSearch ? allEntries : allEntries.Where(e => e.Type == databaseSelectedType).ToList();
         databaseTypeEntriesCountCache = typeEntries.Count;
 
         // Nutzeranforderung: Suche gilt jetzt auch für Preis/Von/Zone/Status, nicht mehr nur den Namen.
         var searched = typeEntries
-            .Where(e => string.IsNullOrWhiteSpace(databaseSearch) || DatabaseEntryMatchesSearch(e, databaseSearch));
+            .Where(e => !hasSearch || DatabaseEntryMatchesSearch(e, databaseSearch));
         // Nutzeranforderung: per Klick auf eine beliebige Kopfzeile sortierbar (auf-/absteigend),
         // siehe DrawDatabaseTable.
         var ordered = databaseSortKey switch
@@ -2577,6 +2589,20 @@ public class CodexMenuWindow : Window
         ImGui.SetCursorPos(new Vector2(startX, cursorY + rowHeight));
     }
 
+    /// <summary>Ersatz für DrawDatabaseTypePills während einer aktiven Suche - eine einzelne, immer
+    /// markierte, nicht klickbare Pille statt der Typ-Auswahl (siehe DrawDatabasePage-Kommentar).</summary>
+    private static void DrawDatabaseSearchResultsPill(float scale)
+    {
+        var label = Loc.T("Suchergebnisse", "Search results");
+        using (CodexTheme.FontMenuDropdownValue.Push())
+        {
+            var textSize = ImGui.CalcTextSize(label);
+            var padding = new Vector2(14f * scale, 7f * scale);
+            var pillSize = new Vector2(textSize.X + padding.X * 2f, textSize.Y + padding.Y * 2f);
+            DrawDatabaseTypePill("##CodexDbTypeSearch", label, selected: true, pillSize);
+        }
+    }
+
     private static bool DrawDatabaseTypePill(string id, string label, bool selected, Vector2 size)
     {
         var cursor = ImGui.GetCursorScreenPos();
@@ -2609,12 +2635,20 @@ public class CodexMenuWindow : Window
                 Loc.T($"{filteredCount} von {totalCount} Einträgen", $"{filteredCount} of {totalCount} entries"));
     }
 
-    private void DrawDatabaseTable(float scale, CollectibleType type, List<CollectibleEntry> filtered)
+    private void DrawDatabaseTable(float scale, List<CollectibleEntry> filtered, bool showTypeBadge)
     {
-        var showVendorInfo = !Plugin.DatabaseTypesWithoutVendorInfo.Contains(type);
+        // Bei typübergreifender Suche (siehe RecomputeDatabaseView) können die Treffer aus
+        // verschiedenen Typen gemischt sein - die Preis-/Von-Spalten zeigen, sobald mindestens einer
+        // der Treffer sie sinnvoll füllen könnte, statt sich allein auf den (dann nicht mehr
+        // repräsentativen) per Pille gewählten Einzeltyp zu verlassen.
+        var showVendorInfo = filtered.Any(e => !Plugin.DatabaseTypesWithoutVendorInfo.Contains(e.Type));
         // Nutzeranforderung: Kartenstift-Spalte entfernt - der Linkstatus ist weiterhin an der
         // goldenen Namensfarbe erkennbar, Klick auf den Namen öffnet unverändert die Karte.
-        var columnCount = showVendorInfo ? 5 : 3;
+        // Nutzeranforderung: bei der typübergreifenden Suche (siehe DrawDatabasePage) eine eigene,
+        // überschriftslose Spalte VOR dem Namen fürs Typ-Badge statt es in die Namen-Spalte zu
+        // zeichnen.
+        var nameColumnIndex = showTypeBadge ? 1 : 0;
+        var columnCount = (showTypeBadge ? 1 : 0) + (showVendorInfo ? 5 : 3);
 
         ImGui.PushStyleColor(ImGuiCol.TableRowBg, CodexTheme.BgCard with { W = 0.5f });
         ImGui.PushStyleColor(ImGuiCol.TableRowBgAlt, new Vector4(0f, 0f, 0f, 0f));
@@ -2643,6 +2677,8 @@ public class CodexMenuWindow : Window
                 new Vector2(tableWidth, tableHeight)))
         {
             ImGui.TableSetupScrollFreeze(0, 1);
+            if (showTypeBadge)
+                ImGui.TableSetupColumn(string.Empty, ImGuiTableColumnFlags.WidthFixed, 98f * scale);
             ImGui.TableSetupColumn(Loc.T("NAME", "NAME"), ImGuiTableColumnFlags.WidthStretch, 1.7f);
             if (showVendorInfo)
             {
@@ -2652,10 +2688,17 @@ public class CodexMenuWindow : Window
             ImGui.TableSetupColumn(Loc.T("ZONE", "ZONE"), ImGuiTableColumnFlags.WidthStretch, 1.3f);
             ImGui.TableSetupColumn(Loc.T("STATUS", "STATUS"), ImGuiTableColumnFlags.WidthFixed, 100f * scale);
 
-            // Nutzeranforderung: jede Spalte ist klickbar sortierbar, nicht mehr nur NAME.
-            var columnSortKeys = showVendorInfo
+            // Nutzeranforderung: jede Spalte ist klickbar sortierbar, nicht mehr nur NAME - die
+            // kopflose Badge-Spalte hat keinen Sortierknopf (siehe Header-Schleife unten, die leere
+            // Labels überspringt), braucht aber trotzdem einen Platzhalter, damit die Indizes der
+            // übrigen Spalten (columnSortKeys[c]) nicht verrutschen.
+            var columnSortKeysList = new List<DatabaseSortKey>();
+            if (showTypeBadge)
+                columnSortKeysList.Add(DatabaseSortKey.Name);
+            columnSortKeysList.AddRange(showVendorInfo
                 ? new[] { DatabaseSortKey.Name, DatabaseSortKey.Price, DatabaseSortKey.Vendor, DatabaseSortKey.Zone, DatabaseSortKey.Status }
-                : new[] { DatabaseSortKey.Name, DatabaseSortKey.Zone, DatabaseSortKey.Status };
+                : new[] { DatabaseSortKey.Name, DatabaseSortKey.Zone, DatabaseSortKey.Status });
+            var columnSortKeys = columnSortKeysList.ToArray();
 
             // Kopfzeile: feste Höhe 34px, eigener (dunklerer) Hintergrund BgPopup, Cinzel SemiBold
             // 11px in Versalien mit Zeichenabstand, TextTertiary - von Hand gezeichnet statt
@@ -2677,7 +2720,7 @@ public class CodexMenuWindow : Window
                     ImGui.SetCursorPosY(ImGui.GetCursorPosY() + (headerHeight - textHeight) / 2f);
                     // Nutzervorgabe: "NAME" nochmal 4px weiter vom linken Rand weg (insgesamt 8px),
                     // genau wie die Item-Namen darunter.
-                    if (c == 0)
+                    if (c == nameColumnIndex)
                         ImGui.SetCursorPosX(ImGui.GetCursorPosX() + 8f * scale);
 
                     // Nutzeranforderung: per Klick auf eine Kopfzeile sortierbar (auf-/absteigend) -
@@ -2741,11 +2784,27 @@ public class CodexMenuWindow : Window
                 ImGui.TableNextRow(ImGuiTableRowFlags.None, rowHeight);
                 var cellY = ImGui.GetCursorPosY() + (rowHeight - cellContentHeight) / 2f;
 
+                // Nutzeranforderung: NUR bei der typübergreifenden Suche (siehe DrawDatabasePage) eine
+                // eigene, überschriftslose Spalte VOR dem Namen mit dem Typ-Badge (Minion/
+                // Orchestrionrolle/...) - sonst ist bei gemischten Treffern nicht erkennbar, zu
+                // welchem Typ ein Eintrag gehört. Dieselben Typfarben + abgekürzten Beschriftungen
+                // wie im Overlay (siehe CodexOverlayWindow.GetTypeBadgeColors/GetBadgeLabel).
+                if (showTypeBadge)
+                {
+                    ImGui.TableNextColumn();
+                    var badgeText = CodexOverlayWindow.GetBadgeLabel(entry.Type);
+                    var (badgeBg, badgeFg) = CodexOverlayWindow.GetTypeBadgeColors(entry.Type);
+                    var badgeSize = MeasurePluginBadge(scale, badgeText);
+                    ImGui.SetCursorPosY(cellY + (cellContentHeight - badgeSize.Y) / 2f);
+                    DrawPluginBadge(scale, badgeText, badgeFg, badgeBg, badgeBg);
+                }
+
                 ImGui.TableNextColumn();
                 ImGui.SetCursorPosY(cellY);
                 // Nutzervorgabe: nochmal 4px weiter vom linken Rand weg (insgesamt 8px, zusätzlich
                 // zum gemeinsamen 14px-Innenabstand), genau wie die Kopfzeile "NAME".
                 ImGui.SetCursorPosX(ImGui.GetCursorPosX() + 8f * scale);
+
                 var nameColor = entry.HasGoToTarget ? CodexTheme.Accent : CodexTheme.TextPrimary;
                 using (CodexTheme.FontDatabaseItemName.Push())
                     ImGui.TextColored(nameColor, GetDatabaseDisplayName(entry));
@@ -2822,10 +2881,19 @@ public class CodexMenuWindow : Window
 
     private static void DrawDatabasePriceCell(CollectibleEntry entry, float scale)
     {
-        if (string.IsNullOrEmpty(entry.Currency) || entry.CurrencyAmount == 0)
+        if (string.IsNullOrEmpty(entry.Currency))
         {
             using (CodexTheme.FontDatabaseItemText.Push())
                 ImGui.TextColored(CodexTheme.TextDim, "—");
+            return;
+        }
+
+        // Rein textuelle "Währung" ohne Betrag/Icon (z.B. "Dungeon Drop" bei Noten ohne Händler,
+        // siehe Data/orchestrions.json "Alienus") - einfach den Text statt eines Betrags anzeigen.
+        if (entry.CurrencyAmount == 0)
+        {
+            using (CodexTheme.FontDatabaseItemText.Push())
+                ImGui.TextColored(CodexTheme.TextMuted, entry.Currency);
             return;
         }
 
@@ -4650,6 +4718,8 @@ public class CodexMenuWindow : Window
             ("\"Open and Inviting\"", () => plugin.DumpQuestAcceptabilityDebugInfo("Open and Inviting")),
             ("\"Cat on a Cold Stone Roof\"", () => plugin.DumpQuestAcceptabilityDebugInfo("Cat on a Cold Stone Roof")),
             ("\"Grandfather's Belongings\"", () => plugin.DumpQuestAcceptabilityDebugInfo("Grandfather's Belongings")),
+            (Loc.T("Kugane Tower Jump testen", "Test Kugane Tower jump"), () => plugin.SightseeingAutomation.StartKuganeTowerJumpTest()),
+            (Loc.T("ToDo-Liste aufräumen", "Clean up ToDo list"), plugin.CleanUpToDoList),
         };
 
         // Jeder Knopf bekommt 1,5 Sekunden lang ein Häkchen statt des Terminal-Symbols, sobald er

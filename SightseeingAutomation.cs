@@ -28,6 +28,7 @@ public sealed class SightseeingAutomation
         WalkingOut,
         JumpingPuzzle,
         TeleportingHomeAfterCompletion,
+        TeleportingToPoint,
         KuganeTowerClimbing,
     }
 
@@ -281,6 +282,26 @@ public sealed class SightseeingAutomation
     }
 
     /// <summary>
+    /// Nutzeranforderung: gezielter Debug-Testknopf für das Kugane-Tower-Jumping-Puzzle (siehe
+    /// KuganeTowerJump-Klassenkommentar), ohne erst normal per Auto-Sightseeing dorthin laufen zu
+    /// müssen - sucht sich NICHT selbst den nächsten Punkt, sondern springt direkt in
+    /// State.KuganeTowerClimbing.
+    /// </summary>
+    public void StartKuganeTowerJumpTest()
+    {
+        IsActive = true;
+        skippedIds.Clear();
+        attemptCounts.Clear();
+        isDefendingSelf = false;
+        stopRequested = false;
+        lastCombatEnsureAt = DateTime.MinValue;
+        currentTargetEntry = Plugin.GetSightseeingEntries().FirstOrDefault(e => e.Id == KuganeTowerJump.AdventureId);
+        Plugin.Instance.KuganeTowerJump.Start();
+        state = State.KuganeTowerClimbing;
+        StatusText = Loc.T("Debug-Test: Kugane Tower Jump...", "Debug test: Kugane Tower jump...");
+    }
+
+    /// <summary>
     /// Wird MITTEN in einer Gegenwehr (siehe UpdateDefendingSelf) nicht sofort ausgeführt, sonst
     /// bliebe der Charakter angeschlagen und ohne Gegenwehr stehen (das Kampf-Plugin wäre schon
     /// abgeschaltet) - stattdessen erst gemerkt (siehe Update) und der aktuelle Kampf zu Ende
@@ -398,6 +419,10 @@ public sealed class SightseeingAutomation
 
                 case State.TeleportingHomeAfterCompletion:
                     UpdateTeleportingHomeAfterCompletion();
+                    break;
+
+                case State.TeleportingToPoint:
+                    UpdateTeleportingToPoint();
                     break;
 
                 case State.KuganeTowerClimbing:
@@ -546,6 +571,18 @@ public sealed class SightseeingAutomation
 
     private void TryStartNext(IReadOnlyList<CollectibleEntry> entries, IReadOnlyList<CollectibleEntry> pendingInZone)
     {
+        // Nutzeranforderung: auch beim (Neu-)Start der Automation prüfen, ob gerade getaucht wird -
+        // z.B. wenn der Nutzer "Auto Sightseeing" direkt unter Wasser klickt, statt das erst nach dem
+        // ersten erledigten Punkt zu merken (siehe PostCompletionTeleportAetheryteWhenDiving-Kommentar,
+        // gleiche Ursache: ein normaler Laufweg startet aus dieser Tiefe nie).
+        if (Plugin.Condition[ConditionFlag.Diving]
+            && PostCompletionTeleportAetheryteWhenDiving.TryGetValue(Plugin.ResolveEffectiveTerritoryId(Plugin.ClientState.TerritoryType), out var divingAetheryteName))
+        {
+            Plugin.Log.Info("[SightseeingAutomation] TryStartNext: taucht gerade - teleportiere erst zu \"" + divingAetheryteName + "\", bevor der nächste Punkt gewählt wird.");
+            TryTeleportToAetheryteAfterCompletion(divingAetheryteName);
+            return;
+        }
+
         // Nur WIRKLICH gerade erledigbare Punkte als Kandidaten - ein nur wegen Wetter/Uhrzeit
         // gesperrter Punkt (siehe IsSightseeingOnlyTemporarilyUnavailable) zählt hier bewusst NICHT
         // als verfügbar (Nutzeranforderung: "soll erst losgehen, wenn der Timer auf 0 ist"), sondern
@@ -684,6 +721,14 @@ public sealed class SightseeingAutomation
         puzzleStepRetries = 0;
         dismountStuckSince = null;
 
+        // Manche Sightseeing-Punkte sind von der normalen Ankunftsposition aus kaum sauber erreichbar
+        // (Nutzer-Report, z.B. Yanxia "Prism Lake") - dort erst per Lifestream zu einem konkreten,
+        // bekannten Ätheryten teleportieren, DANACH ganz normal weiter (gleiches Prinzip wie
+        // AetherCurrentAutomation.PreStartTeleportAetheryteNames).
+        if (PreApproachTeleportAetheryteNames.TryGetValue(entry.Name, out var preApproachAetheryteName)
+            && TryTeleportToPointAetheryte(preApproachAetheryteName))
+            return;
+
         // Sightseeing-Punkte einer geteilten Hauptstadt können in einem ANDEREN Bezirk liegen als
         // dem, in dem man gerade steht (siehe siblingTerritories-Filter in CompactOverlayWindow, z.B.
         // "Barracuda Piers" in den Limsa Upper Decks) - vnavmesh kann nicht über eine Ladezone hinweg
@@ -781,7 +826,7 @@ public sealed class SightseeingAutomation
             // Rest läuft über UpdateJumpingPuzzle.
             currentTargetPosition = currentPuzzle.Start;
         }
-        else if (Plugin.TryGetSightseeingApproachWaypoints(entry.Id, out var waypoints))
+        else if (Plugin.TryGetSightseeingApproachWaypoints(entry.Id, entry.Name, out var waypoints))
         {
             pendingApproachWaypoints = waypoints;
             pendingApproachWaypointIndex = 0;
@@ -1043,7 +1088,7 @@ public sealed class SightseeingAutomation
 
         var mounted = Plugin.Condition[ConditionFlag.Mounted];
         var accepted = false;
-        if (mounted && Plugin.CanFly)
+        if (currentLegAllowsFlying && mounted && Plugin.CanFly)
             accepted = pathfindAndMoveCloseTo.InvokeFunc(target, true, FinalApproachTolerance);
 
         if (!accepted)
@@ -1063,6 +1108,16 @@ public sealed class SightseeingAutomation
     {
         currentTargetPosition = waypoint.Position;
         currentLegAllowsFlying = waypoint.AllowFlying;
+
+        // DirectFly: vnavmesh erkennt diesen Punkt nicht als gültiges Pathfinding-Ziel (lehnt den
+        // Versuch ab/fliegt gar nicht erst los) - stattdessen dieselbe gerade-Linie-Bewegung wie bei
+        // den Jumping-Puzzle-Schritten nutzen, die keine Wegsuche braucht.
+        if (waypoint.DirectFly)
+        {
+            moveToPath.InvokeAction(new List<Vector3> { waypoint.Position }, true);
+            return true;
+        }
+
         return TryBeginPathfindAccepted();
     }
 
@@ -1200,7 +1255,7 @@ public sealed class SightseeingAutomation
                 // Charakter u.U. noch leicht in der Luft stehen) - sonst kann der Bodenlaufweg zum
                 // nächsten (ggf. nicht-fliegenden) Zwischenstopp abgelehnt werden, weil kein gültiger
                 // Startpunkt auf dem Navmesh gefunden wird.
-                if (pendingApproachWaypointIndex == 0 && !hasLandedAtFirstApproachWaypoint)
+                if (pendingApproachWaypointIndex == 0 && !hasLandedAtFirstApproachWaypoint && !waypoints[pendingApproachWaypointIndex + 1].DirectFly)
                 {
                     hasLandedAtFirstApproachWaypoint = true;
                     if (pathfindAndMoveCloseTo.InvokeFunc(waypoints[0].Position, false, ApproachWaypointLandingTolerance))
@@ -1507,6 +1562,64 @@ public sealed class SightseeingAutomation
     }
 
     /// <summary>
+    /// Siehe StartMovingTo-Kommentar. Key = Name des Sightseeing-Punkts, Wert = Name des Ätheryten,
+    /// zu dem VOR dem eigentlichen Anlauf teleportiert wird.
+    /// </summary>
+    private static readonly Dictionary<string, string> PreApproachTeleportAetheryteNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Prism Lake"] = "The House of the Fierce", // Yanxia
+    };
+
+    /// <summary>Siehe PreApproachTeleportAetheryteNames-Kommentar - wie TryTeleportToAetheryteAfterCompletion, aber führt danach BeginNavigateToEntry statt FinishCurrent aus.</summary>
+    private bool TryTeleportToPointAetheryte(string aetheryteName)
+    {
+        if (!IsLifestreamAvailable())
+            return false;
+
+        var aetheryteId = Plugin.ResolveAetheryteIdByName(aetheryteName);
+        if (aetheryteId == null || !lifestreamTeleport.InvokeFunc(aetheryteId.Value, (byte)0))
+        {
+            Plugin.Log.Warning($"[SightseeingAutomation] TryTeleportToPointAetheryte({currentTargetEntry?.Name}): Teleport zu \"{aetheryteName}\" nicht möglich - laufe normal von hier aus los.");
+            return false;
+        }
+
+        postCompletionTeleportFinishedAt = null;
+        postCompletionTeleportHasSeenLoadingScreen = false;
+        state = State.TeleportingToPoint;
+        stateEnteredAt = DateTime.UtcNow;
+        StatusText = Loc.T($"Teleportiere zu {aetheryteName}, dann: {currentTargetEntry?.Name}...", $"Teleporting to {aetheryteName}, then: {currentTargetEntry?.Name}...");
+        return true;
+    }
+
+    /// <summary>Wie UpdateTeleportingHomeAfterCompletion, führt danach aber BeginNavigateToEntry statt FinishCurrent aus.</summary>
+    private void UpdateTeleportingToPoint()
+    {
+        if (currentTargetEntry == null)
+        {
+            state = State.Idle;
+            return;
+        }
+
+        var loading = Plugin.Condition[ConditionFlag.BetweenAreas] || Plugin.Condition[ConditionFlag.BetweenAreas51];
+        if (loading)
+            postCompletionTeleportHasSeenLoadingScreen = true;
+
+        if (loading || !postCompletionTeleportHasSeenLoadingScreen)
+        {
+            postCompletionTeleportFinishedAt = null;
+            if (DateTime.UtcNow - stateEnteredAt > DistrictTravelTimeout)
+                BeginNavigateToEntry(currentTargetEntry);
+            return;
+        }
+
+        postCompletionTeleportFinishedAt ??= DateTime.UtcNow;
+        if (DateTime.UtcNow - postCompletionTeleportFinishedAt.Value < DistrictTravelSettleDelay)
+            return;
+
+        BeginNavigateToEntry(currentTargetEntry);
+    }
+
+    /// <summary>
     /// Nach Erledigen eines Punkts MIT von Hand hinterlegten Rückweg-Zwischenstopps (siehe Plugin.
     /// SightseeingPostCompletionWaypoints, z.B. Summerford Farms) erst zu Fuß der Reihe nach dorthin,
     /// statt direkt loszufliegen - der enge Anflugweg (Tür/Wand) muss zu Fuß auch wieder raus. Nur,
@@ -1518,8 +1631,34 @@ public sealed class SightseeingAutomation
     // enden an völlig unterschiedlichen, oft schwer begehbaren Stellen).
     private static readonly HashSet<uint> PostCompletionTeleportHomeTerritoryIds = new() { 628 };
 
+    /// <summary>
+    /// Nutzer-Report (The Ruby Sea, Punkt "Tamamizu"): nach einem Punkt, der unberitten getaucht
+    /// erreicht wird, bleibt der Charakter danach am Taucheingang hängen - ein normaler Laufweg zum
+    /// nächsten Punkt (meist über Wasser) startet dann nie (gleiches Problem/dieselbe Ursache wie bei
+    /// AetherCurrentAutomation: vnavmeshs Bodenlaufauftrag findet in dieser Tiefe keinen Weg). Statt
+    /// EINEN bestimmten Punktnamen fest zu verdrahten, daher ALLGEMEIN: taucht der Charakter gerade
+    /// noch (Condition[Diving]), wenn der nächste Punkt ansteht, erst zu einem je Zone hinterlegten,
+    /// bekannten Ätheryten teleportieren, DANACH ganz normal mit den übrigen Punkten weitermachen -
+    /// gleiches Prinzip wie AetherCurrentAutomation.PreStartTeleportAetheryteNames, nur NACH statt VOR
+    /// dem jeweiligen Punkt. Key = TerritoryTypeId, Wert = Name des Ziel-Ätheryten.
+    /// </summary>
+    private static readonly Dictionary<uint, string> PostCompletionTeleportAetheryteWhenDiving = new()
+    {
+        [613] = "Onokoro", // The Ruby Sea
+        [622] = "The Dawn Throne", // The Azim Steppe
+    };
+
     private void TryWalkOutOrFinish(IReadOnlyList<CollectibleEntry> entries)
     {
+        if (currentTargetEntry != null
+            && Plugin.Condition[ConditionFlag.Diving]
+            && PostCompletionTeleportAetheryteWhenDiving.TryGetValue(Plugin.ResolveEffectiveTerritoryId(Plugin.ClientState.TerritoryType), out var teleportAetheryteName))
+        {
+            Plugin.Log.Info($"[SightseeingAutomation] TryWalkOutOrFinish({currentTargetEntry.Name}): taucht noch - teleportiere zu \"{teleportAetheryteName}\", statt normal weiterzulaufen.");
+            TryTeleportToAetheryteAfterCompletion(teleportAetheryteName);
+            return;
+        }
+
         if (currentTargetEntry != null
             && PostCompletionTeleportHomeTerritoryIds.Contains(Plugin.ResolveEffectiveTerritoryId(Plugin.ClientState.TerritoryType)))
         {
@@ -1573,6 +1712,40 @@ public sealed class SightseeingAutomation
         StatusText = Loc.T("Teleportiere zum Haupt-Ätheryten...", "Teleporting to the main aetheryte...");
     }
 
+    /// <summary>Siehe PostCompletionTeleportAetheryteNames - wie TryTeleportHomeAfterCompletion, aber zu einem konkret benannten statt dem Haupt-Ätheryten.</summary>
+    private void TryTeleportToAetheryteAfterCompletion(string aetheryteName)
+    {
+        // Wird auch aus TryStartNext aufgerufen, BEVOR überhaupt ein Ziel gewählt wurde (Nutzer-
+        // Anforderung: Tauchgang-Check schon beim (Neu-)Start prüfen) - dann ist currentTargetEntry
+        // noch null, FinishCurrent() (das currentTargetEntry voraussetzt) darf hier NICHT laufen,
+        // sonst NullReferenceException. Einfach im Leerlauf bleiben, nächster Tick versucht es erneut.
+        void FinishOrStayIdle()
+        {
+            if (currentTargetEntry != null)
+                FinishCurrent();
+        }
+
+        if (!IsLifestreamAvailable())
+        {
+            FinishOrStayIdle();
+            return;
+        }
+
+        var aetheryteId = Plugin.ResolveAetheryteIdByName(aetheryteName);
+        if (aetheryteId == null || !lifestreamTeleport.InvokeFunc(aetheryteId.Value, (byte)0))
+        {
+            Plugin.Log.Warning($"[SightseeingAutomation] TryTeleportToAetheryteAfterCompletion({currentTargetEntry?.Name}): Teleport zu \"{aetheryteName}\" nicht möglich - mache normal weiter.");
+            FinishOrStayIdle();
+            return;
+        }
+
+        postCompletionTeleportFinishedAt = null;
+        postCompletionTeleportHasSeenLoadingScreen = false;
+        state = State.TeleportingHomeAfterCompletion;
+        stateEnteredAt = DateTime.UtcNow;
+        StatusText = Loc.T($"Teleportiere zu {aetheryteName}...", $"Teleporting to {aetheryteName}...");
+    }
+
     private bool postCompletionTeleportHasSeenLoadingScreen;
 
     /// <summary>
@@ -1587,6 +1760,17 @@ public sealed class SightseeingAutomation
     /// </summary>
     private void UpdateTeleportingHomeAfterCompletion()
     {
+        // Siehe TryTeleportToAetheryteAfterCompletion-Kommentar - dieser Zustand kann auch OHNE
+        // gewähltes Ziel erreicht werden (Tauchgang-Check direkt in TryStartNext), dann darf
+        // FinishCurrent() (setzt currentTargetEntry voraus) nicht laufen.
+        void FinishOrGoIdle()
+        {
+            if (currentTargetEntry != null)
+                FinishCurrent();
+            else
+                state = State.Idle;
+        }
+
         var loading = Plugin.Condition[ConditionFlag.BetweenAreas] || Plugin.Condition[ConditionFlag.BetweenAreas51];
         if (loading)
             postCompletionTeleportHasSeenLoadingScreen = true;
@@ -1595,7 +1779,7 @@ public sealed class SightseeingAutomation
         {
             postCompletionTeleportFinishedAt = null;
             if (DateTime.UtcNow - stateEnteredAt > DistrictTravelTimeout)
-                FinishCurrent();
+                FinishOrGoIdle();
             return;
         }
 
@@ -1603,7 +1787,7 @@ public sealed class SightseeingAutomation
         if (DateTime.UtcNow - postCompletionTeleportFinishedAt.Value < DistrictTravelSettleDelay)
             return;
 
-        FinishCurrent();
+        FinishOrGoIdle();
     }
 
     /// <summary>

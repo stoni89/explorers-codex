@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 using Dalamud.Game.Chat;
+using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Game.Text;
 using Dalamud.Plugin.Ipc;
 
@@ -21,10 +22,71 @@ public sealed class QuestAutomation
     {
         SummoningChocobo,
         Idle,
+        TeleportingToQuestStart,
+        GateGuardRoute,
         WaitingForPickup,
         Running,
         TravelingHome,
     }
+
+    private enum GateGuardPhase
+    {
+        Mounting,
+        Approaching,
+        Interacting,
+        WaitingForLoadingScreen,
+    }
+
+    // Von Hand hinterlegt: manche Quests lassen sich zwar in der Zone annehmen, aber Questionable
+    // läuft von der normalen Ankunftsposition aus nicht sauber zum Questgeber (Nutzer-Report, z.B.
+    // "A Hunger for Trade"/"Closing Up Shop"/"Out of Sight" in The Peaks) - für diese erst per
+    // Lifestream zu einem konkreten, bekannten Ätheryten teleportieren, DANACH erst
+    // Questionable.StartSingleQuest aufrufen (gleiches Prinzip wie
+    // AetherCurrentAutomation.PreStartTeleportAetheryteNames). Nach Anzeigenamen statt Quest-RowId
+    // indiziert, da TryStartNext ohnehin schon den vollen CollectibleEntry (inkl. Name) kennt.
+    private static readonly Dictionary<string, string> PreStartTeleportAetheryteNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["A Hunger for Trade"] = "Ala Ghiri",
+        ["Closing Up Shop"] = "Ala Ghiri",
+        ["Out of Sight"] = "Ala Ghiri",
+    };
+
+    // Siehe PreStartTeleportAetheryteNames-Kommentar - gleiche Werte wie
+    // AetherCurrentAutomation.PostCompletionTeleportTimeout/-SettleDelay.
+    private static readonly TimeSpan PreStartTeleportTimeout = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan PreStartTeleportSettleDelay = TimeSpan.FromSeconds(2);
+
+    // Von Hand hinterlegt: "A Hunger for Trade"/"Closing Up Shop" (The Peaks, nach dem Teleport zu
+    // Ala Ghiri, siehe PreStartTeleportAetheryteNames) liegen hinter einem Tor, das erst ein
+    // Wachposten öffnet - erst zur angegebenen Position laufen, den NPC ansprechen, den Dialog
+    // durchklicken und die Ja/Nein-Abfrage bestätigen, dann (nach der Ladeanimation) abmounten und
+    // erst DANACH Questionable starten (identisches Prinzip wie AetherCurrentAutomation.
+    // AetherCurrentGateRoutes, hier aber mit einem echten NPC statt eines Tor-Objekts).
+    private static readonly Dictionary<string, (Vector3 Position, string NpcName)> GateGuardRoutes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["A Hunger for Trade"] = (new Vector3(-130.32358f, 305.35394f, 190.10594f), "Ala Mhigan Resistance Gate Guard"),
+        ["Closing Up Shop"] = (new Vector3(-130.32358f, 305.35394f, 190.10594f), "Ala Mhigan Resistance Gate Guard"),
+    };
+
+    private const int GateGuardMaxInteractAttempts = 3;
+    private const float GateGuardObjectSearchRadius = 8f;
+    private const float GateGuardArrivalTolerance = 3f;
+    private static readonly TimeSpan GateGuardDismountSettleDelay = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan GateGuardInteractRetryInterval = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan GateGuardLoadingTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan GateGuardStepMaxDuration = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan GateGuardMountWaitTimeout = TimeSpan.FromSeconds(15);
+
+    // Ein einzelner Plugin.TryRequestAetheryteMount-Ruf schlägt direkt nach dem Lifestream-Teleport
+    // manchmal wortlos fehl (Nutzer-Report: Status zeigt "Rufe Mount..." an, der Charakter bleibt
+    // aber zu Fuß) - vermutlich, weil der Spielclient unmittelbar nach der Ladeanimation noch kurz
+    // "beschäftigt" ist und die Mount-Aktion/den "/mount"-Text-Befehl in diesem Fenster verschluckt,
+    // ohne dass Condition[Mounted] oder der Rückgabewert das anzeigen. Deshalb wird hier (anders als
+    // bei AetherCurrentAutomation.BeginMountAndPathfind, das nur einmal ruft) in Abständen erneut
+    // versucht, bis entweder Mounted==true wird oder GateGuardMountWaitTimeout abläuft - identisches
+    // Intervall wie Plugin.TryRemountAfterForcedDismount.
+    private static readonly TimeSpan GateGuardMountRetryInterval = TimeSpan.FromSeconds(3);
+    private DateTime gateGuardLastMountAttemptAt;
 
     // Wie lange maximal auf das Beschwören + Setzen der Stance gewartet wird, bevor trotzdem mit der
     // eigentlichen Automation begonnen wird (z.B. falls keine Gysahl Greens vorhanden sind) - siehe
@@ -93,6 +155,12 @@ public sealed class QuestAutomation
     private readonly ICallGateSubscriber<bool> lifestreamIsBusy;
     private readonly ICallGateSubscriber<object> lifestreamAbort;
 
+    // Siehe GateGuardRoutes-Kommentar - Questionable selbst läuft erst NACH dem Start, daher braucht
+    // diese Klasse (anders als sonst) für den Weg bis zum Wachposten eigenes vnavmesh.
+    private readonly ICallGateSubscriber<Vector3, bool, float, bool> pathfindAndMoveCloseTo;
+    private readonly ICallGateSubscriber<bool> pathIsRunning;
+    private readonly ICallGateSubscriber<object> pathStop;
+
     private State state = State.Idle;
     private uint? currentQuestId;
     private string currentQuestName = string.Empty;
@@ -114,6 +182,24 @@ public sealed class QuestAutomation
     private uint? travelTargetTerritoryId;
     private bool travelIsReturnHome;
     private uint? travelFailureSkipQuestId;
+
+    // Siehe PreStartTeleportAetheryteNames-Kommentar - welche Quest nach dem Teleport tatsächlich
+    // gestartet werden soll (State.TeleportingToQuestStart), und ob der Ladebildschirm des Teleports
+    // schon (einmal) gesehen wurde (verhindert ein verfrühtes "fertig", falls er erst mit Verzögerung
+    // einsetzt - gleiches Prinzip wie AetherCurrentAutomation.preStartTeleportHasSeenLoadingScreen).
+    private CollectibleEntry? pendingQuestEntryForTeleport;
+    private bool preStartTeleportHasSeenLoadingScreen;
+
+    // Siehe GateGuardRoutes-Kommentar - Zustand der eigenen kleinen Tor-Wach-Routine (State.
+    // GateGuardRoute), läuft NACH dem Pre-Start-Teleport und VOR dem eigentlichen Questionable-Start.
+    private (Vector3 Position, string NpcName)? activeGateGuardRoute;
+    private GateGuardPhase gateGuardPhase;
+    private bool gateGuardHasSeenPathRunning;
+    private int gateGuardInteractAttempts;
+    private DateTime gateGuardInteractedAt;
+    private DateTime? gateGuardDismountedAt;
+    private bool gateGuardHasSeenLoadingScreen;
+    private DateTime? gateGuardLoadingEndedAt;
 
     private readonly HashSet<uint> skippedQuestIds = new();
     private readonly Dictionary<uint, int> attemptCounts = new();
@@ -160,6 +246,10 @@ public sealed class QuestAutomation
         lifestreamTeleport = Plugin.PluginInterface.GetIpcSubscriber<uint, byte, bool>("Lifestream.Teleport");
         lifestreamIsBusy = Plugin.PluginInterface.GetIpcSubscriber<bool>("Lifestream.IsBusy");
         lifestreamAbort = Plugin.PluginInterface.GetIpcSubscriber<object>("Lifestream.Abort");
+
+        pathfindAndMoveCloseTo = Plugin.PluginInterface.GetIpcSubscriber<Vector3, bool, float, bool>("vnavmesh.SimpleMove.PathfindAndMoveCloseTo");
+        pathIsRunning = Plugin.PluginInterface.GetIpcSubscriber<bool>("vnavmesh.Path.IsRunning");
+        pathStop = Plugin.PluginInterface.GetIpcSubscriber<object>("vnavmesh.Path.Stop");
 
         Plugin.ChatGui.ChatMessage += OnChatMessage;
     }
@@ -438,6 +528,14 @@ public sealed class QuestAutomation
                         StopQuestionable();
                         TryTravelTo(homeTerritoryId!.Value, currentEffectiveTerritoryId, isReturnHome: true);
                     }
+                    break;
+
+                case State.TeleportingToQuestStart:
+                    UpdateTeleportingToQuestStart();
+                    break;
+
+                case State.GateGuardRoute:
+                    UpdateGateGuardRoute();
                     break;
 
                 case State.WaitingForPickup:
@@ -728,6 +826,350 @@ public sealed class QuestAutomation
             return;
         }
 
+        // Siehe PreStartTeleportAetheryteNames-Kommentar - für hinterlegte Quests erst per Lifestream
+        // zu einem bekannten Ätheryten teleportieren, der eigentliche Questionable-Start (siehe
+        // BeginQuestionableStart) folgt erst danach in UpdateTeleportingToQuestStart. Klappt der
+        // Teleport nicht (Lifestream fehlt/Ätheryte nicht auflösbar/noch nicht freigeschaltet), ganz
+        // normal direkt weiter wie bisher.
+        if (PreStartTeleportAetheryteNames.TryGetValue(next.Name, out var teleportAetheryteName)
+            && TryTeleportToQuestStart(teleportAetheryteName, next))
+            return;
+
+        BeginQuestionableStart(next);
+    }
+
+    /// <summary>Siehe PreStartTeleportAetheryteNames-Kommentar.</summary>
+    private bool TryTeleportToQuestStart(string aetheryteName, CollectibleEntry quest)
+    {
+        if (!IsLifestreamAvailable())
+        {
+            Plugin.Log.Info($"[QuestAutomation] TryTeleportToQuestStart({quest.Name}): Lifestream-IPC nicht verfügbar - teleportiere nicht.");
+            return false;
+        }
+
+        var aetheryteId = Plugin.ResolveAetheryteIdByName(aetheryteName);
+        if (aetheryteId == null)
+        {
+            Plugin.Log.Warning($"[QuestAutomation] TryTeleportToQuestStart({quest.Name}): Ätheryte \"{aetheryteName}\" nicht im Aetheryte-Sheet gefunden (Name/Sprache falsch?) - teleportiere nicht.");
+            return false;
+        }
+
+        if (!lifestreamTeleport.InvokeFunc(aetheryteId.Value, (byte)0))
+        {
+            Plugin.Log.Warning($"[QuestAutomation] TryTeleportToQuestStart({quest.Name}): Lifestream.Teleport zu \"{aetheryteName}\" (Id={aetheryteId.Value}) abgelehnt (noch nicht freigeschaltet?) - teleportiere nicht.");
+            return false;
+        }
+
+        pendingQuestEntryForTeleport = quest;
+        preStartTeleportHasSeenLoadingScreen = false;
+        state = State.TeleportingToQuestStart;
+        stateEnteredAt = DateTime.UtcNow;
+        StatusText = Loc.T($"Teleportiere zu {aetheryteName}, dann: {quest.Name}...", $"Teleporting to {aetheryteName}, then: {quest.Name}...");
+        return true;
+    }
+
+    private void UpdateTeleportingToQuestStart()
+    {
+        if (pendingQuestEntryForTeleport == null)
+        {
+            state = State.Idle;
+            return;
+        }
+
+        var loading = Plugin.Condition[ConditionFlag.BetweenAreas] || Plugin.Condition[ConditionFlag.BetweenAreas51];
+        if (loading)
+            preStartTeleportHasSeenLoadingScreen = true;
+
+        if (loading || !preStartTeleportHasSeenLoadingScreen)
+        {
+            if (DateTime.UtcNow - stateEnteredAt > PreStartTeleportTimeout)
+                ProceedAfterPreStartTeleport(pendingQuestEntryForTeleport);
+
+            return;
+        }
+
+        if (DateTime.UtcNow - stateEnteredAt < PreStartTeleportSettleDelay)
+            return;
+
+        var quest = pendingQuestEntryForTeleport;
+        pendingQuestEntryForTeleport = null;
+        ProceedAfterPreStartTeleport(quest);
+    }
+
+    /// <summary>
+    /// Nach dem Pre-Start-Teleport (siehe PreStartTeleportAetheryteNames) ist der Charakter immer
+    /// abgestiegen (Lifestream-Teleport) - bei ALLEN drei hinterlegten Quests erst ein Mount anfordern
+    /// (falls möglich), bevor es weitergeht (Nutzeranforderung: "soll aufmounten und dann reiten",
+    /// nicht zu Fuß laufen). Manche dieser Quests liegen zusätzlich hinter einem Tor-Wachposten
+    /// (siehe GateGuardRoutes), der erst noch per BeginGateGuardApproach geöffnet werden muss, bevor
+    /// Questionable überhaupt starten kann - alle anderen gehen nach dem Mount-Versuch direkt weiter.
+    /// </summary>
+    private void ProceedAfterPreStartTeleport(CollectibleEntry quest)
+    {
+        pendingQuestEntryForTeleport = quest;
+        activeGateGuardRoute = GateGuardRoutes.TryGetValue(quest.Name, out var gateRoute) ? gateRoute : null;
+        state = State.GateGuardRoute;
+        stateEnteredAt = DateTime.UtcNow;
+
+        if (Plugin.TryRequestAetheryteMount())
+        {
+            gateGuardPhase = GateGuardPhase.Mounting;
+            gateGuardLastMountAttemptAt = DateTime.UtcNow;
+            StatusText = Loc.T($"Rufe Mount, dann: {quest.Name}...", $"Summoning mount, then: {quest.Name}...");
+            return;
+        }
+
+        ContinueAfterMountRequest(quest);
+    }
+
+    /// <summary>Siehe ProceedAfterPreStartTeleport-Kommentar - nach dem (versuchten) Mount-Ruf entweder zum Wachposten (GateGuardRoutes) oder, falls keiner hinterlegt ist, direkt zu Questionable.</summary>
+    private void ContinueAfterMountRequest(CollectibleEntry quest)
+    {
+        if (activeGateGuardRoute is { } route)
+        {
+            BeginGateGuardApproach(route, quest);
+            return;
+        }
+
+        pendingQuestEntryForTeleport = null;
+        BeginQuestionableStart(quest);
+    }
+
+    private void BeginGateGuardApproach((Vector3 Position, string NpcName) route, CollectibleEntry quest)
+    {
+        gateGuardPhase = GateGuardPhase.Approaching;
+        gateGuardHasSeenPathRunning = false;
+        stateEnteredAt = DateTime.UtcNow;
+
+        var mounted = Plugin.Condition[ConditionFlag.Mounted];
+        var accepted = false;
+        if (mounted && Plugin.CanFly)
+            accepted = pathfindAndMoveCloseTo.InvokeFunc(route.Position, true, GateGuardArrivalTolerance);
+        if (!accepted)
+            accepted = pathfindAndMoveCloseTo.InvokeFunc(route.Position, false, GateGuardArrivalTolerance);
+
+        if (!accepted)
+        {
+            Plugin.Log.Warning($"[QuestAutomation] BeginGateGuardApproach({quest.Name}): vnavmesh lehnt den Laufweg zum Wachposten ab - starte Questionable trotzdem direkt.");
+            activeGateGuardRoute = null;
+            pendingQuestEntryForTeleport = null;
+            BeginQuestionableStart(quest);
+            return;
+        }
+
+        StatusText = Loc.T($"Laufe zum Wachposten, dann: {quest.Name}...", $"Walking to the gate guard, then: {quest.Name}...");
+    }
+
+    private void UpdateGateGuardRoute()
+    {
+        if (pendingQuestEntryForTeleport == null)
+        {
+            state = State.Idle;
+            return;
+        }
+
+        // Mounting läuft für ALLE drei Quests (siehe ProceedAfterPreStartTeleport-Kommentar), auch
+        // für die ohne hinterlegte GateGuardRoutes - activeGateGuardRoute ist dann bewusst noch null,
+        // erst die übrigen Phasen (Approaching/Interacting/WaitingForLoadingScreen) brauchen sie
+        // zwingend.
+        if (gateGuardPhase == GateGuardPhase.Mounting)
+        {
+            if (Plugin.Condition[ConditionFlag.Mounted])
+            {
+                ContinueAfterMountRequest(pendingQuestEntryForTeleport);
+                return;
+            }
+
+            if (DateTime.UtcNow - stateEnteredAt > GateGuardMountWaitTimeout)
+            {
+                Plugin.Log.Warning($"[QuestAutomation] UpdateGateGuardRoute({pendingQuestEntryForTeleport.Name}): nach {GateGuardMountWaitTimeout.TotalSeconds}s nicht aufgesessen - mache trotzdem zu Fuß weiter.");
+                ContinueAfterMountRequest(pendingQuestEntryForTeleport);
+                return;
+            }
+
+            // Siehe GateGuardMountRetryInterval-Kommentar - ein einzelner Ruf verhallt nach dem
+            // Teleport manchmal wortlos, daher in Abständen erneut versuchen statt nur einmal zu
+            // rufen und passiv auf Mounted zu warten.
+            if (DateTime.UtcNow - gateGuardLastMountAttemptAt > GateGuardMountRetryInterval)
+            {
+                gateGuardLastMountAttemptAt = DateTime.UtcNow;
+                Plugin.TryRequestAetheryteMount();
+            }
+
+            return;
+        }
+
+        if (activeGateGuardRoute is not { } route)
+        {
+            state = State.Idle;
+            return;
+        }
+
+        switch (gateGuardPhase)
+        {
+            case GateGuardPhase.Approaching:
+            {
+                if (pathIsRunning.InvokeFunc())
+                {
+                    gateGuardHasSeenPathRunning = true;
+                    if (DateTime.UtcNow - stateEnteredAt > GateGuardStepMaxDuration)
+                        FailGateGuardRoute("Laufweg zum Wachposten dauert zu lange", "Path to the gate guard is taking too long");
+
+                    return;
+                }
+
+                if (!gateGuardHasSeenPathRunning)
+                    return;
+
+                gateGuardPhase = GateGuardPhase.Interacting;
+                gateGuardInteractAttempts = 0;
+                gateGuardDismountedAt = null;
+                stateEnteredAt = DateTime.UtcNow;
+                StatusText = Loc.T($"Spreche mit dem Wachposten: {pendingQuestEntryForTeleport.Name}...", $"Talking to the gate guard: {pendingQuestEntryForTeleport.Name}...");
+                return;
+            }
+
+            case GateGuardPhase.Interacting:
+            {
+                if (Plugin.TryConfirmSelectYesno())
+                {
+                    gateGuardPhase = GateGuardPhase.WaitingForLoadingScreen;
+                    gateGuardHasSeenLoadingScreen = false;
+                    gateGuardLoadingEndedAt = null;
+                    stateEnteredAt = DateTime.UtcNow;
+                    StatusText = Loc.T($"Warte auf Ladeanimation: {pendingQuestEntryForTeleport.Name}...", $"Waiting for the loading animation: {pendingQuestEntryForTeleport.Name}...");
+                    return;
+                }
+
+                // Zwischen Interact und der Ja/Nein-Abfrage kommt erst noch mehrzeiliger Dialogtext
+                // (siehe Plugin.TryAdvanceTalkDialogue-Kommentar) - jeden Frame erneut versucht, bis
+                // keiner mehr offen ist.
+                Plugin.TryAdvanceTalkDialogue();
+
+                if (Plugin.Condition[ConditionFlag.Mounted])
+                {
+                    Plugin.TryDismount();
+                    gateGuardDismountedAt = null;
+                    return;
+                }
+
+                gateGuardDismountedAt ??= DateTime.UtcNow;
+                if (DateTime.UtcNow - gateGuardDismountedAt.Value < GateGuardDismountSettleDelay)
+                    return;
+
+                if (gateGuardInteractAttempts > 0 && DateTime.UtcNow - gateGuardInteractedAt < GateGuardInteractRetryInterval)
+                    return;
+
+                if (gateGuardInteractAttempts >= GateGuardMaxInteractAttempts)
+                {
+                    FailGateGuardRoute("Wachposten reagiert nicht", "The gate guard does not respond");
+                    return;
+                }
+
+                if (DateTime.UtcNow - stateEnteredAt > GateGuardStepMaxDuration)
+                {
+                    FailGateGuardRoute("Wachposten nicht gefunden", "Gate guard not found");
+                    return;
+                }
+
+                var npc = FindNearestGateGuardObject(route.Position, GateGuardObjectSearchRadius, route.NpcName);
+                if (npc == null)
+                    return;
+
+                if (!Plugin.IsCurrentTarget(npc))
+                {
+                    Plugin.SetTarget(npc);
+                    return;
+                }
+
+                Plugin.Log.Info($"[QuestAutomation] UpdateGateGuardRoute({pendingQuestEntryForTeleport.Name}): interagiere mit '{npc.Name}'.");
+                Plugin.InteractWithGameObject(npc);
+                gateGuardInteractAttempts++;
+                gateGuardInteractedAt = DateTime.UtcNow;
+                return;
+            }
+
+            case GateGuardPhase.WaitingForLoadingScreen:
+            {
+                // Falls das Fenster ein zweites Mal kommt (siehe NoFlyAreaExit.UpdateWaitingForExit).
+                Plugin.TryConfirmSelectYesno();
+
+                var loading = Plugin.Condition[ConditionFlag.BetweenAreas] || Plugin.Condition[ConditionFlag.BetweenAreas51];
+                if (loading)
+                    gateGuardHasSeenLoadingScreen = true;
+
+                if (loading || !gateGuardHasSeenLoadingScreen)
+                {
+                    gateGuardLoadingEndedAt = null;
+                    if (DateTime.UtcNow - stateEnteredAt > GateGuardLoadingTimeout)
+                        ResumeAfterGateGuardRoute();
+
+                    return;
+                }
+
+                // Siehe GateDismountSettleDelay-Kommentar in AetherCurrentAutomation - direkt nach
+                // Ende der Ladeanimation ist der Charakter noch nicht wieder voll "steuerbar".
+                gateGuardLoadingEndedAt ??= DateTime.UtcNow;
+                if (DateTime.UtcNow - gateGuardLoadingEndedAt.Value < GateGuardDismountSettleDelay)
+                    return;
+
+                ResumeAfterGateGuardRoute();
+                return;
+            }
+        }
+    }
+
+    /// <summary>Nutzeranforderung: nach der Ladeanimation nochmal explizit abmounten, bevor Questionable (das selbst wieder zur Quest läuft) gestartet wird.</summary>
+    private void ResumeAfterGateGuardRoute()
+    {
+        activeGateGuardRoute = null;
+        if (Plugin.Condition[ConditionFlag.Mounted])
+            Plugin.TryDismount();
+
+        var quest = pendingQuestEntryForTeleport!;
+        pendingQuestEntryForTeleport = null;
+        BeginQuestionableStart(quest);
+    }
+
+    private void FailGateGuardRoute(string de, string en)
+    {
+        pathStop.InvokeAction();
+        activeGateGuardRoute = null;
+        if (pendingQuestEntryForTeleport != null)
+            skippedQuestIds.Add(pendingQuestEntryForTeleport.Id);
+
+        pendingQuestEntryForTeleport = null;
+        StatusText = Loc.T($"Übersprungen ({de})", $"Skipped ({en})");
+        state = State.Idle;
+    }
+
+    /// <summary>Wie ChocobokeepAutomation.FindNearestChocobokeepObject, aber ohne ObjectKind-Einschränkung auf EventNpc/EventObj - ein Wachposten-NPC ist ein echter Charakter (ICharacter), nicht statisch.</summary>
+    private static Dalamud.Game.ClientState.Objects.Types.IGameObject? FindNearestGateGuardObject(Vector3 nearPosition, float maxDistance, string npcName)
+    {
+        Dalamud.Game.ClientState.Objects.Types.IGameObject? nearest = null;
+        var bestDistance = maxDistance;
+
+        foreach (var obj in Plugin.ObjectTable)
+        {
+            if (!obj.IsTargetable)
+                continue;
+            if (!string.Equals(obj.Name.TextValue, npcName, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var distance = Vector3.Distance(obj.Position, nearPosition);
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                nearest = obj;
+            }
+        }
+
+        return nearest;
+    }
+
+    /// <summary>Tatsächlicher Questionable-Start, unverändert zum bisherigen Ende von TryStartNext - jetzt eigenständig, damit State.TeleportingToQuestStart ihn nach Ankunft ebenfalls aufrufen kann.</summary>
+    private void BeginQuestionableStart(CollectibleEntry next)
+    {
         // Questionable erwartet die "echte" Quest-ID des Spielclients (16 Bit, wie sie z.B. auch
         // QuestManager.IsQuestComplete nutzt), nicht die volle Lumina-Excel-RowId (die ab 0x10000
         // zählt) - sonst wird jede einzelne Quest fälschlich als "unbekannt" abgelehnt.
@@ -737,6 +1179,7 @@ public sealed class QuestAutomation
             skippedQuestIds.Add(next.Id);
             notSupportedQuestIds.Add(next.Id);
             StatusText = Loc.T($"Nicht unterstützt: {next.Name}", $"Not supported: {next.Name}");
+            state = State.Idle;
             return;
         }
 

@@ -219,24 +219,86 @@ public sealed class Plugin : IDalamudPlugin
 
     /// <summary>
     /// Entfernt automatisch alle ToDo-Einträge, die inzwischen besessen/abgeschlossen sind (siehe
-    /// IsOwned) - von CompactOverlayWindow.DrawContent jeden Frame aufgerufen, während das Overlay
-    /// offen ist (dieselbe Stelle, an der auch die übrigen Automationen laufen). Prüft dafür bewusst
-    /// über die per ResolveToDoEntries VOLL aufgelösten Einträge, nicht einen bloßen Typ+Id-Platzhalter -
-    /// manche IsOwned-Zweige (z.B. FrameKit, siehe IsFrameKitUnlocked) brauchen zusätzliche Felder
-    /// (FrameKitUnlockKind/-Id), die ein bloßer Platzhalter nicht hätte.
+    /// IsOwned). Prüft dafür bewusst über die per ResolveToDoEntries VOLL aufgelösten Einträge, nicht
+    /// einen bloßen Typ+Id-Platzhalter - manche IsOwned-Zweige (z.B. FrameKit, siehe
+    /// IsFrameKitUnlocked) brauchen zusätzliche Felder (FrameKitUnlockKind/-Id), die ein bloßer
+    /// Platzhalter nicht hätte.
+    ///
+    /// WICHTIG (Nutzer-Report: "Die ToDo Liste hat sich nach einem neu Built gelöscht"): die beiden
+    /// Listen per gemeinsamem (Type, Id)-Schlüssel zuordnen, NICHT per Listenposition - der frühere
+    /// Code verglich Configuration.ToDoList[i] gegen ResolveToDoEntries()[i], aber ResolveToDoEntries
+    /// überspringt per "continue" geblacklistete Einträge (siehe dort), wodurch beide Listen bei
+    /// JEDEM gleichzeitig geblacklisteten+ToDo-Eintrag unterschiedlich lang/verschoben waren - ab da
+    /// verglich jeder weitere Index den FALSCHEN Eintrag, was im schlimmsten Fall fast die gesamte
+    /// Liste fälschlich als "erledigt" einstufte und löschte.
     /// </summary>
     public void CleanUpToDoList()
     {
-        var resolved = ResolveToDoEntries();
-        var completed = Configuration.ToDoList
-            .Where((t, i) => IsOwned(resolved[i]))
-            .ToList();
+        if (Configuration.ToDoList.Count == 0)
+            return;
+
+        // Nutzeranforderung ("Das darf nicht passieren"): egal was in ResolveToDoEntries/IsOwned
+        // schiefgeht (Ausnahme, doppelte (Type,Id)-Schlüssel, o.ä.) - diese Methode darf NIE die
+        // Liste beschädigen. Jeder Fehler bricht komplett ab, OHNE irgendetwas zu löschen.
+        List<CollectibleEntry> resolved;
+        try
+        {
+            resolved = ResolveToDoEntries();
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "[CleanUpToDoList] Fehler beim Auflösen der ToDo-Liste - breche ab, ohne etwas zu löschen.");
+            return;
+        }
+
+        // GroupBy().First() statt ToDictionary() - verträgt doppelte (Type,Id)-Schlüssel (die
+        // ToDictionary() mit einer Ausnahme quittiert hätte) anstandslos.
+        var resolvedByKey = resolved.GroupBy(e => (e.Type, e.Id)).ToDictionary(g => g.Key, g => g.First());
+
+        // Diagnose-Logging (Nutzer-Report: Liste wurde trotz Fixes wiederholt leer) - JEDEN Eintrag
+        // einzeln protokollieren, damit beim nächsten Auftreten sichtbar ist, WELCHER Eintrag warum
+        // (nicht auflösbar vs. tatsächlich als "besessen" erkannt) als erledigt eingestuft wurde.
+        List<ToDoEntry> completed;
+        try
+        {
+            completed = new List<ToDoEntry>();
+            foreach (var t in Configuration.ToDoList)
+            {
+                if (!resolvedByKey.TryGetValue((t.Type, t.Id), out var resolvedEntry))
+                {
+                    Log.Info($"[CleanUpToDoList] \"{t.Name}\" ({t.Type}/{t.Id}): nicht auflösbar - bleibt auf der Liste.");
+                    continue;
+                }
+
+                var owned = IsOwned(resolvedEntry);
+                Log.Info($"[CleanUpToDoList] \"{t.Name}\" ({t.Type}/{t.Id}): IsOwned={owned}.");
+                if (owned)
+                    completed.Add(t);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "[CleanUpToDoList] Fehler bei IsOwned/Auswahl der erledigten Einträge - breche ab, ohne etwas zu löschen.");
+            return;
+        }
+
         if (completed.Count == 0)
             return;
+
+        // Sicherheitsnetz: bei 3 oder mehr Einträgen niemals ALLE auf einmal entfernen - ein Fehler
+        // irgendwo in der Kette (Auflösung/IsOwned) soll die Liste nie komplett leeren können, egal
+        // welche konkrete Ursache künftig noch auftaucht. Bei 1-2 Einträgen ist "alle auf einmal
+        // erledigt" dagegen ein ganz normaler, erwarteter Fall.
+        if (Configuration.ToDoList.Count >= 3 && completed.Count >= Configuration.ToDoList.Count)
+        {
+            Log.Warning($"[CleanUpToDoList] Sicherheitsnetz ausgelöst: wollte alle {completed.Count} von {Configuration.ToDoList.Count} Einträgen auf einmal entfernen - abgebrochen, nichts gelöscht.");
+            return;
+        }
 
         foreach (var t in completed)
             Configuration.ToDoList.Remove(t);
 
+        Log.Info($"[CleanUpToDoList] {completed.Count} erledigte Einträge von der ToDo-Liste entfernt ({Configuration.ToDoList.Count} verbleiben).");
         Configuration.Save();
         toDoIndex = null;
     }
@@ -2217,13 +2279,26 @@ public sealed class Plugin : IDalamudPlugin
         [2162738] = new Vector3(-636.69324f, 65.58413f, -812.0154f),   // Castrum Marinum (Lower La Noscea)
     };
 
+    // Wie SightseeingApproachOverrides, nur nach Anzeigenamen statt Adventure-RowId (bequemer, wenn
+    // die RowId nicht bekannt/ermittelt ist) - wird zusätzlich geprüft, siehe GetSightseeingEntries.
+    private static readonly Dictionary<string, Vector3> SightseeingApproachOverridesByName = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Doma Castle"] = new Vector3(-325.75723f, 94.82681f, -756.22974f), // Yanxia
+        ["Castrum Oriens"] = new Vector3(-605.44275f, 184.03442f, -530.65314f), // The Fringes
+        ["Castellum Velodyna"] = new Vector3(24.01111f, 96.34091f, 274.32043f),
+    };
+
     // Je Zwischenstopp: Position + ob dieses Teilstück fliegend angeflogen werden darf (false =
     // erzwungen zu Fuß/abgemountet, z.B. für einen Durchgang wie eine Tür, durch die man nicht
     // hindurchfliegen kann) - siehe SightseeingApproachWaypoints-Kommentar.
     // Jump: springt kurz nach Losgehen zu diesem Wegpunkt (siehe SightseeingAutomation.
     // UpdateWalkingOut) - für Zwischenstopps auf dem Rückweg/zum nächsten Punkt, die selbst eine
     // Lücke überspringen müssen, nicht nur geradeaus laufen.
-    public readonly record struct SightseeingApproachWaypoint(Vector3 Position, bool AllowFlying = true, bool Jump = false);
+    // DirectFly: statt vnavmeshs Wegsuche (pathfindAndMoveCloseTo) eine gerade Linie fliegen (vnavmesh
+    // Path.MoveTo, wie bei den Jumping-Puzzle-Schritten) - für Zwischenstopps, die vnavmesh nicht als
+    // gültigen/erreichbaren Punkt anerkennt und deshalb gar nicht erst anfliegt (Nutzer-Report:
+    // Castellum Velodyna).
+    public readonly record struct SightseeingApproachWaypoint(Vector3 Position, bool AllowFlying = true, bool Jump = false, bool DirectFly = false);
 
     // Von Hand nachgetragene ZWISCHENSTOPPS (der Reihe nach abzulaufen) vor der eigentlichen
     // Zielposition (Key = Adventure-RowId) - für Punkte, bei denen selbst der über die Karten-
@@ -2240,12 +2315,30 @@ public sealed class Plugin : IDalamudPlugin
         [2162688] = new[] { new SightseeingApproachWaypoint(new Vector3(-82.96662f, 41.993416f, -170.93227f)) }, // Barracuda Piers (Limsa Lominsa Upper Decks)
     };
 
+    // Wie SightseeingApproachWaypoints, nur nach Anzeigenamen statt Adventure-RowId (siehe
+    // SightseeingApproachOverridesByName-Kommentar) - wird zusätzlich geprüft, siehe
+    // TryGetSightseeingApproachWaypoints.
+    private static readonly Dictionary<string, SightseeingApproachWaypoint[]> SightseeingApproachWaypointsByName = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Castellum Velodyna"] = new[]
+        {
+            new SightseeingApproachWaypoint(new Vector3(38.633553f, 97.25586f, 258.96872f)),
+            new SightseeingApproachWaypoint(new Vector3(24.268892f, 96.34092f, 274.4116f), AllowFlying: false, DirectFly: true),
+        },
+    };
+
     /// <summary>Siehe SightseeingApproachWaypoints-Kommentar.</summary>
-    public static bool TryGetSightseeingApproachWaypoints(uint adventureId, out IReadOnlyList<SightseeingApproachWaypoint> waypoints)
+    public static bool TryGetSightseeingApproachWaypoints(uint adventureId, string? name, out IReadOnlyList<SightseeingApproachWaypoint> waypoints)
     {
         if (SightseeingApproachWaypoints.TryGetValue(adventureId, out var found))
         {
             waypoints = found;
+            return true;
+        }
+
+        if (name != null && SightseeingApproachWaypointsByName.TryGetValue(name, out var foundByName))
+        {
+            waypoints = foundByName;
             return true;
         }
 
@@ -3227,7 +3320,9 @@ public sealed class Plugin : IDalamudPlugin
                     MapId = level.Value.Map.RowId,
                     WorldPosition = SightseeingApproachOverrides.TryGetValue(row.RowId, out var overridePos)
                         ? overridePos
-                        : new Vector3(level.Value.X, level.Value.Y + 0.5f, level.Value.Z),
+                        : SightseeingApproachOverridesByName.TryGetValue(name, out var overrideByName)
+                            ? overrideByName
+                            : new Vector3(level.Value.X, level.Value.Y + 0.5f, level.Value.Z),
                     RequiredEmoteCommand = string.IsNullOrEmpty(emoteCommand) ? null : emoteCommand,
                     SightseeingWeatherMask = weatherMask,
                     SightseeingHasTimeWindow = row.MinTime != 0 || row.MaxTime != 0,
@@ -6776,17 +6871,28 @@ public sealed class Plugin : IDalamudPlugin
     /// <summary>
     /// Liest den menschenlesbaren Zonennamen aus dem Lumina "TerritoryType"-Sheet.
     /// </summary>
+    // Nutzer-Report: "Das rendern dauert seit dem Zonennamen extrem lange" - die ToDo-Liste ruft
+    // GetZoneName() für JEDEN Eintrag JEDEN Frame auf (Windows.CodexOverlayWindow.DrawList), ohne
+    // Cache war das pro Aufruf ein Lumina-Sheet-Zugriff + SeString-zu-string-Konvertierung. Einmal pro
+    // TerritoryTypeId auflösen und danach nur noch aus dem Dictionary lesen.
+    private static readonly Dictionary<uint, string> zoneNameCache = new();
+
     public static string GetZoneName(uint territoryTypeId)
     {
+        if (zoneNameCache.TryGetValue(territoryTypeId, out var cached))
+            return cached;
+
+        var name = "Unbekannt";
         var sheet = DataManager.GetExcelSheet<TerritoryType>();
         if (sheet != null && sheet.TryGetRow(territoryTypeId, out var row))
         {
-            var name = row.PlaceName.Value.Name.ToString();
-            if (!string.IsNullOrEmpty(name))
-                return name;
+            var resolved = row.PlaceName.Value.Name.ToString();
+            if (!string.IsNullOrEmpty(resolved))
+                name = resolved;
         }
 
-        return "Unbekannt";
+        zoneNameCache[territoryTypeId] = name;
+        return name;
     }
 
     // Per ImGui-Framezähler dedupliziert (siehe UpdateZoneAutomations) - ImGui.GetFrameCount() statt
@@ -6811,6 +6917,16 @@ public sealed class Plugin : IDalamudPlugin
         if (frame == automationsUpdatedForFrame)
             return;
         automationsUpdatedForFrame = frame;
+
+        // ACHTUNG: der automatische, zeitgesteuerte Aufruf von CleanUpToDoList wurde WIEDER entfernt
+        // (Nutzer-Report: die ToDo-Liste wurde trotz vorheriger Fixes [Index-Zuordnung per (Type,Id)
+        // statt Listenposition, Sicherheitsnetz gegen Alles-auf-einmal-Löschen] erneut leer) - die
+        // tatsächliche Ursache ist damit NOCH NICHT gefunden (das Sicherheitsnetz verhindert nur das
+        // Löschen ALLER Einträge in EINEM Durchgang, nicht ein schrittweises Leerlaufen über mehrere
+        // 2-Sekunden-Takte hinweg, falls IsOwned/die Auflösung systematisch falsch-positiv meldet).
+        // CleanUpToDoList bleibt daher vorerst NUR manuell aufrufbar (siehe Debug-Seite, "ToDo-Liste
+        // aufräumen"-Knopf) - dort mit vollem Logging jedes betroffenen Eintrags, um die echte Ursache
+        // beim nächsten Auftreten tatsächlich zu finden, statt die Liste weiter unbeaufsichtigt zu riskieren.
 
         var config = Configuration;
         var effectiveTerritoryId = ResolveEffectiveTerritoryId(currentTerritoryId);
@@ -7095,9 +7211,33 @@ public sealed class Plugin : IDalamudPlugin
 
     /// <summary>ToDo-Listen-Einträge für das neue Overlay-Design - alle Typen (siehe GetZoneOverlayItems-Kommentar).
     /// Sortierung zuerst nach config.TypeOrder (gleiche benutzerdefinierte Kategorie-Reihenfolge wie im
-    /// Zonen-Overlay, OrderBy ist stabil - bisherige Reihenfolge innerhalb einer Kategorie bleibt unverändert).</summary>
-    public List<CollectibleEntry> GetToDoOverlayItems() =>
-        ResolveToDoEntries().OrderBy(e => Configuration.TypeOrder.IndexOf(e.Type)).ToList();
+    /// Zonen-Overlay, OrderBy ist stabil - bisherige Reihenfolge innerhalb einer Kategorie bleibt unverändert).
+    ///
+    /// Nutzeranforderung: erledigte Einträge sollen in der ToDo-Liste nicht mehr AUFTAUCHEN - dasselbe
+    /// Verfahren wie in der normalen Zonen-Liste (ComputeZoneOverlayItems, "!IsOwned(e)"), aber rein
+    /// als Anzeigefilter. Bewusst NICHT wie CleanUpToDoList, das den Eintrag tatsächlich aus
+    /// Configuration.ToDoList entfernt (siehe dessen Kommentar zu den wiederholten Datenverlust-
+    /// Vorfällen) - hier bleibt der Eintrag in der gespeicherten Liste vollständig erhalten und taucht
+    /// von selbst wieder auf, falls der Fortschritt sich doch noch ändert (z.B. Achievement zurückgesetzt).
+    ///
+    /// Nutzer-Report ("Das Rendern dauert sehr sehr lange"): anders als GetZoneOverlayItems hatte diese
+    /// Methode BISHER KEINEN Cache - ResolveToDoEntries() (das selbst GetGlobalEntries() JEDES MAL neu
+    /// zu einem Dictionary aufbaut) lief dadurch JEDEN EINZELNEN FRAME komplett neu, solange der
+    /// ToDo-Tab offen war. Gleiches 250ms-Cache-Muster wie dort.
+    /// </summary>
+    private List<CollectibleEntry>? toDoOverlayItemsCache;
+    private long toDoOverlayItemsCacheTime;
+
+    public List<CollectibleEntry> GetToDoOverlayItems()
+    {
+        var now = Environment.TickCount64;
+        if (toDoOverlayItemsCache != null && now - toDoOverlayItemsCacheTime < 250)
+            return toDoOverlayItemsCache;
+
+        toDoOverlayItemsCache = ResolveToDoEntries().Where(e => !IsOwned(e)).OrderBy(e => Configuration.TypeOrder.IndexOf(e.Type)).ToList();
+        toDoOverlayItemsCacheTime = now;
+        return toDoOverlayItemsCache;
+    }
 
     /// <summary>
     /// Liefert für jedes sichtbare, echte native Spielfenster (z.B. Währungs-, Inventar- oder

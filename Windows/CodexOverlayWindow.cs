@@ -1452,7 +1452,26 @@ public class CodexOverlayWindow : Window
             if (item.Type == CollectibleType.Quest && Plugin.QuestGrantsAetherCurrent(item.Id))
             {
                 ImGui.SameLine(0f, 4f * scale);
-                CodexTheme.TextShadowed(Loc.T("(Ätherströmung)", "(Aether Current)"), TypeColors[CollectibleType.AetherCurrent], shadowActive);
+
+                // Nutzeranforderung: 5,5px nach unten (erst 2px, dann +2px, dann -0,5px, dann +1px,
+                // dann +1px) + 1px kleiner als der Rest der Zeile (in Zone- UND ToDo-Liste, da
+                // DrawList für beide gemeinsam gilt). Dieser Text pusht bewusst keine eigene
+                // CodexTheme-Schriftgröße, sondern übernimmt die der Zeile - die Verkleinerung läuft
+                // deshalb über einen Skalierungsfaktor relativ zur aktuell geerbten Schriftgröße statt
+                // eines fest kodierten Fonts, und wird manuell gezeichnet (statt TextShadowed), damit
+                // der Y-Versatz rein optisch bleibt und nachfolgende SameLine-Elemente (Schloss-Knopf)
+                // nicht mit verschiebt.
+                var aetherCurrentLabel = Loc.T("(Ätherströmung)", "(Aether Current)");
+                var aetherCurrentColor = TypeColors[CollectibleType.AetherCurrent];
+                var textSize = ImGui.CalcTextSize(aetherCurrentLabel);
+                var drawPos = ImGui.GetCursorScreenPos() + new Vector2(0f, 5.5f * scale);
+                var currentFontSize = ImGui.GetFontSize();
+                var shrunkScale = currentFontSize > 1f ? (currentFontSize - 1f) / currentFontSize : 1f;
+
+                ImGui.SetWindowFontScale(shrunkScale);
+                CodexTheme.DrawTextShadowed(ImGui.GetWindowDrawList(), drawPos, aetherCurrentColor, aetherCurrentLabel, shadowActive);
+                ImGui.SetWindowFontScale(1f);
+                ImGui.Dummy(textSize);
             }
 
             // 3. Schloss-Knopf (Abschnitt 5.7) - nur bei nicht erfüllter Voraussetzung, direkt neben
