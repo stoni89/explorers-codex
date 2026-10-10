@@ -27,7 +27,10 @@ public sealed class KuganeTowerJump
     // SkipSettleAfter = true: KEINE SettleDuration-Pause nach Ankunft an DIESEM Punkt, sofort weiter
     // zum nächsten - für Nutzeranforderungen wie "ohne stehend zu bleiben abspringen" (durchlaufender
     // Anlauf über mehrere Punkte hinweg, der übliche kurze Stopp würde den Schwung sonst abbrechen).
-    public readonly record struct JumpPoint(Vector3 Pos, float? JumpDelay, string? Note, bool SkipSettleAfter = false);
+    // ExtraWaitAfter: GEGENTEIL davon - zusätzlich zur normalen SettleDuration noch so lange warten,
+    // bevor es zum nächsten Punkt weitergeht (Nutzeranforderung, z.B. ein schmaler/wackliger Steg, bei
+    // dem der Charakter erst wieder richtig Stand fassen muss).
+    public readonly record struct JumpPoint(Vector3 Pos, float? JumpDelay, string? Note, bool SkipSettleAfter = false, TimeSpan? ExtraWaitAfter = null);
 
     public static readonly Vector3 StartPosition = new(-41.97526f, 14.025003f, -36.547295f);
 
@@ -74,13 +77,13 @@ public sealed class KuganeTowerJump
         // dieser Phase landet man immer wieder auf Punkt 21 - das übernimmt bereits die normale
         // HandleFall-Wiedereinstiegssuche von selbst (reiner Laufpunkt ohne Sprung, exakt an dieser
         // Position), daher kein eigener Sonderfall nötig.
-        new(new Vector3(-44.701813f, 40.992226f, -70.2452f), null, null), // Punkt 21 (Laufen, kein Sprung)
-        new(new Vector3(-46.586597f, 42.109997f, -70.394005f), 0f, null), // Punkt 22 (Sprung aus dem Stand)
-        new(new Vector3(-46.30906f, 42.11f, -70.336464f), null, null), // Punkt 23 (Laufen, kein Sprung)
-        new(new Vector3(-46.53633f, 42.11f, -70.34633f), null, null, SkipSettleAfter: true), // Punkt 24 (Laufen, kein Sprung - direkt weiter zu Punkt 25, ohne stehen zu bleiben)
-        new(new Vector3(-49.236656f, 43.809998f, -70.463585f), 0.1f, null), // Punkt 25 (Sprung mit durchlaufendem Anlauf ab Punkt 23/24, siehe SkipSettleAfter bei Punkt 24)
-        new(new Vector3(-49.25694f, 43.809998f, -70.328156f), null, null), // Punkt 26 (Laufen, kein Sprung)
-        new(new Vector3(-49.498066f, 43.809998f, -70.33634f), null, null, SkipSettleAfter: true), // Punkt 27 (Laufen, kein Sprung - direkt weiter zu Punkt 28, ohne stehen zu bleiben)
+        new(new Vector3(-44.49901f, 40.995502f, -70.242325f), null, null), // Punkt 21 (Laufen, kein Sprung)
+        new(new Vector3(-46.624504f, 42.11f, -70.46807f), 0f, null), // Punkt 22 (Sprung aus dem Stand)
+        new(new Vector3(-46.211647f, 42.11f, -70.244446f), null, null), // Punkt 23 (Laufen, kein Sprung)
+        new(new Vector3(-46.567833f, 42.109997f, -70.237816f), null, null, SkipSettleAfter: true), // Punkt 24 (Laufen, kein Sprung - direkt weiter zu Punkt 25, ohne stehen zu bleiben)
+        new(new Vector3(-49.61704f, 43.809998f, -70.23925f), 0.1f, null), // Punkt 25 (Sprung mit durchlaufendem Anlauf ab Punkt 23/24, siehe SkipSettleAfter bei Punkt 24)
+        new(new Vector3(-49.147827f, 43.809998f, -70.25937f), null, null), // Punkt 26 (Laufen, kein Sprung)
+        new(new Vector3(-49.414448f, 43.809998f, -70.255875f), null, null, SkipSettleAfter: true), // Punkt 27 (Laufen, kein Sprung - direkt weiter zu Punkt 28, ohne stehen zu bleiben)
         new(new Vector3(-52.707806f, 45.309998f, -70.3278f), 0.1f, null), // Punkt 28 (Sprung mit durchlaufendem Anlauf ab Punkt 26/27)
         new(new Vector3(-49.642376f, 47.11f, -70.55653f), 0.1f, null), // Punkt 29 (Sprung mit Anlauf)
         new(new Vector3(-46.525677f, 48.91f, -70.772415f), 0.1f, null), // Punkt 30 (Sprung mit Anlauf)
@@ -108,7 +111,7 @@ public sealed class KuganeTowerJump
         new(new Vector3(-52.684933f, 67.374176f, -65.650185f), null, null), // Punkt 50 (Laufen, kein Sprung)
         new(new Vector3(-49.24206f, 68.41008f, -65.46935f), 0.1f, null), // Punkt 51 (Sprung mit Anlauf: ~3.4y horizontal, ~1.0y hoch, ab Punkt 50)
         new(new Vector3(-48.86774f, 68.41008f, -65.466415f), null, null), // Punkt 52 (Laufen, kein Sprung)
-        new(new Vector3(-46.73981f, 70.21018f, -65.4857f), 0f, null), // Punkt 53 (Sprung aus dem Stand)
+        new(new Vector3(-47.25968f, 70.21018f, -65.457825f), 0f, null), // Punkt 53 (Sprung aus dem Stand)
         new(new Vector3(-46.78837f, 70.21018f, -65.458115f), null, null), // Punkt 54 (Laufen, kein Sprung)
         new(new Vector3(-45.051853f, 72.01014f, -65.458786f), 0f, null), // Punkt 55 (Sprung aus dem Stand)
         new(new Vector3(-44.737785f, 72.01014f, -65.4826f), null, null), // Punkt 56 (Laufen, kein Sprung)
@@ -123,14 +126,51 @@ public sealed class KuganeTowerJump
         new(new Vector3(-45.742794f, 77.25001f, -65.46853f), null, null), // Punkt 65 (Laufen, kein Sprung)
         new(new Vector3(-44.765495f, 77.25f, -65.45824f), null, null, SkipSettleAfter: true), // Punkt 66 (Laufen, kein Sprung - direkt weiter zu Punkt 67, ohne stehen zu bleiben)
         new(new Vector3(-41.558327f, 79.049995f, -65.45264f), 0.1f, null), // Punkt 67 (Sprung mit durchlaufendem Anlauf ab Punkt 65/66, siehe SkipSettleAfter bei Punkt 66)
-        new(new Vector3(-41.4357f, 79.049995f, -65.98206f), null, null), // Punkt 68 (Laufen, kein Sprung)
-        new(new Vector3(-41.13461f, 79.049995f, -65.52587f), null, null, SkipSettleAfter: true), // Punkt 69 (Laufen, kein Sprung - direkt weiter zu Punkt 70, ohne stehen zu bleiben)
-        new(new Vector3(-40.197933f, 80.85f, -64.04872f), 0.1f, null), // Punkt 70 (Sprung mit durchlaufendem Anlauf ab Punkt 68/69, siehe SkipSettleAfter bei Punkt 69)
-        new(new Vector3(-39.733524f, 80.85f, -63.486927f), null, null), // Punkt 71 (Laufen, kein Sprung)
-        new(new Vector3(-41.48049f, 82.24997f, -60.911823f), 0.1f, null), // Punkt 72 (Sprung mit Anlauf: ~3.1y horizontal, ~1.4y hoch, ab Punkt 71)
-        new(new Vector3(-41.533997f, 82.24997f, -62.512028f), null, null), // Punkt 73 (Laufen, kein Sprung)
-        new(new Vector3(-41.539913f, 82.24997f, -60.96927f), null, null, SkipSettleAfter: true), // Punkt 74 (Laufen, kein Sprung - direkt weiter zu Punkt 75, ohne stehen zu bleiben)
-        new(new Vector3(-41.540638f, 82.24997f, -56.44854f), 0.1f, null), // Punkt 75 (Sprung mit durchlaufendem Anlauf ab Punkt 73/74, siehe SkipSettleAfter bei Punkt 74)
+        new(new Vector3(-41.19734f, 79.049995f, -65.596565f), null, null), // Punkt 68 (Laufen, kein Sprung - Punkt 69 entfällt, direkt weiter zum Stand-Sprung auf Punkt 70)
+        new(new Vector3(-40.197933f, 80.85f, -64.04872f), 0f, null), // Punkt 69 (Sprung aus dem Stand ab Punkt 68, kein Anlauf mehr - altes Punkt 69 entfällt)
+        new(new Vector3(-39.9147f, 80.85f, -63.36564f), null, null), // Punkt 70 (Laufen, kein Sprung)
+        new(new Vector3(-41.534153f, 82.24997f, -61.438072f), 0f, null), // Punkt 71 (Sprung aus dem Stand ab Punkt 70)
+        new(new Vector3(-41.533997f, 82.24997f, -62.512028f), null, null), // Punkt 72 (Laufen, kein Sprung)
+        new(new Vector3(-41.539913f, 82.24997f, -60.96927f), null, null, SkipSettleAfter: true), // Punkt 73 (Laufen, kein Sprung - direkt weiter zu Punkt 74, ohne stehen zu bleiben)
+        new(new Vector3(-41.540638f, 82.24997f, -56.44854f), 0.1f, null), // Punkt 74 (Sprung mit durchlaufendem Anlauf ab Punkt 72/73, siehe SkipSettleAfter bei Punkt 73)
+        new(new Vector3(-40.83806f, 83.75f, -55.387295f), 0f, null), // Punkt 75 (Sprung aus dem Stand ab Punkt 74)
+        new(new Vector3(-40.454075f, 83.75f, -55.562347f), null, null), // Punkt 76 (Laufen, kein Sprung)
+        new(new Vector3(-40.282608f, 83.75f, -55.097027f), null, null, SkipSettleAfter: true), // Punkt 77 (Laufen, kein Sprung - direkt weiter zu Punkt 78, ohne stehen zu bleiben)
+        new(new Vector3(-39.0005f, 85.549995f, -51.819763f), 0.1f, null), // Punkt 78 (Sprung mit durchlaufendem Anlauf ab Punkt 76/77, siehe SkipSettleAfter bei Punkt 77)
+        new(new Vector3(-38.892506f, 85.549995f, -51.647594f), null, null), // Punkt 79 (Laufen, kein Sprung)
+        new(new Vector3(-39.123787f, 85.549995f, -52.119736f), null, null, SkipSettleAfter: true), // Punkt 80 (Laufen, kein Sprung - direkt weiter zu Punkt 81, ohne stehen zu bleiben)
+        new(new Vector3(-40.016693f, 87.35f, -54.155254f), 0.1f, null), // Punkt 81 (Sprung mit durchlaufendem Anlauf ab Punkt 79/80, siehe SkipSettleAfter bei Punkt 80)
+        new(new Vector3(-40.343525f, 88.49285f, -54.294888f), 0f, null), // Punkt 82 (Sprung aus dem Stand)
+        new(new Vector3(-40.247643f, 88.49285f, -53.966663f), null, null), // Punkt 83 (Laufen, kein Sprung)
+        new(new Vector3(-40.05527f, 89.649994f, -52.00386f), 0f, null), // Punkt 84 (Sprung aus dem Stand)
+        new(new Vector3(-42.166824f, 89.15719f, -53.31883f), 0f, null), // Punkt 85 (Sprung aus dem Stand)
+
+        // Phase 5 (beginnt an derselben Position wie Punkt 85).
+        new(new Vector3(-42.084156f, 89.15719f, -64.13245f), null, null), // Punkt 86 (Laufen, kein Sprung)
+        new(new Vector3(-41.99545f, 90.88701f, -66.26462f), 0f, null), // Punkt 87 (Sprung aus dem Stand)
+        new(new Vector3(-42.362892f, 90.88701f, -65.905136f), null, null), // Punkt 88 (Laufen, kein Sprung)
+        new(new Vector3(-42.460136f, 90.88701f, -66.48604f), null, null), // Punkt 89 (Laufen, kein Sprung)
+        new(new Vector3(-46.33827f, 90.88701f, -66.244644f), null, null), // Punkt 90 (Laufen, kein Sprung)
+        new(new Vector3(-43.455265f, 89.31001f, -66.94128f), 0f, null), // Punkt 91 (Sprung aus dem Stand)
+        new(new Vector3(-43.564713f, 89.31001f, -67.05347f), null, null), // Punkt 92 (Laufen, kein Sprung)
+        new(new Vector3(-43.14773f, 89.31001f, -67.23409f), null, null, SkipSettleAfter: true), // Punkt 93 (Laufen, kein Sprung - direkt weiter zu Punkt 94, ohne stehen zu bleiben)
+        new(new Vector3(-40.359295f, 91.01001f, -68.804565f), 0.1f, null), // Punkt 94 (Sprung mit durchlaufendem Anlauf ab Punkt 92/93, siehe SkipSettleAfter bei Punkt 93)
+        new(new Vector3(-40.145977f, 91.01001f, -68.59465f), null, null), // Punkt 95 (Laufen, kein Sprung)
+        new(new Vector3(-40.301197f, 91.01001f, -68.77302f), null, null, SkipSettleAfter: true), // Punkt 96 (Laufen, kein Sprung - direkt weiter zu Punkt 97, ohne stehen zu bleiben)
+        new(new Vector3(-36.659447f, 92.81001f, -66.72768f), 0.1f, null), // Punkt 97 (Sprung mit durchlaufendem Anlauf ab Punkt 95/96, siehe SkipSettleAfter bei Punkt 96)
+        new(new Vector3(-36.499847f, 92.81001f, -66.95923f), null, null), // Punkt 98 (Laufen, kein Sprung)
+        new(new Vector3(-36.855556f, 92.81001f, -66.62481f), null, null, SkipSettleAfter: true), // Punkt 99 (Laufen, kein Sprung - direkt weiter zu Punkt 100, ohne stehen zu bleiben)
+        new(new Vector3(-37.41728f, 94.609985f, -65.25758f), 0.1f, null), // Punkt 100 (Sprung mit durchlaufendem Anlauf ab Punkt 98/99, siehe SkipSettleAfter bei Punkt 99)
+        new(new Vector3(-39.973953f, 96.09405f, -65.14379f), 0f, null), // Punkt 101 (Sprung aus dem Stand)
+        new(new Vector3(-46.528275f, 102.4831f, -59.24943f), null, null), // Punkt 102 (Laufen, kein Sprung)
+        new(new Vector3(-46.529892f, 102.48504f, -54.407715f), null, null), // Punkt 103 (Laufen, kein Sprung)
+        new(new Vector3(-46.375847f, 103.66513f, -51.965286f), 0f, null), // Punkt 104 (Sprung aus dem Stand)
+        new(new Vector3(-47.19064f, 104.608376f, -52.04943f), 0f, null), // Punkt 105 (Sprung aus dem Stand ab Punkt 104 - klappt nicht immer, siehe UnlimitedLocalRetryIndices)
+        new(new Vector3(-49.19873f, 104.287926f, -52.212692f), null, null), // Punkt 106 (Laufen, kein Sprung)
+        new(new Vector3(-49.19827f, 104.51166f, -52.588467f), null, null, SkipSettleAfter: true), // Punkt 107 (Laufen, kein Sprung - direkt weiter zu Punkt 108, ohne stehen zu bleiben)
+        new(new Vector3(-49.378513f, 105.81f, -56.50036f), 0.1f, null), // Punkt 108 (Sprung mit durchlaufendem Anlauf ab Punkt 106/107, siehe SkipSettleAfter bei Punkt 107)
+        new(new Vector3(-48.544003f, 107.603966f, -56.62415f), 0f, null), // Punkt 109 (Sprung aus dem Stand ab Punkt 108 - klappt nicht immer, siehe UnlimitedLocalRetryIndices)
+        new(new Vector3(-48.08217f, 107.603966f, -58.966175f), null, "Sightseeing-Punkt"), // Punkt 110 (Laufen, kein Sprung - der eigentliche Sightseeing-Zielpunkt)
     };
 
     private enum State
@@ -142,6 +182,7 @@ public sealed class KuganeTowerJump
         Phase4FallRecovery,
         GoingToStart,
         TeleportingToMainAetheryte,
+        Crawling,
         MovingToPoint,
         Settling,
         FellWaitingForDecision,
@@ -181,18 +222,19 @@ public sealed class KuganeTowerJump
     private static readonly Dictionary<int, int> FallResumeOverrides = new()
     {
         [40] = 38, // Sturz bei Punkt 42 -> weiter bei Punkt 40
+        [38] = 38, // Sturz bei Punkt 40 (dem Sprung dorthin) -> einfach direkt wieder bei Punkt 40 selbst
     };
 
     // Siehe HandleFall/UpdateFallRecoveryWaypoint - Ziel NACH dem jeweiligen Zwischenpunkt (StartPosition
     // für die Phase-1-Variante, ein bestimmter Points[]-Eintrag für die Phase-3-Variante).
     private Vector3 pendingRecoveryTarget;
 
-    // Nutzer-Report: fällt man in Phase 4 in die Nähe EINER dieser Positionen, führt der Rückweg zum
-    // Start von Phase 4 über MEHRERE eigene Zwischenschritte (laufen/springen/..., je Route
+    // Nutzer-Report: fällt man in die Nähe EINER dieser Positionen, führt der Rückweg zum jeweiligen
+    // Phasenstart (siehe ResumePhaseIndex, Index in PhaseStarts - meist Phase 4, die letzte Route
+    // aber zurück zu Phase 3) über MEHRERE eigene Zwischenschritte (laufen/springen/..., je Route
     // unterschiedlich) statt nur einen einzelnen Zwischenpunkt (wie bei DeepFallRecoveryWaypoint/
-    // Phase3FallRecoveryWaypoint) - danach beginnt Phase 4 wieder ganz von vorne (siehe PhaseStarts,
-    // Eintrag für Phase 4).
-    private static readonly (Vector3 FallPosition, JumpPoint[] Steps)[] Phase4MultiStepFallRoutes =
+    // Phase3FallRecoveryWaypoint) - danach beginnt die jeweilige Phase wieder ganz von vorne.
+    private static readonly (Vector3 FallPosition, JumpPoint[] Steps, int ResumePhaseIndex)[] Phase4MultiStepFallRoutes =
     {
         (new Vector3(-38.641415f, 51.962856f, -60.0002f), new[]
         {
@@ -200,13 +242,30 @@ public sealed class KuganeTowerJump
             new JumpPoint(new Vector3(-41.344597f, 53.660126f, -64.51937f), 0f, null), // Springen
             new JumpPoint(new Vector3(-43.10975f, 53.23463f, -65.669556f), 0f, null), // Springen
             new JumpPoint(new Vector3(-45.192936f, 52.087f, -68.137825f), null, null), // Laufen
-        }),
+        }, 3),
         (new Vector3(-39.21023f, 52.105267f, -54.824596f), new[]
         {
             new JumpPoint(new Vector3(-40.09033f, 52.149494f, -63.87909f), null, null), // Laufen
             new JumpPoint(new Vector3(-41.30561f, 53.66835f, -64.57368f), 0f, null), // Springen
             new JumpPoint(new Vector3(-43.698624f, 52.643394f, -66.4647f), 0f, null), // Springen
-        }),
+        }, 3),
+        (new Vector3(-33.43735f, 37.23091f, -53.18915f), new[]
+        {
+            new JumpPoint(new Vector3(-36.2906f, 40.500183f, -57.66927f), null, null), // Laufen
+            new JumpPoint(new Vector3(-36.82764f, 41.11553f, -61.535553f), 0f, null), // Springen
+            new JumpPoint(new Vector3(-38.49339f, 38.937664f, -69.08041f), null, null), // Laufen
+        }, 2),
+        (new Vector3(-39.906742f, 52.218567f, -63.55179f), new[]
+        {
+            new JumpPoint(new Vector3(-40.6935f, 52.44046f, -63.87889f), null, null), // Laufen
+            new JumpPoint(new Vector3(-41.409283f, 53.66303f, -64.46009f), 0f, null), // Springen
+            new JumpPoint(new Vector3(-44.373768f, 52.66753f, -67.089714f), 0f, null), // Springen
+        }, 3),
+        (new Vector3(-40.453243f, 52.525604f, -63.46146f), new[]
+        {
+            new JumpPoint(new Vector3(-41.38667f, 53.661877f, -64.48056f), 0f, null), // Springen
+            new JumpPoint(new Vector3(-44.15208f, 52.698364f, -66.80396f), 0f, null), // Springen
+        }, 3),
     };
     private const float Phase4MultiStepFallPositionTolerance = 3f;
     private JumpPoint[] activePhase4RecoverySteps = Array.Empty<JumpPoint>();
@@ -222,6 +281,30 @@ public sealed class KuganeTowerJump
     };
     private const float Phase4SecondFallPositionTolerance = 3f;
     private static readonly Vector3 Phase4SecondFallRecoveryWaypoint = new(-46.549526f, 51.896275f, -68.419464f);
+
+    // Nutzer-Report: fällt man in die Nähe EINER dieser Positionen, geht es OHNE Zwischenschritt
+    // (kein Hindernis im Weg, anders als bei Phase4MultiStepFallRoutes/Phase4SecondFallPositions)
+    // direkt per normalem Laufauftrag zurück zum Start der angegebenen Phase (ResumePhaseIndex,
+    // Index in PhaseStarts).
+    private static readonly (Vector3 FallPosition, int ResumePhaseIndex)[] DirectPhaseRestartFallPositions =
+    {
+        (new Vector3(-41.959354f, 89.15719f, -53.866585f), 4), // Phase 5
+    };
+    private const float DirectPhaseRestartFallPositionTolerance = 3f;
+
+    // Nutzer-Report (Punkt 90): hier hilft kein normaler Laufauftrag (das Stück ist zu schmal/
+    // instabil, ein normaler vnavmesh-Laufweg lässt den Charakter zu früh/an der falschen Stelle
+    // herunterfallen) - stattdessen alle CrawlStepInterval nur CrawlStepDistance (1mm) in Richtung
+    // Punkt 90 rücken, bis man dadurch am Rand herunterfällt und auf der (niedrigeren) Zielposition
+    // landet. Sobald nah genug dran, übernimmt die normale UpdateMovingToPoint-Logik (Sturzprüfung/
+    // Settling) unverändert weiter - es wird dafür nur noch kein weiterer moveToPath-Auftrag erteilt.
+    // Aktuell ungenutzt (Nutzeranforderung: Punkt 90 wird jetzt stattdessen über eine normale
+    // Laufroute erreicht) - Mechanik bleibt für mögliche künftige Fälle erhalten.
+    private static readonly HashSet<int> CrawlIndices = new();
+    private static readonly TimeSpan CrawlStepInterval = TimeSpan.FromSeconds(2);
+    private const float CrawlStepDistance = 0.001f;
+    private const float CrawlArrivalTolerance = 1f;
+    private DateTime crawlLastStepAt;
 
     // Siehe "repeat wait(0.1) until not IsRunning(); wait(0.5)" im Original - dieselbe 0,5s Pause
     // nach Ankunft, bevor der nächste Punkt beginnt.
@@ -249,7 +332,7 @@ public sealed class KuganeTowerJump
     // Nutzer-Report (Punkt 31): dieser Sprung klappt nicht immer beim ersten Versuch - hier
     // UNBEGRENZT (statt nur MaxLocalRetries mal) wiederholen, bis er sitzt, solange man noch in der
     // Nähe des Absprungpunkts steht (siehe stillNearLaunch).
-    private static readonly HashSet<int> UnlimitedLocalRetryIndices = new() { 29 }; // Punkt 31
+    private static readonly HashSet<int> UnlimitedLocalRetryIndices = new() { 14, 29, 103, 107 }; // Schritt 15 (Phase 1), Punkt 31, Punkt 105, Punkt 109
 
     private readonly ICallGateSubscriber<List<Vector3>, bool, object> moveToPath;
     private readonly ICallGateSubscriber<bool> pathIsRunning;
@@ -279,6 +362,12 @@ public sealed class KuganeTowerJump
     // eine Brücke/Wand laufen zeigt sich fast sofort durch praktisch keine Bewegung mehr.
     private static readonly TimeSpan GoingToStartStuckCheckInterval = TimeSpan.FromSeconds(2);
     private const float GoingToStartStuckMinProgress = 1f;
+
+    // Nutzeranforderung: bevor beim Steckenbleiben gleich zum Haupt-Ätheryten teleportiert wird,
+    // erst ein paar Mal einen Sprung versuchen - viele Hindernisse hier sind niedrige Kanten/Geländer,
+    // über die ein Sprung hinwegkommt, wo reines Laufen hängen bleibt.
+    private const int GoingToStartMaxStuckJumpAttempts = 3;
+    private int goingToStartStuckJumpAttempts;
 
     public bool IsActive { get; private set; }
     public string StatusText { get; private set; } = string.Empty;
@@ -338,6 +427,7 @@ public sealed class KuganeTowerJump
         (Points[14].Pos, 15), // Phase 2 (Position von Punkt 16 - weiter geht es mit Punkt 17)
         (Points[Phase3StartIndex].Pos, Phase3StartIndex), // Phase 3 (Punkt 21)
         (Points[29].Pos, 30), // Phase 4 (Position von Punkt 31 - weiter geht es mit Punkt 32)
+        (Points[83].Pos, 84), // Phase 5 (Position von Punkt 85 - weiter geht es mit Punkt 86)
     };
 
     /// <summary>
@@ -351,6 +441,23 @@ public sealed class KuganeTowerJump
         var playerPos = Plugin.ObjectTable.LocalPlayer?.Position;
         if (playerPos is { } pos)
         {
+            // Nutzeranforderung: steht man schon GENAU an einem der 79 Punkte (nicht nur grob in der
+            // Nähe eines der 4 Phasenstarts), dort direkt fortsetzen statt erst zum (u.U. weit
+            // entfernten) Start der erkannten Phase zurückzulaufen - identische Prüfung wie die
+            // bereits bestehende Nahbereichs-Erkennung in UpdateCheckingPreconditions, hier nur VOR
+            // der groberen Phasen-Erkennung unten.
+            var nearestPoint = FindNearestPointIndex(pos);
+            if (nearestPoint.HasValue)
+            {
+                Plugin.Log.Info($"[KuganeTowerJump] Start: schon nah an Schritt {nearestPoint.Value + 1} - setze dort fort statt zu einem Phasenstart zu laufen.");
+                autoRetryCount = 0;
+                localRetryCount = 0;
+                ReachedTop = false;
+                IsActive = true;
+                BeginPoint(nearestPoint.Value);
+                return;
+            }
+
             var nearestPhase = 0;
             var nearestDistance = Vector3.Distance(pos, PhaseStarts[0].Pos);
             for (var i = 1; i < PhaseStarts.Length; i++)
@@ -484,6 +591,9 @@ public sealed class KuganeTowerJump
                 case State.TeleportingToMainAetheryte:
                     UpdateTeleportingToMainAetheryte();
                     break;
+                case State.Crawling:
+                    UpdateCrawling();
+                    break;
                 case State.MovingToPoint:
                     UpdateMovingToPoint();
                     break;
@@ -541,6 +651,19 @@ public sealed class KuganeTowerJump
                 BeginPoint(nearest.Value);
                 return;
             }
+        }
+
+        // Nutzeranforderung: nicht mehr IMMER erst über ApproachJumpPoint umwegen - zuerst eine
+        // echte vnavmesh-Wegsuche direkt zum Startpunkt versuchen (von dort kommt man inzwischen aus
+        // vielen Anlaufrichtungen, z.B. über Sightseeing, ohne den alten Hinderniss-Umweg). Lehnt
+        // vnavmesh das ab (siehe ApproachJumpPoint-Kommentar - echter Sprung über eine Kante nötig,
+        // der per reiner Wegsuche nicht gefunden wird), erst dann wie bisher über den Zwischenpunkt.
+        if (pathfindAndMoveCloseTo.InvokeFunc(StartPosition, false, 0.3f))
+        {
+            goingToStartLastPos = null;
+            SetState(State.GoingToStart);
+            StatusText = Loc.T("Kugane-Turm: laufe zum Startpunkt...", "Kugane Tower: walking to the start point...");
+            return;
         }
 
         moveToPath.InvokeAction(new List<Vector3> { ApproachJumpPoint }, false);
@@ -683,18 +806,30 @@ public sealed class KuganeTowerJump
                 {
                     goingToStartLastPos = playerPos.Value;
                     goingToStartLastProgressCheckAt = DateTime.UtcNow;
+                    goingToStartStuckJumpAttempts = 0;
                 }
                 else if (DateTime.UtcNow - goingToStartLastProgressCheckAt >= GoingToStartStuckCheckInterval)
                 {
                     if (Vector3.Distance(goingToStartLastPos.Value, playerPos.Value) < GoingToStartStuckMinProgress)
                     {
-                        Plugin.Log.Info("[KuganeTowerJump] UpdateGoingToStart: scheinbar steckengeblieben - teleportiere zum Haupt-Ätheryten und versuche erneut.");
+                        if (goingToStartStuckJumpAttempts < GoingToStartMaxStuckJumpAttempts)
+                        {
+                            goingToStartStuckJumpAttempts++;
+                            Plugin.Log.Info($"[KuganeTowerJump] UpdateGoingToStart: scheinbar steckengeblieben - versuche einen Sprung ({goingToStartStuckJumpAttempts}/{GoingToStartMaxStuckJumpAttempts}).");
+                            Plugin.TryJump();
+                            goingToStartLastPos = playerPos.Value;
+                            goingToStartLastProgressCheckAt = DateTime.UtcNow;
+                            return;
+                        }
+
+                        Plugin.Log.Info("[KuganeTowerJump] UpdateGoingToStart: weiterhin steckengeblieben (auch nach Sprüngen) - teleportiere zum Haupt-Ätheryten und versuche erneut.");
                         TryTeleportToMainAetheryteThenRetry();
                         return;
                     }
 
                     goingToStartLastPos = playerPos.Value;
                     goingToStartLastProgressCheckAt = DateTime.UtcNow;
+                    goingToStartStuckJumpAttempts = 0;
                 }
             }
 
@@ -781,14 +916,54 @@ public sealed class KuganeTowerJump
         jumpSent = point.JumpDelay == null;
         hasSeenPathRunningThisLeg = false;
 
+        var note = string.IsNullOrEmpty(point.Note) ? string.Empty : $" · {point.Note}";
+
+        // Siehe CrawlIndices-Kommentar - kein normaler Laufauftrag, stattdessen millimeterweise
+        // nudgen (UpdateCrawling).
+        if (CrawlIndices.Contains(index))
+        {
+            crawlLastStepAt = DateTime.UtcNow;
+            SetState(State.Crawling);
+            StatusText = Loc.T(
+                $"Kugane-Turm: Schritt {index + 1}/{Points.Length}{note}...",
+                $"Kugane Tower: step {index + 1}/{Points.Length}{note}...");
+            return;
+        }
+
         var waypoints = new List<Vector3> { point.Pos };
         moveToPath.InvokeAction(waypoints, false);
 
         SetState(State.MovingToPoint);
-        var note = string.IsNullOrEmpty(point.Note) ? string.Empty : $" · {point.Note}";
         StatusText = Loc.T(
             $"Kugane-Turm: Schritt {index + 1}/{Points.Length}{note}...",
             $"Kugane Tower: step {index + 1}/{Points.Length}{note}...");
+    }
+
+    /// <summary>Siehe CrawlIndices-Kommentar.</summary>
+    private void UpdateCrawling()
+    {
+        var point = Points[currentPointIndex];
+        var playerPos = Plugin.ObjectTable.LocalPlayer?.Position;
+        if (playerPos is not { } pos)
+            return;
+
+        if (Vector3.Distance(pos, point.Pos) <= CrawlArrivalTolerance)
+        {
+            // Nah genug dran (durch den Sturz über die Kante) - ab hier übernimmt die normale
+            // Sturzprüfung/Settling-Logik wie bei jedem anderen Punkt, ohne einen weiteren
+            // moveToPath-Auftrag (pathIsRunning ist bereits/sofort false).
+            hasSeenPathRunningThisLeg = false;
+            SetState(State.MovingToPoint);
+            return;
+        }
+
+        if (DateTime.UtcNow - crawlLastStepAt < CrawlStepInterval)
+            return;
+
+        crawlLastStepAt = DateTime.UtcNow;
+        var direction = Vector3.Normalize(point.Pos - pos);
+        var nudgeTarget = pos + direction * CrawlStepDistance;
+        moveToPath.InvokeAction(new List<Vector3> { nudgeTarget }, false);
     }
 
     private void UpdateMovingToPoint()
@@ -872,8 +1047,13 @@ public sealed class KuganeTowerJump
 
     private void UpdateSettling()
     {
+        var point = Points[currentPointIndex];
+
         // Siehe JumpPoint.SkipSettleAfter-Kommentar - diesen Punkt ohne die übliche Pause überspringen.
-        if (!Points[currentPointIndex].SkipSettleAfter && DateTime.UtcNow - stateEnteredAt < SettleDuration)
+        // Siehe JumpPoint.ExtraWaitAfter-Kommentar - umgekehrter Fall, zusätzlich zur SettleDuration
+        // noch länger warten.
+        var requiredWait = point.SkipSettleAfter ? TimeSpan.Zero : SettleDuration + (point.ExtraWaitAfter ?? TimeSpan.Zero);
+        if (DateTime.UtcNow - stateEnteredAt < requiredWait)
             return;
 
         if (currentPointIndex + 1 < Points.Length)
@@ -941,13 +1121,13 @@ public sealed class KuganeTowerJump
             if (Vector3.Distance(playerPos, route.FallPosition) > Phase4MultiStepFallPositionTolerance)
                 continue;
 
-            var (phase4Pos, phase4ResumeIndex) = PhaseStarts[3];
-            resumeFromIndex = phase4ResumeIndex;
-            currentPointIndex = phase4ResumeIndex;
+            var (resumePos, resumeIndexForRoute) = PhaseStarts[route.ResumePhaseIndex];
+            resumeFromIndex = resumeIndexForRoute;
+            currentPointIndex = resumeIndexForRoute;
             autoRetryCount = 0;
-            pendingRecoveryTarget = phase4Pos;
+            pendingRecoveryTarget = resumePos;
             activePhase4RecoverySteps = route.Steps;
-            Plugin.Log.Info($"[KuganeTowerJump] Sturz bei Schritt {fellAtIndex + 1} (Phase 4) - laufe über mehrere Zwischenschritte zurück zum Start von Phase 4 (Schritt {phase4ResumeIndex + 1}).");
+            Plugin.Log.Info($"[KuganeTowerJump] Sturz bei Schritt {fellAtIndex + 1} - laufe über mehrere Zwischenschritte zurück zum Start von Phase {route.ResumePhaseIndex + 1} (Schritt {resumeIndexForRoute + 1}).");
             BeginPhase4RecoveryStep(0);
             SetState(State.Phase4FallRecovery);
             return;
@@ -976,6 +1156,27 @@ public sealed class KuganeTowerJump
             goingToStartLastPos = null;
             SetState(State.FallRecoveryWaypoint);
             StatusText = Loc.T("Kugane-Turm: Sturz in Phase 4 - laufe zurück zum Start von Phase 4...", "Kugane Tower: fell in phase 4 - walking back to the start of phase 4...");
+            return;
+        }
+
+        // Siehe DirectPhaseRestartFallPositions-Kommentar.
+        foreach (var (directFallPos, directResumePhaseIndex) in DirectPhaseRestartFallPositions)
+        {
+            if (Vector3.Distance(playerPos, directFallPos) > DirectPhaseRestartFallPositionTolerance)
+                continue;
+
+            var (directResumePos, directResumeIndex) = PhaseStarts[directResumePhaseIndex];
+            resumeFromIndex = directResumeIndex;
+            currentPointIndex = directResumeIndex;
+            autoRetryCount = 0;
+            pendingRecoveryTarget = directResumePos;
+            Plugin.Log.Info($"[KuganeTowerJump] Sturz bei Schritt {fellAtIndex + 1} - laufe direkt zurück zum Start von Phase {directResumePhaseIndex + 1} (Schritt {directResumeIndex + 1}).");
+            pathfindAndMoveCloseTo.InvokeFunc(directResumePos, false, 0.3f);
+            goingToStartLastPos = null;
+            SetState(State.GoingToStart);
+            StatusText = Loc.T(
+                $"Kugane-Turm: Sturz - laufe zurück zum Start von Phase {directResumePhaseIndex + 1}...",
+                $"Kugane Tower: fell - walking back to the start of phase {directResumePhaseIndex + 1}...");
             return;
         }
 
