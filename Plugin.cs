@@ -2883,20 +2883,25 @@ public sealed class Plugin : IDalamudPlugin
                 new SightseeingPuzzleStep(new Vector3(-38.51f, 95.38f, -65.56f), Jump: true, JumpFromStandstill: true, Exact: true), // 79 (Sightseeing-Punkt)
             },
             DismountAtStart: true),
-        // The Statue of Zuiko (Kugane) - VORLÄUFIG: nur über die Vorbedingung (Kletterei von Shiokaze
-        // Hostelry/Kugane Tower) erreichbar, siehe PrerequisiteClimbAdventureId. Eigene Zielkoordinaten
-        // oben auf dem Turm fehlen noch (Nutzerentscheidung: erst den Turm fertigstellen) - Start und
-        // einziger Schritt sind daher bewusst Platzhalter (= Shiokazes eigener Start-/Endpunkt), damit
-        // die Automation wenigstens nach oben läuft statt zur rohen (unerreichbaren) Kartenposition.
-        // BITTE durch die echten Koordinaten der Statue ersetzen, sobald bekannt.
+        // The Statue of Zuiko (Kugane) - Startpunkt ist der echte Kugane-Turm-Gipfel (siehe
+        // KuganeTowerJump.FinalPosition, die eigene, bespoke Klettersequenz, NICHT die alte
+        // Shiokaze-Hostelry-Schrittliste oben, die für die echte Kletterei nicht mehr benutzt wird,
+        // siehe SightseeingAutomation.StartMovingTo-Kommentar). Bewusst KEIN
+        // PrerequisiteClimbAdventureId mehr (das würde ResolvePuzzleWithPrerequisiteClimb dazu
+        // bringen, die veraltete Shiokaze-Schrittliste voranzustellen) - steht man beim Start nicht
+        // schon oben, klettert SightseeingAutomation stattdessen erst per echter KuganeTowerJump-
+        // Instanz hoch (eigener Sonderfall wie bei Shiokaze Hostelry selbst).
         [2162882] = new(
-            new Vector3(-41.66f, 14.02f, -34.77f),
+            KuganeTowerJump.FinalPosition,
             new[]
             {
-                new SightseeingPuzzleStep(new Vector3(-38.51f, 95.38f, -65.56f), Jump: true, JumpFromStandstill: true, Exact: true), // Platzhalter = Shiokazes letzter Schritt
+                new SightseeingPuzzleStep(new Vector3(-39.207417f, 96.06115f, -64.39709f), Jump: false), // 1
+                new SightseeingPuzzleStep(new Vector3(-44.478157f, 100.0236f, -64.55079f), Jump: false), // 2
+                new SightseeingPuzzleStep(new Vector3(-39.225693f, 96.109344f, -64.28045f), Jump: false, SprintBefore: true), // 3/4 - Sprint, dann ohne anzuhalten weiter zum Sprung
+                new SightseeingPuzzleStep(new Vector3(-4.3271074f, 5.3068314f, -63.952698f), Jump: true, RunUp: true), // Sprung vom Turm, langer Sturz nach unten
+                new SightseeingPuzzleStep(new Vector3(-4.3338985f, 5.3025265f, -64.16484f), Jump: false, Exact: true), // Sightseeing-Punkt
             },
-            DismountAtStart: true,
-            PrerequisiteClimbAdventureId: 2162855),
+            DismountAtStart: true),
         [2162884] = new( // Tenkonto (Kugane)
             new Vector3(88.80654f, 12.005137f, -25.82123f),
             new[]
@@ -2944,11 +2949,12 @@ public sealed class Plugin : IDalamudPlugin
                 new SightseeingPuzzleStep(new Vector3(112.53736f, 13.605098f, 103.739296f), Jump: true, JumpFromStandstill: true), // Punkt 1
                 new SightseeingPuzzleStep(new Vector3(112.58033f, 14.027059f, 102.22197f), Jump: false), // Punkt 2
                 new SightseeingPuzzleStep(new Vector3(110.83346f, 15.944979f, 102.17448f), Jump: true),  // Punkt 3
-                new SightseeingPuzzleStep(new Vector3(106.95777f, 18.496264f, 101.210396f), Jump: false), // Punkt 4
-                new SightseeingPuzzleStep(new Vector3(105.414955f, 20.112288f, 98.919525f), Jump: true), // Punkt 5
-                new SightseeingPuzzleStep(new Vector3(99.94157f, 15.934586f, 91.34301f), Jump: false),   // Punkt 6
-                new SightseeingPuzzleStep(new Vector3(97.5125f, 11.499998f, 87.95555f), Jump: false),    // Punkt 7
-                new SightseeingPuzzleStep(new Vector3(98.90513f, 11.499998f, 81.12253f), Jump: false, Exact: true), // Punkt 8 (Sightseeing-Punkt)
+                new SightseeingPuzzleStep(new Vector3(106.423225f, 19.008228f, 98.7432f), Jump: false),  // Punkt 4
+                new SightseeingPuzzleStep(new Vector3(104.37233f, 19.003973f, 97.04774f), Jump: true),   // Punkt 5
+                new SightseeingPuzzleStep(new Vector3(99.82124f, 15.884535f, 92.60948f), Jump: false),   // Punkt 6
+                new SightseeingPuzzleStep(new Vector3(96.68503f, 13.074999f, 89.34236f), Jump: true),    // Punkt 7
+                new SightseeingPuzzleStep(new Vector3(98.8056f, 11.499997f, 86.76956f), Jump: true),     // Punkt 8
+                new SightseeingPuzzleStep(new Vector3(98.90513f, 11.499998f, 81.12253f), Jump: false, Exact: true), // Punkt 9 (Sightseeing-Punkt)
             },
             DismountAtStart: true),
         [2162851] = new( // The Sekiseigumi Barracks (Kugane)
@@ -2997,6 +3003,56 @@ public sealed class Plugin : IDalamudPlugin
             },
             DismountAtStart: true,
             FallMargin: 3f),
+        [2162852] = new( // Bokairo Inn (Kugane)
+            new Vector3(-72.255745f, 18f, -164.79326f),
+            new[]
+            {
+                new SightseeingPuzzleStep(new Vector3(-70.45143f, 19.58947f, -164.46205f), Jump: true, JumpFromStandstill: true), // Punkt 1
+                new SightseeingPuzzleStep(new Vector3(-67.94915f, 20.504158f, -163.92722f), Jump: true, JumpFromStandstill: true), // Punkt 2
+                new SightseeingPuzzleStep(new Vector3(-50.761047f, 20.521225f, -163.89345f), Jump: false), // Punkt 3
+                new SightseeingPuzzleStep(new Vector3(-50.760838f, 18.84288f, -173.50038f), Jump: false), // Punkt 4
+                new SightseeingPuzzleStep(new Vector3(-50.69062f, 20.312263f, -175.72928f), Jump: true, JumpFromStandstill: true), // Punkt 5
+                new SightseeingPuzzleStep(new Vector3(-48.327854f, 22.5276f, -178.86298f), Jump: false), // Punkt 6
+                new SightseeingPuzzleStep(new Vector3(-49.26364f, 24.041245f, -180.1362f), Jump: true, JumpFromStandstill: true), // Punkt 7
+                new SightseeingPuzzleStep(new Vector3(-51.96027f, 25.524357f, -180.15378f), Jump: true, JumpFromStandstill: true), // Punkt 8
+                new SightseeingPuzzleStep(new Vector3(-61.850945f, 31.744215f, -179.95277f), Jump: false), // Punkt 9
+                new SightseeingPuzzleStep(new Vector3(-65.835434f, 30.051292f, -180.16177f), Jump: true, JumpFromStandstill: true), // Punkt 10
+                new SightseeingPuzzleStep(new Vector3(-67.1104f, 29.220772f, -183.95436f), Jump: false), // Punkt 11 - ohne anzuhalten weiter
+                new SightseeingPuzzleStep(new Vector3(-70.820564f, 29.8f, -183.76205f), Jump: true, RunUp: true), // Punkt 12
+                new SightseeingPuzzleStep(new Vector3(-79.74416f, 29.8f, -184.06973f), Jump: false), // Punkt 13
+                new SightseeingPuzzleStep(new Vector3(-79.970116f, 29.47491f, -179.93439f), Jump: false), // Punkt 14
+                new SightseeingPuzzleStep(new Vector3(-80.739044f, 31.059185f, -179.96072f), Jump: true, JumpFromStandstill: true), // Punkt 15
+                new SightseeingPuzzleStep(new Vector3(-81.30698f, 31.41305f, -179.98769f), Jump: false), // Punkt 16
+                new SightseeingPuzzleStep(new Vector3(-81.2201f, 33.21f, -181.71904f), Jump: true, JumpFromStandstill: true), // Punkt 17
+                new SightseeingPuzzleStep(new Vector3(-80.78002f, 33.21f, -181.2819f), Jump: false), // Punkt 18 - ohne anzuhalten weiter
+                new SightseeingPuzzleStep(new Vector3(-77.023834f, 34.309998f, -181.59567f), Jump: true, RunUp: true), // Punkt 19
+                new SightseeingPuzzleStep(new Vector3(-76.87468f, 35.72382f, -182.83275f), Jump: true, JumpFromStandstill: true), // Punkt 20
+                new SightseeingPuzzleStep(new Vector3(-79.86285f, 37.0054f, -184.54132f), Jump: false), // Punkt 21
+                new SightseeingPuzzleStep(new Vector3(-79.760506f, 38.26081f, -184.79768f), Jump: true, JumpFromStandstill: true), // Punkt 22
+                new SightseeingPuzzleStep(new Vector3(-79.67257f, 39.965f, -185.86841f), Jump: true, JumpFromStandstill: true), // Punkt 23
+                new SightseeingPuzzleStep(new Vector3(-79.163475f, 39.965f, -185.69939f), Jump: false), // Punkt 24
+                new SightseeingPuzzleStep(new Vector3(-79.48341f, 39.965f, -185.20088f), Jump: false), // Punkt 25 - ohne anzuhalten weiter
+                new SightseeingPuzzleStep(new Vector3(-81.09973f, 41.71f, -181.93826f), Jump: true, RunUp: true), // Punkt 26
+                new SightseeingPuzzleStep(new Vector3(-80.97328f, 41.71f, -181.56084f), Jump: false), // Punkt 27
+                new SightseeingPuzzleStep(new Vector3(-80.99702f, 41.71f, -182.12831f), Jump: false), // Punkt 28 - ohne anzuhalten weiter
+                new SightseeingPuzzleStep(new Vector3(-81.0227f, 43.51f, -184.33453f), Jump: true, RunUp: true), // Punkt 29
+                new SightseeingPuzzleStep(new Vector3(-81.24669f, 43.509995f, -184.47942f), Jump: false), // Punkt 30
+                new SightseeingPuzzleStep(new Vector3(-80.76732f, 43.51f, -184.43854f), Jump: false), // Punkt 31 - ohne anzuhalten weiter
+                new SightseeingPuzzleStep(new Vector3(-75.946556f, 43.609997f, -184.47151f), Jump: true, RunUp: true), // Punkt 32
+                new SightseeingPuzzleStep(new Vector3(-76.15404f, 43.610004f, -183.76236f), Jump: false), // Punkt 33
+                new SightseeingPuzzleStep(new Vector3(-75.73966f, 43.609993f, -183.89241f), Jump: false), // Punkt 34 - ohne anzuhalten weiter
+                new SightseeingPuzzleStep(new Vector3(-72.4568f, 45.310005f, -184.59715f), Jump: true, RunUp: true), // Punkt 35
+                new SightseeingPuzzleStep(new Vector3(-72.4918f, 47.010628f, -185.72363f), Jump: true, JumpFromStandstill: true), // Punkt 36
+                new SightseeingPuzzleStep(new Vector3(-85.14772f, 52.28329f, -191.26483f), Jump: false), // Punkt 37
+                new SightseeingPuzzleStep(new Vector3(-86.24319f, 53.35959f, -193.49739f), Jump: true, JumpFromStandstill: true), // Punkt 38
+                new SightseeingPuzzleStep(new Vector3(-87.19236f, 53.359585f, -202.45982f), Jump: false), // Punkt 39
+                new SightseeingPuzzleStep(new Vector3(-88.72224f, 54.867043f, -202.80339f), Jump: true, JumpFromStandstill: true), // Punkt 40
+                new SightseeingPuzzleStep(new Vector3(-92.78299f, 53.35959f, -204.63402f), Jump: false), // Punkt 41
+                new SightseeingPuzzleStep(new Vector3(-92.34198f, 55.55029f, -199.93573f), Jump: false), // Punkt 42
+                new SightseeingPuzzleStep(new Vector3(-92.195854f, 56.51403f, -198.3614f), Jump: true, JumpFromStandstill: true), // Punkt 43
+                new SightseeingPuzzleStep(new Vector3(-91.759544f, 56.51404f, -196.62988f), Jump: false, Exact: true), // Punkt 44 (Sightseeing-Punkt)
+            },
+            DismountAtStart: true),
         [2162885] = new( // Kugane Ofunakura (Kugane)
             new Vector3(-80.18498f, -2.9999993f, 48.48092f),
             new[]
@@ -4757,6 +4813,21 @@ public sealed class Plugin : IDalamudPlugin
     private static readonly Dictionary<string, string> AetheryteRequiredQuest = new(StringComparer.OrdinalIgnoreCase)
     {
         ["Dhoro Iloh"] = "Der Pfad der Furchtlosigkeit",
+        // Nutzer-Report: "The Ala Mhigan Quarter" (The Lochs) braucht die abgeschlossene Quest
+        // "Freiheit oder Tod".
+        ["The Ala Mhigan Quarter"] = "Freiheit oder Tod",
+    };
+
+    /// <summary>
+    /// Chocobokeeps mit einer manuell erfassten Zusatz-Voraussetzung (gleiches Prinzip wie
+    /// AetheryteRequiredQuest) - Key = Chocobokeep-Name (siehe GetChocobokeepEntries, Format
+    /// "Chocobokeep ({nächstgelegener Ätheryten-Platzname})"), Wert = Name der zuvor abzuschließenden
+    /// Quest. Nutzer-Report: Chocobokeep (The Ala Mhigan Quarter) braucht dieselbe Quest
+    /// "Freiheit oder Tod" wie der gleichnamige Ätheryte.
+    /// </summary>
+    private static readonly Dictionary<string, string> ChocobokeepRequiredQuest = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Chocobokeep (The Ala Mhigan Quarter)"] = "Freiheit oder Tod",
     };
 
     /// <summary>
@@ -4770,6 +4841,17 @@ public sealed class Plugin : IDalamudPlugin
     private static readonly Dictionary<uint, string> AetherCurrentRequiredAetheryte = new()
     {
         [2818187] = "Tamamizu", // The Ruby Sea #1
+    };
+
+    /// <summary>
+    /// Ätherströmungen mit einer manuell erfassten Zusatz-Quest-Voraussetzung (gleiches Prinzip wie
+    /// AetheryteRequiredQuest/ChocobokeepRequiredQuest) - Key = Ätherströmungs-Id, Wert = Name der
+    /// zuvor abzuschließenden Quest. Nutzer-Report: The Lochs #3 braucht dieselbe Quest
+    /// "Freiheit oder Tod" wie der Ätheryte "The Ala Mhigan Quarter".
+    /// </summary>
+    private static readonly Dictionary<uint, string> AetherCurrentRequiredQuest = new()
+    {
+        [2818171] = "Freiheit oder Tod", // The Lochs #3
     };
 
     // "Simply to Dye For" (schaltet Färben frei) braucht die abgeschlossene Artefakt-Rüstungsquest
@@ -5426,6 +5508,20 @@ public sealed class Plugin : IDalamudPlugin
             }
         }
 
+        // Chocobokeeps mit einer manuell erfassten Zusatz-Voraussetzung (siehe
+        // ChocobokeepRequiredQuest-Kommentar) - gleiches Prinzip wie AetheryteRequiredQuest direkt
+        // darüber.
+        if (entry.Type == CollectibleType.Chocobokeep && ChocobokeepRequiredQuest.TryGetValue(entry.Name, out var requiredQuestForChocobokeep))
+        {
+            var requiredQuestId = ResolveQuestIdByName(requiredQuestForChocobokeep);
+            if (requiredQuestId == null || !QuestManager.IsQuestComplete((ushort)requiredQuestId.Value))
+            {
+                return Loc.T(
+                    $"Benötigt die abgeschlossene Quest \"{requiredQuestForChocobokeep}\".",
+                    $"Requires the completed quest \"{requiredQuestForChocobokeep}\".");
+            }
+        }
+
         // ALLE Ätherströmungen setzen die abgeschlossene Quest "Divine Intervention" voraus
         // (Nutzeranforderung: ohne die Quest sind alle Ätherströmungen gesperrt, in jeder Zone
         // gleichermaßen) - global statt per Eintrag in aethercurrents.json, gleiches Prinzip wie
@@ -5439,6 +5535,20 @@ public sealed class Plugin : IDalamudPlugin
                 return Loc.T(
                     $"Benötigt die abgeschlossene Quest \"{requiredQuestForAetherCurrent}\".",
                     $"Requires the completed quest \"{requiredQuestForAetherCurrent}\".");
+            }
+        }
+
+        // Ätherströmungen mit einer manuell erfassten Zusatz-Quest-Voraussetzung (siehe
+        // AetherCurrentRequiredQuest-Kommentar) - gleiches Prinzip wie AetheryteRequiredQuest oben,
+        // nur zusätzlich zur globalen "Divine Intervention"-Voraussetzung direkt darüber.
+        if (entry.Type == CollectibleType.AetherCurrent && AetherCurrentRequiredQuest.TryGetValue(entry.Id, out var requiredQuestForAetherCurrentEntry))
+        {
+            var requiredQuestId = ResolveQuestIdByName(requiredQuestForAetherCurrentEntry);
+            if (requiredQuestId == null || !QuestManager.IsQuestComplete((ushort)requiredQuestId.Value))
+            {
+                return Loc.T(
+                    $"Benötigt die abgeschlossene Quest \"{requiredQuestForAetherCurrentEntry}\".",
+                    $"Requires the completed quest \"{requiredQuestForAetherCurrentEntry}\".");
             }
         }
 
@@ -7011,7 +7121,7 @@ public sealed class Plugin : IDalamudPlugin
             SightseeingAutomation.Update(missingSightseeingInZone, pendingSightseeingInZone);
 
         var missingChocobokeepsInZone = RestrictToToDo(allForZone
-            .Where(e => e.Type == CollectibleType.Chocobokeep && (config.SimulateChocobokeepAutomation || !IsOwned(e)))
+            .Where(e => e.Type == CollectibleType.Chocobokeep && (config.SimulateChocobokeepAutomation || !IsOwned(e)) && !IsAchievementOrRankGated(e))
             .ToList(), CollectibleType.Chocobokeep, ChocobokeepAutomation.RestrictedToToDo);
         ToDoCrossZoneTraveler.Advance(CollectibleType.Chocobokeep, ChocobokeepAutomation.IsActive, ChocobokeepAutomation.RestrictedToToDo, missingChocobokeepsInZone, toDoEntries, effectiveTerritoryId);
         if (!exitingNoFlyArea && !ToDoCrossZoneTraveler.IsBusy)
@@ -7081,7 +7191,7 @@ public sealed class Plugin : IDalamudPlugin
             var toDoHuntingLogCount = toDoEntries.Count(e => e.Type == CollectibleType.HuntingLog && !IsAchievementOrRankGated(e) && e.WorldPosition.HasValue);
             var toDoAetherCurrentCount = toDoEntries.Count(e => e.Type == CollectibleType.AetherCurrent && (config.SimulateAetherCurrentAutomation || !IsOwned(e))
                         && !IsAchievementOrRankGated(e) && e.HasGoToTarget);
-            var toDoChocobokeepCount = toDoEntries.Count(e => e.Type == CollectibleType.Chocobokeep && (config.SimulateChocobokeepAutomation || !IsOwned(e)) && e.HasGoToTarget);
+            var toDoChocobokeepCount = toDoEntries.Count(e => e.Type == CollectibleType.Chocobokeep && (config.SimulateChocobokeepAutomation || !IsOwned(e)) && !IsAchievementOrRankGated(e) && e.HasGoToTarget);
             var toDoTripleTriadCount = toDoEntries.Count(e => e.Type == CollectibleType.TripleTriadCard && e.Category == TripleTriadNpcCategory && e.EventNpcId != 0
                         && !IsOwned(e) && !IsAchievementOrRankGated(e));
 
@@ -7127,7 +7237,7 @@ public sealed class Plugin : IDalamudPlugin
                         && !IsAchievementOrRankGated(e) && e.HasGoToTarget);
 
         var chocobokeepCount = allForZone
-            .Count(e => e.Type == CollectibleType.Chocobokeep && (config.SimulateChocobokeepAutomation || !IsOwned(e)) && e.HasGoToTarget);
+            .Count(e => e.Type == CollectibleType.Chocobokeep && (config.SimulateChocobokeepAutomation || !IsOwned(e)) && !IsAchievementOrRankGated(e) && e.HasGoToTarget);
 
         var tripleTriadCount = allForZone
             .Count(e => e.Type == CollectibleType.TripleTriadCard && e.Category == TripleTriadNpcCategory && e.EventNpcId != 0
@@ -7720,6 +7830,22 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         return false;
+    }
+
+    private const uint JogStatusId = 4209;
+
+    /// <summary>
+    /// Entfernt den "Jog"-Status (ID 4209, erzwingt eine reduzierte Laufgeschwindigkeit), falls er
+    /// gerade aktiv ist - vom Kugane-Turm-Klettern beim Start aufgerufen, da dessen Sprung-Timings/
+    /// -Distanzen auf normale Laufgeschwindigkeit abgestimmt sind.
+    /// </summary>
+    public static unsafe void TryRemoveJogStatus()
+    {
+        if (ObjectTable.LocalPlayer?.StatusList.Any(s => s.StatusId == JogStatusId) != true)
+            return;
+
+        Log.Info("[KuganeTowerJump] Aktiver Jog-Status (4209) entfernt.");
+        StatusManager.ExecuteStatusOff(JogStatusId);
     }
 
     private static DateTime lastSprintCancelAt = DateTime.MinValue;

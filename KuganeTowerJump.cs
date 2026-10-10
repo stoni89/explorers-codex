@@ -225,6 +225,19 @@ public sealed class KuganeTowerJump
         [38] = 38, // Sturz bei Punkt 40 (dem Sprung dorthin) -> einfach direkt wieder bei Punkt 40 selbst
     };
 
+    // Wie FallResumeOverrides, aber mit MEHREREN eigenen Zwischenschritten (wie Phase4MultiStepFallRoutes,
+    // nur nach dem Index des Punkts geschlüsselt, bei dessen Sturz dieser Eintrag greift, statt nach der
+    // Landeposition - für Fälle, bei denen der Sturz selbst (unabhängig davon, wo man genau landet)
+    // immer gleich behandelt werden soll) - danach beginnt die angegebene Phase wieder ganz von vorne.
+    private static readonly Dictionary<int, (JumpPoint[] Steps, int ResumePhaseIndex)> IndexMultiStepFallRoutes = new()
+    {
+        [89] = (new[] // Sturz bei Punkt 91
+        {
+            new JumpPoint(new Vector3(-40.520355f, 53.58588f, -65.20525f), 0f, null), // Springen
+            new JumpPoint(new Vector3(-43.7784f, 52.916954f, -65.97613f), 0f, null), // Springen
+        }, 3), // Start mit Phase 4
+    };
+
     // Siehe HandleFall/UpdateFallRecoveryWaypoint - Ziel NACH dem jeweiligen Zwischenpunkt (StartPosition
     // für die Phase-1-Variante, ein bestimmter Points[]-Eintrag für die Phase-3-Variante).
     private Vector3 pendingRecoveryTarget;
@@ -332,7 +345,18 @@ public sealed class KuganeTowerJump
     // Nutzer-Report (Punkt 31): dieser Sprung klappt nicht immer beim ersten Versuch - hier
     // UNBEGRENZT (statt nur MaxLocalRetries mal) wiederholen, bis er sitzt, solange man noch in der
     // Nähe des Absprungpunkts steht (siehe stillNearLaunch).
-    private static readonly HashSet<int> UnlimitedLocalRetryIndices = new() { 14, 29, 103, 107 }; // Schritt 15 (Phase 1), Punkt 31, Punkt 105, Punkt 109
+    private static readonly HashSet<int> UnlimitedLocalRetryIndices = new() { 7, 9, 14, 29, 103, 107 }; // Schritt 9, 10 und 15 (Phase 1), Punkt 31, Punkt 105, Punkt 109
+
+    // Nutzer-Report: bei einem Sprung mit Anlauf (JumpDelay>0) bleibt der Charakter manchmal schon
+    // beim ANLAUF selbst an einem Geländer/einer Kante hängen, bevor er überhaupt zum Sprung kommt -
+    // pathIsRunning() bleibt dabei die ganze Zeit true (der Laufauftrag "läuft" ja formal noch), also
+    // greift weder die Sprung-Auslösung (wartet auf echte Bewegung) noch würde ohne diese Prüfung vor
+    // MovingTimeout (20s) überhaupt etwas passieren. Viel kürzer als MovingTimeout, denselben
+    // schnellen Sprung-Neuversuch wie bei "daneben gesprungen" (siehe UnlimitedLocalRetryIndices).
+    private static readonly TimeSpan MovingStuckCheckInterval = TimeSpan.FromSeconds(1.5);
+    private const float MovingStuckMinProgress = 0.5f;
+    private Vector3? movingToPointLastPos;
+    private DateTime movingToPointLastProgressCheckAt;
 
     private readonly ICallGateSubscriber<List<Vector3>, bool, object> moveToPath;
     private readonly ICallGateSubscriber<bool> pathIsRunning;
@@ -368,6 +392,15 @@ public sealed class KuganeTowerJump
     // über die ein Sprung hinwegkommt, wo reines Laufen hängen bleibt.
     private const int GoingToStartMaxStuckJumpAttempts = 3;
     private int goingToStartStuckJumpAttempts;
+
+    // Nutzer-Report: beim Zurücklaufen zur Startposition nach einem Sturz in Phase 4 bleibt der
+    // Charakter IMMER an dieser Stelle an einer Mauer hängen - statt erst die paar Sekunden bis zur
+    // generischen Steckengeblieben-Erkennung (siehe goingToStartStuckJumpAttempts) abzuwarten, hier
+    // proaktiv springen, sobald die Stelle erreicht wird.
+    private static readonly Vector3 GoingToStartWallJumpPosition = new(-41.548874f, 53.655422f, -64.30633f);
+    private const float GoingToStartWallJumpRadius = 2f;
+    private static readonly TimeSpan GoingToStartWallJumpCooldown = TimeSpan.FromSeconds(1.5);
+    private DateTime goingToStartLastWallJumpAt = DateTime.MinValue;
 
     public bool IsActive { get; private set; }
     public string StatusText { get; private set; } = string.Empty;
@@ -438,6 +471,10 @@ public sealed class KuganeTowerJump
     /// </summary>
     public void Start()
     {
+        // Nutzeranforderung: ein aktiver "Jog"-Status (4209, erzwingt reduziertes Lauftempo) würde die
+        // auf normale Geschwindigkeit abgestimmten Sprung-Timings/-Distanzen durcheinanderbringen.
+        Plugin.TryRemoveJogStatus();
+
         var playerPos = Plugin.ObjectTable.LocalPlayer?.Position;
         if (playerPos is { } pos)
         {
@@ -800,6 +837,18 @@ public sealed class KuganeTowerJump
             // ein paar Sekunden (nicht erst nach dem langsameren generischen Stuck-Rhythmus) zum
             // Haupt-Ätheryten teleportieren und von dort aus erneut zum Startpunkt versuchen.
             var playerPos = Plugin.ObjectTable.LocalPlayer?.Position;
+
+            // Siehe GoingToStartWallJumpPosition-Kommentar - unabhängig von der generischen
+            // Steckengeblieben-Erkennung unten, läuft bei JEDEM Durchlauf hier mit.
+            if (playerPos.HasValue
+                && Vector3.Distance(playerPos.Value, GoingToStartWallJumpPosition) <= GoingToStartWallJumpRadius
+                && DateTime.UtcNow - goingToStartLastWallJumpAt > GoingToStartWallJumpCooldown)
+            {
+                goingToStartLastWallJumpAt = DateTime.UtcNow;
+                Plugin.Log.Info("[KuganeTowerJump] UpdateGoingToStart: bekannte Wand-Stelle erreicht - springe proaktiv.");
+                Plugin.TryJump();
+            }
+
             if (playerPos.HasValue)
             {
                 if (goingToStartLastPos == null)
@@ -915,6 +964,7 @@ public sealed class KuganeTowerJump
         var point = Points[index];
         jumpSent = point.JumpDelay == null;
         hasSeenPathRunningThisLeg = false;
+        movingToPointLastPos = null;
 
         var note = string.IsNullOrEmpty(point.Note) ? string.Empty : $" · {point.Note}";
 
@@ -1001,6 +1051,38 @@ public sealed class KuganeTowerJump
 
         if (pathActive)
         {
+            // Siehe MovingStuckCheckInterval-Kommentar - am Anlauf selbst hängengeblieben (z.B. an
+            // einem Geländer), lange bevor MovingTimeout greifen würde.
+            if (playerPos is { } movingPos)
+            {
+                if (movingToPointLastPos == null)
+                {
+                    movingToPointLastPos = movingPos;
+                    movingToPointLastProgressCheckAt = DateTime.UtcNow;
+                }
+                else if (DateTime.UtcNow - movingToPointLastProgressCheckAt >= MovingStuckCheckInterval)
+                {
+                    if (Vector3.Distance(movingToPointLastPos.Value, movingPos) < MovingStuckMinProgress)
+                    {
+                        var unlimitedRetriesWhileStuck = UnlimitedLocalRetryIndices.Contains(currentPointIndex);
+                        if (localRetryCount < MaxLocalRetries || unlimitedRetriesWhileStuck)
+                        {
+                            localRetryCount++;
+                            var retryLabel = unlimitedRetriesWhileStuck ? $"{localRetryCount}" : $"{localRetryCount}/{MaxLocalRetries}";
+                            Plugin.Log.Info($"[KuganeTowerJump] Schritt {currentPointIndex + 1}: beim Anlauf steckengeblieben - wiederhole ({retryLabel}).");
+                            StatusText = Loc.T(
+                                $"Kugane-Turm: Schritt {currentPointIndex + 1} steckengeblieben - wiederhole ({retryLabel})...",
+                                $"Kugane Tower: step {currentPointIndex + 1} stuck - retrying ({retryLabel})...");
+                            BeginPoint(currentPointIndex);
+                            return;
+                        }
+                    }
+
+                    movingToPointLastPos = movingPos;
+                    movingToPointLastProgressCheckAt = DateTime.UtcNow;
+                }
+            }
+
             if (sinceStart > MovingTimeout)
                 HandleFall();
 
@@ -1080,6 +1162,22 @@ public sealed class KuganeTowerJump
         fellAtIndex = currentPointIndex;
 
         var playerPos = Plugin.ObjectTable.LocalPlayer?.Position ?? Points[currentPointIndex].Pos;
+
+        // Siehe IndexMultiStepFallRoutes-Kommentar - gezielt hinterlegte Mehrschritt-Route für den
+        // Sturz bei DIESEM Punkt, unabhängig von der genauen Landeposition.
+        if (IndexMultiStepFallRoutes.TryGetValue(fellAtIndex, out var indexRoute))
+        {
+            var (indexResumePos, indexResumeIndex) = PhaseStarts[indexRoute.ResumePhaseIndex];
+            resumeFromIndex = indexResumeIndex;
+            currentPointIndex = indexResumeIndex;
+            autoRetryCount = 0;
+            pendingRecoveryTarget = indexResumePos;
+            activePhase4RecoverySteps = indexRoute.Steps;
+            Plugin.Log.Info($"[KuganeTowerJump] Sturz bei Schritt {fellAtIndex + 1} - laufe über mehrere Zwischenschritte zurück zum Start von Phase {indexRoute.ResumePhaseIndex + 1} (Schritt {indexResumeIndex + 1}).");
+            BeginPhase4RecoveryStep(0);
+            SetState(State.Phase4FallRecovery);
+            return;
+        }
 
         // Siehe DeepFallPosition-Kommentar - ganz bis auf den Boden gefallen, kein normaler
         // Wiedereinstiegspunkt kommt von hier aus in Frage, UND der direkte Weg zurück zum

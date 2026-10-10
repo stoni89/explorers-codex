@@ -440,6 +440,7 @@
         "MapId": 369,
         "VendorMapX": 26.7,
         "VendorMapY": 22.8,
+        "WorldPosition": {"X": 262.4211, "Y": 78.1479, "Z": 69.44642},
         "Source": "Field exploration"
     },
     {

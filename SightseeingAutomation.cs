@@ -105,6 +105,31 @@ public sealed class SightseeingAutomation
     private readonly Dictionary<uint, int> attemptCounts = new();
     private readonly HashSet<uint> skippedIds = new();
 
+    // "The Statue of Zuiko" (Kugane) - nur über den Kugane-Turm-Gipfel erreichbar (siehe
+    // Plugin.cs-Eintrag #2162882). Kein Lumina-/JSON-Name-Lookup nötig, die Id ist fest bekannt.
+    private const uint StatueOfZuikoAdventureId = 2162882;
+
+    // Nutzeranforderung: "Nach dem Kugane Tower immer danach The Statue of Zuiko" - sobald der Turm
+    // selbst (gleich auf welchem Weg, auch standalone) fertig ist, diesen Punkt beim nächsten
+    // TryStartNext ERZWUNGEN wählen statt wie sonst den geometrisch nächstgelegenen Kandidaten (siehe
+    // TryStartNext/FinishCurrent).
+    private static readonly Dictionary<uint, uint> ForcedNextSightseeingEntryId = new()
+    {
+        [KuganeTowerJump.AdventureId] = StatueOfZuikoAdventureId,
+    };
+    private uint? lastCompletedEntryId;
+
+    // Siehe StartMovingTo-Kommentar zu "The Statue of Zuiko" - true, während KuganeTowerJump NICHT
+    // für den Turm-Punkt selbst läuft, sondern nur als Vorbedingung, um erst zum Gipfel zu kommen,
+    // bevor Zuikos eigene Route (siehe Plugin.cs #2162882) beginnt.
+    private bool climbingAsZuikoPrerequisite;
+
+    // Siehe BeginNavigateToEntry-Kommentar - gesetzt, während currentTargetPosition (statt des
+    // eigentlichen Puzzle-Starts) auf einen bestimmten späteren Schritt zeigt, damit die Ankunft
+    // (UpdateMoving) BeginPuzzleStep(i) statt erneut BeginJumpingPuzzle (das zum Startpunkt
+    // zurückfliegen würde) auslöst.
+    private int? resumeAtPuzzleStepIndex;
+
     private readonly ICallGateSubscriber<Vector3, bool, float, bool> pathfindAndMoveCloseTo;
     private readonly ICallGateSubscriber<bool> pathIsRunning;
     private readonly ICallGateSubscriber<object> pathStop;
@@ -296,6 +321,7 @@ public sealed class SightseeingAutomation
         stopRequested = false;
         lastCombatEnsureAt = DateTime.MinValue;
         currentTargetEntry = Plugin.GetSightseeingEntries().FirstOrDefault(e => e.Id == KuganeTowerJump.AdventureId);
+        climbingAsZuikoPrerequisite = false;
         Plugin.Instance.KuganeTowerJump.Start();
         state = State.KuganeTowerClimbing;
         StatusText = Loc.T("Debug-Test: Kugane Tower Jump...", "Debug test: Kugane Tower jump...");
@@ -670,6 +696,19 @@ public sealed class SightseeingAutomation
             return;
         }
 
+        // Siehe ForcedNextSightseeingEntryId-Kommentar - erzwungener Nachfolger hat Vorrang vor der
+        // sonst üblichen Nächstgelegen-Auswahl.
+        if (lastCompletedEntryId.HasValue
+            && ForcedNextSightseeingEntryId.TryGetValue(lastCompletedEntryId.Value, out var forcedNextId)
+            && candidates.FirstOrDefault(e => e.Id == forcedNextId) is { } forcedNext)
+        {
+            lastCompletedEntryId = null;
+            StartMovingTo(forcedNext);
+            return;
+        }
+
+        lastCompletedEntryId = null;
+
         var playerPos = Plugin.ObjectTable.LocalPlayer?.Position ?? Vector3.Zero;
         var next = candidates.OrderBy(e => Vector3.Distance(playerPos, e.WorldPosition!.Value)).First();
         StartMovingTo(next);
@@ -684,20 +723,52 @@ public sealed class SightseeingAutomation
         if (entry.Id == KuganeTowerJump.AdventureId)
         {
             currentTargetEntry = entry;
+            climbingAsZuikoPrerequisite = false;
             Plugin.Instance.KuganeTowerJump.Start();
             state = State.KuganeTowerClimbing;
             return;
         }
 
-        var attempts = attemptCounts.GetValueOrDefault(entry.Id, 0) + 1;
-        attemptCounts[entry.Id] = attempts;
-        if (attempts > MaxAttemptsPerTarget)
+        // "The Statue of Zuiko" (siehe Plugin.cs #2162882) beginnt am echten Kugane-Turm-Gipfel -
+        // steht man dort nicht schon (grob, siehe PrerequisiteClimbSkipDistance), erst per KuganeTowerJump
+        // real hochklettern (currentTargetEntry bleibt dabei Zuiko selbst, NICHT der Turm-Punkt, damit
+        // dessen eigener Freischalt-Status unangetastet bleibt) - sobald oben, läuft UpdateKuganeTowerClimbing
+        // direkt in Zuikos eigene Route weiter, statt die (hier nicht zutreffende) generische
+        // Turm-Freischalt-Logik auszulösen. Bewusst kein PrerequisiteClimbAdventureId/
+        // ResolvePuzzleWithPrerequisiteClimb mehr dafür (siehe Plugin.cs-Kommentar) - das würde die
+        // veraltete Shiokaze-Schrittliste voranstellen statt der echten, dieses Spiel lang neu gebauten
+        // Klettersequenz.
+        if (entry.Id == StatueOfZuikoAdventureId)
         {
-            skippedIds.Add(entry.Id);
-            lastSkipReason = Loc.T("zu oft versucht", "too many attempts");
-            StatusText = Loc.T($"Übersprungen (zu oft versucht): {entry.Name}", $"Skipped (too many attempts): {entry.Name}");
-            state = State.Idle;
-            return;
+            var playerPosForZuiko = Plugin.ObjectTable.LocalPlayer?.Position;
+            var alreadyOnTop = playerPosForZuiko.HasValue
+                                && Vector3.Distance(playerPosForZuiko.Value, KuganeTowerJump.FinalPosition) <= PrerequisiteClimbSkipDistance;
+            if (!alreadyOnTop)
+            {
+                currentTargetEntry = entry;
+                climbingAsZuikoPrerequisite = true;
+                Plugin.Instance.KuganeTowerJump.Start();
+                state = State.KuganeTowerClimbing;
+                return;
+            }
+        }
+
+        // "The Statue of Zuiko" wird nach jedem Sturz über RestartPuzzleFromStart erneut hierher
+        // geleitet (Klettern + Neustart der eigenen Route, siehe dortigen Kommentar) - der generische
+        // attemptCounts/MaxAttemptsPerTarget-Zähler (2 Versuche) würde das viel zu früh abbrechen, noch
+        // bevor der eigene, großzügigere puzzleAttempts/MaxPuzzleAttempts-Zähler (10) überhaupt greift.
+        if (entry.Id != StatueOfZuikoAdventureId)
+        {
+            var attempts = attemptCounts.GetValueOrDefault(entry.Id, 0) + 1;
+            attemptCounts[entry.Id] = attempts;
+            if (attempts > MaxAttemptsPerTarget)
+            {
+                skippedIds.Add(entry.Id);
+                lastSkipReason = Loc.T("zu oft versucht", "too many attempts");
+                StatusText = Loc.T($"Übersprungen (zu oft versucht): {entry.Name}", $"Skipped (too many attempts): {entry.Name}");
+                state = State.Idle;
+                return;
+            }
         }
 
         currentTargetEntry = entry;
@@ -707,6 +778,7 @@ public sealed class SightseeingAutomation
         didFinalApproach = false;
         interWaypointPauseStartedAt = null;
         dismountedAt = null;
+        resumeAtPuzzleStepIndex = null;
         pendingApproachWaypoints = null;
         pendingApproachWaypointIndex = 0;
         hasLandedAtFirstApproachWaypoint = false;
@@ -825,6 +897,45 @@ public sealed class SightseeingAutomation
             // Jumping Puzzle: erst normal (auch beritten/fliegend) in die Nähe des Startpunkts, der
             // Rest läuft über UpdateJumpingPuzzle.
             currentTargetPosition = currentPuzzle.Start;
+
+            // Steht man (z.B. direkt nach einer vorgeschalteten Kletterei, siehe "The Statue of
+            // Zuiko"/KuganeTowerJump.FinalPosition) schon (ungefähr) am Startpunkt, NICHT erst normal
+            // hinlaufen/aufmounten - ein Lauf-/Flugauftrag über ~0 Distanz wird von vnavmesh teils
+            // nie als "angekommen" erkannt, die Automation blieb dann bis zum Timeout hängen und brach
+            // ab (Nutzer-Report). Direkt in die Puzzle-eigene Anflug-/Startlogik (BeginJumpingPuzzle).
+            var playerPosNow = Plugin.ObjectTable.LocalPlayer?.Position;
+            if (playerPosNow.HasValue && Vector3.Distance(playerPosNow.Value, currentPuzzle.Start) <= ArrivalTolerance)
+            {
+                BeginJumpingPuzzle();
+                return;
+            }
+
+            // Nutzeranforderung ("The Statue of Zuiko"): steht man beim Start schon grob in der Nähe
+            // von Schritt 1 (z.B. weil man gerade erst dort hingelaufen/-gefallen ist), nicht erst
+            // zum weit entfernten Startpunkt (Kugane-Turm-Gipfel) zurück. Großzügigere Toleranz als
+            // ArrivalTolerance (dieselbe wie beim Kletter-Vorbedingungs-Check oben in StartMovingTo) -
+            // liegt man innerhalb davon, aber noch nicht GENAU auf Schritt 1, erst normal (per
+            // currentTargetPosition/UpdateMoving) dorthin laufen statt die exakte Zielkoordinate zu
+            // verlangen; resumeAtPuzzleStepIndex sorgt dafür, dass die Ankunft dann BeginPuzzleStep(0)
+            // statt erneut BeginJumpingPuzzle (das wieder zum Startpunkt zurückfliegen würde) auslöst.
+            if (entry.Id == StatueOfZuikoAdventureId && playerPosNow.HasValue
+                && currentPuzzle.Steps.Length > 0
+                && Vector3.Distance(playerPosNow.Value, currentPuzzle.Steps[0].Target) <= PrerequisiteClimbSkipDistance)
+            {
+                if (Vector3.Distance(playerPosNow.Value, currentPuzzle.Steps[0].Target) <= ArrivalTolerance)
+                {
+                    Plugin.Log.Info($"[SightseeingAutomation] {entry.Name}: schon nah an Schritt 1 - starte dort statt am Startpunkt.");
+                    StopPath();
+                    state = State.JumpingPuzzle;
+                    stateEnteredAt = DateTime.UtcNow;
+                    BeginPuzzleStep(0);
+                    return;
+                }
+
+                Plugin.Log.Info($"[SightseeingAutomation] {entry.Name}: grob nah an Schritt 1 - laufe dorthin statt zum Startpunkt.");
+                currentTargetPosition = currentPuzzle.Steps[0].Target;
+                resumeAtPuzzleStepIndex = 0;
+            }
         }
         else if (Plugin.TryGetSightseeingApproachWaypoints(entry.Id, entry.Name, out var waypoints))
         {
@@ -1241,6 +1352,18 @@ public sealed class SightseeingAutomation
         {
             if (currentPuzzle != null)
             {
+                // Siehe BeginNavigateToEntry-Kommentar - hier wurde zu einem bestimmten Schritt
+                // gelaufen (nicht zum eigentlichen Puzzle-Start), BeginJumpingPuzzle würde stattdessen
+                // wieder zum (u.U. weit entfernten) Startpunkt zurückfliegen.
+                if (resumeAtPuzzleStepIndex is { } resumeStepIndex)
+                {
+                    resumeAtPuzzleStepIndex = null;
+                    state = State.JumpingPuzzle;
+                    stateEnteredAt = DateTime.UtcNow;
+                    BeginPuzzleStep(resumeStepIndex);
+                    return;
+                }
+
                 BeginJumpingPuzzle();
                 return;
             }
@@ -1659,7 +1782,12 @@ public sealed class SightseeingAutomation
             return;
         }
 
+        // Nutzeranforderung: beim Kugane-Turm-Punkt selbst (Shiokaze Hostelry) KEIN Teleport zum
+        // Haupt-Ätheryten, obwohl Kugane sonst in PostCompletionTeleportHomeTerritoryIds steht - direkt
+        // danach soll ohne Umweg "The Statue of Zuiko" weitergehen (siehe ForcedNextSightseeingEntryId),
+        // ein Teleport würde dafür erst wieder zurück zum Turm-Gipfel laufen lassen.
         if (currentTargetEntry != null
+            && currentTargetEntry.Id != KuganeTowerJump.AdventureId
             && PostCompletionTeleportHomeTerritoryIds.Contains(Plugin.ResolveEffectiveTerritoryId(Plugin.ClientState.TerritoryType)))
         {
             TryTeleportHomeAfterCompletion();
@@ -1817,6 +1945,17 @@ public sealed class SightseeingAutomation
 
         if (climb.ReachedTop)
         {
+            // Nur als Vorbedingung für "The Statue of Zuiko" geklettert (siehe StartMovingTo-
+            // Kommentar) - der Turm-Punkt selbst (currentTargetEntry wäre dafür nötig) wird hier
+            // bewusst NICHT abgeschlossen, stattdessen direkt in Zuikos eigene Route (Plugin.cs
+            // #2162882) weiter, jetzt wo PrerequisiteClimbSkipDistance erfüllt ist.
+            if (climbingAsZuikoPrerequisite)
+            {
+                climbingAsZuikoPrerequisite = false;
+                StartMovingTo(currentTargetEntry);
+                return;
+            }
+
             // Minimaler Platzhalter-Puzzle-Datensatz nur für die Wiederverwendung von
             // BeginFinalPrecisePosition/FinalPrecisePosition/RestartPuzzleFromStart (die alle
             // currentPuzzle lesen) - KuganeTowerJump führt selbst keinen Plugin.SightseeingJumpingPuzzle.
@@ -1979,6 +2118,9 @@ public sealed class SightseeingAutomation
         // erst erreicht) statt zum nächsten Punkt weiterzugehen.
         skippedIds.Add(currentTargetEntry.Id);
 
+        // Siehe ForcedNextSightseeingEntryId-Kommentar.
+        lastCompletedEntryId = currentTargetEntry.Id;
+
         currentTargetEntry = null;
         state = State.Idle;
     }
@@ -2102,6 +2244,21 @@ public sealed class SightseeingAutomation
     private const int MaxPuzzleStepRetries = 50;
     private const float PuzzleStepRetryHeightMargin = 0.5f;
     private const float PuzzleStepRetryRadius = 3f;
+
+    // Nutzer-Report (Bokairo Inn): fällt man an einer bekannten Stelle herunter, die NICHT mehr auf
+    // demselben Dach wie der Absprungpunkt liegt (also nicht über UpdatePuzzleFailure/stillOnPlatform
+    // abgefangen wird), muss nicht das ganze Rätsel von vorne beginnen - stattdessen gezielt zu einem
+    // bestimmten späteren Schritt zurücklaufen und dort fortsetzen (Key = Adventure-RowId).
+    private static readonly Dictionary<uint, (Vector3 FallPosition, int ResumeStepIndex)[]> PuzzleFallResumeOverrides = new()
+    {
+        [2162852] = new[]
+        {
+            (new Vector3(-77.87369f, 36.059944f, -183.49011f), 21), // Bokairo Inn -> Punkt 22
+            (new Vector3(-48.456764f, 22.486065f, -181.1468f), 6), // Bokairo Inn -> Sprung auf -49.26364f, 24.041245f, -180.1362f (daneben gesprungen)
+            (new Vector3(-81.255615f, 27.737486f, -181.99854f), 14), // Bokairo Inn -> Punkt 15 (-80.739044f, 31.059185f, -179.96072f)
+        },
+    };
+    private const float PuzzleFallResumeOverrideTolerance = 3f;
     private const float PuzzleStartTolerance = 0.3f;
     private const float PuzzleStartExactTolerance = 0.1f;
     private const float PuzzlePointTolerance = 1.0f;
@@ -2149,6 +2306,11 @@ public sealed class SightseeingAutomation
         StopPath();
         state = State.JumpingPuzzle;
         stateEnteredAt = DateTime.UtcNow;
+
+        // Siehe Plugin.TryRemoveJogStatus-Kommentar (gleiches Vorgehen wie bei KuganeTowerJump.Start) -
+        // ein aktiver "Jog"-Status würde die auf normale Laufgeschwindigkeit abgestimmten Sprung-
+        // Timings/-Distanzen dieser Jumping Puzzles durcheinanderbringen.
+        Plugin.TryRemoveJogStatus();
 
         // Schritt 1 ist selbst ein Flug-Schritt (SightseeingPuzzleStep.Fly, z.B. "Halo"): zum
         // Startpunkt NICHT absteigen (es geht ja sofort beritten weiter), sondern beritten bleiben -
@@ -2637,7 +2799,13 @@ public sealed class SightseeingAutomation
                     return;
                 }
 
-                if (!IsAtPuzzlePoint(playerPos, step.Target))
+                // Nutzeranforderung: landet man nach einem Sprung nicht EXAKT auf dem Zielpunkt
+                // (kleine Landeabweichung, kein echter Fehlsprung), trotzdem normal zum nächsten
+                // Schritt weiter, statt das als Fehlversuch zu werten (der sonst unnötig oft einen
+                // Neustart/erneuten Sprung auslöste). Nur bei ausdrücklich "Exact"-markierten Schritten
+                // (z.B. der eigentliche Sightseeing-Punkt) bleibt die enge Toleranz bestehen - dort
+                // zählt wirklich nur die exakte Position.
+                if (!IsAtPuzzlePoint(playerPos, step.Target, step.Exact ? null : PuzzleStepRetryRadius))
                 {
                     FailPuzzleAttempt($"Schritt {puzzleStepIndex + 1} nicht erreicht");
                     return;
@@ -2789,6 +2957,36 @@ public sealed class SightseeingAutomation
             return;
         }
 
+        // Siehe PuzzleFallResumeOverrides-Kommentar - gezielter Wiedereinstieg statt komplett von
+        // vorne, wenn die Absturzstelle einer bekannten Position entspricht.
+        var fallPos = Plugin.ObjectTable.LocalPlayer?.Position;
+        if (fallPos.HasValue && currentTargetEntry != null
+            && PuzzleFallResumeOverrides.TryGetValue(currentTargetEntry.Id, out var overrides))
+        {
+            foreach (var (overrideFallPos, resumeStepIndex) in overrides)
+            {
+                if (Vector3.Distance(fallPos.Value, overrideFallPos) <= PuzzleFallResumeOverrideTolerance)
+                {
+                    BeginResumeAtStep(resumeStepIndex, fallPos.Value);
+                    return;
+                }
+            }
+        }
+
+
+        // "The Statue of Zuiko" (siehe StartMovingTo-Kommentar): der Startpunkt liegt auf dem
+        // Kugane-Turm-Gipfel, von einer Absturzstelle (meist ganz unten) aus NICHT per normalem
+        // Flug-/Laufauftrag erreichbar (genau deshalb gibt es die eigene KuganeTowerJump-Kletterei
+        // überhaupt) - daher nicht BeginJumpingPuzzle direkt, sondern erneut über StartMovingTo, das
+        // bei Bedarf erst die Kletterei wiederholt, bevor Zuikos eigene Route von vorne beginnt
+        // (Nutzeranforderung: "erst wieder das Kugane Tower Rätsel machen und dann mit dem Tower
+        // wieder starten").
+        if (currentTargetEntry!.Id == StatueOfZuikoAdventureId)
+        {
+            StartMovingTo(currentTargetEntry);
+            return;
+        }
+
         // Startpunkt in der Luft (DismountAtStart): nach einem Absturz (Nutzer-Report) erst wieder
         // GENAU dorthin zurück statt einfach von der Absturzstelle aus weiterzumachen - sonst würde
         // z.B. direkt von unten am Boden aus zum Sightseeing-Punkt gelaufen, ohne den eigentlich
@@ -2822,7 +3020,25 @@ public sealed class SightseeingAutomation
         SetPuzzlePhase(PuzzlePhase.Dismounting);
     }
 
-    private static bool IsAtPuzzlePoint(Vector3 playerPos, Vector3 point) =>
-        Vector2.Distance(new Vector2(playerPos.X, playerPos.Z), new Vector2(point.X, point.Z)) <= PuzzlePointTolerance
-        && MathF.Abs(playerPos.Y - point.Y) <= PuzzlePointTolerance;
+    /// <summary>Siehe PuzzleFallResumeOverrides/PuzzleNearestStepResumeRadius-Kommentare - läuft zum Absprungpunkt des angegebenen Schritts zurück und setzt dort fort, statt das ganze Rätsel neu zu beginnen.</summary>
+    private void BeginResumeAtStep(int stepIndex, Vector3 fallPos)
+    {
+        puzzleStepIndex = stepIndex;
+        var from = CurrentStepFromPoint();
+        Plugin.Log.Info($"[SightseeingAutomation] Jumping Puzzle {currentTargetEntry?.Name}: Sturz nah an Schritt {stepIndex + 1} - laufe dorthin zurück statt ganz von vorne.");
+        puzzleReturnFloorY = MathF.Min(fallPos.Y, from.Y) - PuzzleStepRetryHeightMargin;
+        SetExactPathTolerance(stepIndex > 0 && currentPuzzle!.Steps[stepIndex - 1].Exact);
+        moveToPath.InvokeAction(new List<Vector3> { from }, false);
+        SetPuzzlePhase(PuzzlePhase.ReturningToStepStart);
+        StatusText = Loc.T(
+            $"Jumping Puzzle: Sturz - laufe zurück zu Schritt {stepIndex + 1}...",
+            $"Jumping puzzle: fell - walking back to step {stepIndex + 1}...");
+    }
+
+    private static bool IsAtPuzzlePoint(Vector3 playerPos, Vector3 point, float? tolerance = null)
+    {
+        var t = tolerance ?? PuzzlePointTolerance;
+        return Vector2.Distance(new Vector2(playerPos.X, playerPos.Z), new Vector2(point.X, point.Z)) <= t
+               && MathF.Abs(playerPos.Y - point.Y) <= t;
+    }
 }
