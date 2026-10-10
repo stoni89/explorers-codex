@@ -478,7 +478,7 @@ public static class CodexTheme
     private static IFontHandle? alegreyaDebugStatusText;
 
     /// <summary>Bezeichnung/Wert in der "Current Status"-Karte der Debug-Seite - Alegreya Sans Regular 17px (DESIGN_SPEC-Basis 14px, +3px Nutzervorgabe).</summary>
-    public static IFontHandle FontDebugStatusText => alegreyaDebugStatusText ??= BuildHandle("AlegreyaSans-Regular.ttf", 17f, mergeCjk: true);
+    public static IFontHandle FontDebugStatusText => alegreyaDebugStatusText ??= BuildHandle("AlegreyaSans-Regular.ttf", 17f);
 
     private static IFontHandle? alegreyaDebugBadge;
 
@@ -511,7 +511,7 @@ public static class CodexTheme
     private static IFontHandle? alegreyaLogRow;
 
     /// <summary>Zeileninhalt der Log-Konsole (SOURCE/MESSAGE) - Alegreya Sans Regular 16px (DESIGN_SPEC-Basis 13px, +3px Nutzervorgabe), mergeCjk, da MESSAGE rohe Plugin-Log-Texte (inkl. Zonen-/Item-Namen) enthalten kann.</summary>
-    public static IFontHandle FontLogRow => alegreyaLogRow ??= BuildHandle("AlegreyaSans-Regular.ttf", 16f, mergeCjk: true);
+    public static IFontHandle FontLogRow => alegreyaLogRow ??= BuildHandle("AlegreyaSans-Regular.ttf", 16f);
 
     private static IFontHandle? alegreyaLogBadge;
 
@@ -561,7 +561,7 @@ public static class CodexTheme
     private static IFontHandle? alegreyaChangelogChangeText;
 
     /// <summary>Einzelner Änderungseintrag in einer Versionskarte - Alegreya Sans Regular 18px (DESIGN_SPEC-Basis 14px, +4px Nutzervorgabe), mergeCjk (kann rohe Plugin-/Spieltexte enthalten).</summary>
-    public static IFontHandle FontChangelogChangeText => alegreyaChangelogChangeText ??= BuildHandle("AlegreyaSans-Regular.ttf", 18f, mergeCjk: true);
+    public static IFontHandle FontChangelogChangeText => alegreyaChangelogChangeText ??= BuildHandle("AlegreyaSans-Regular.ttf", 18f);
 
     private static IFontHandle? alegreyaChangelogTag;
 

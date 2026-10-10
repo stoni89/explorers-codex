@@ -28,6 +28,7 @@ public sealed class SightseeingAutomation
         WalkingOut,
         JumpingPuzzle,
         TeleportingHomeAfterCompletion,
+        TeleportingToPoint,
         KuganeTowerClimbing,
     }
 
@@ -103,6 +104,31 @@ public sealed class SightseeingAutomation
     private const int MaxAttemptsPerTarget = 2;
     private readonly Dictionary<uint, int> attemptCounts = new();
     private readonly HashSet<uint> skippedIds = new();
+
+    // "The Statue of Zuiko" (Kugane) - nur über den Kugane-Turm-Gipfel erreichbar (siehe
+    // Plugin.cs-Eintrag #2162882). Kein Lumina-/JSON-Name-Lookup nötig, die Id ist fest bekannt.
+    private const uint StatueOfZuikoAdventureId = 2162882;
+
+    // Nutzeranforderung: "Nach dem Kugane Tower immer danach The Statue of Zuiko" - sobald der Turm
+    // selbst (gleich auf welchem Weg, auch standalone) fertig ist, diesen Punkt beim nächsten
+    // TryStartNext ERZWUNGEN wählen statt wie sonst den geometrisch nächstgelegenen Kandidaten (siehe
+    // TryStartNext/FinishCurrent).
+    private static readonly Dictionary<uint, uint> ForcedNextSightseeingEntryId = new()
+    {
+        [KuganeTowerJump.AdventureId] = StatueOfZuikoAdventureId,
+    };
+    private uint? lastCompletedEntryId;
+
+    // Siehe StartMovingTo-Kommentar zu "The Statue of Zuiko" - true, während KuganeTowerJump NICHT
+    // für den Turm-Punkt selbst läuft, sondern nur als Vorbedingung, um erst zum Gipfel zu kommen,
+    // bevor Zuikos eigene Route (siehe Plugin.cs #2162882) beginnt.
+    private bool climbingAsZuikoPrerequisite;
+
+    // Siehe BeginNavigateToEntry-Kommentar - gesetzt, während currentTargetPosition (statt des
+    // eigentlichen Puzzle-Starts) auf einen bestimmten späteren Schritt zeigt, damit die Ankunft
+    // (UpdateMoving) BeginPuzzleStep(i) statt erneut BeginJumpingPuzzle (das zum Startpunkt
+    // zurückfliegen würde) auslöst.
+    private int? resumeAtPuzzleStepIndex;
 
     private readonly ICallGateSubscriber<Vector3, bool, float, bool> pathfindAndMoveCloseTo;
     private readonly ICallGateSubscriber<bool> pathIsRunning;
@@ -264,6 +290,9 @@ public sealed class SightseeingAutomation
         }
     }
 
+    /// <summary>Siehe AetheryteAutomation.RestrictedToToDo-Kommentar.</summary>
+    public bool RestrictedToToDo { get; set; }
+
     public void Start()
     {
         IsActive = true;
@@ -275,6 +304,27 @@ public sealed class SightseeingAutomation
         stopRequested = false;
         lastCombatEnsureAt = DateTime.MinValue;
         StatusText = Loc.T("Automation gestartet...", "Automation started...");
+    }
+
+    /// <summary>
+    /// Nutzeranforderung: gezielter Debug-Testknopf für das Kugane-Tower-Jumping-Puzzle (siehe
+    /// KuganeTowerJump-Klassenkommentar), ohne erst normal per Auto-Sightseeing dorthin laufen zu
+    /// müssen - sucht sich NICHT selbst den nächsten Punkt, sondern springt direkt in
+    /// State.KuganeTowerClimbing.
+    /// </summary>
+    public void StartKuganeTowerJumpTest()
+    {
+        IsActive = true;
+        skippedIds.Clear();
+        attemptCounts.Clear();
+        isDefendingSelf = false;
+        stopRequested = false;
+        lastCombatEnsureAt = DateTime.MinValue;
+        currentTargetEntry = Plugin.GetSightseeingEntries().FirstOrDefault(e => e.Id == KuganeTowerJump.AdventureId);
+        climbingAsZuikoPrerequisite = false;
+        Plugin.Instance.KuganeTowerJump.Start();
+        state = State.KuganeTowerClimbing;
+        StatusText = Loc.T("Debug-Test: Kugane Tower Jump...", "Debug test: Kugane Tower jump...");
     }
 
     /// <summary>
@@ -395,6 +445,10 @@ public sealed class SightseeingAutomation
 
                 case State.TeleportingHomeAfterCompletion:
                     UpdateTeleportingHomeAfterCompletion();
+                    break;
+
+                case State.TeleportingToPoint:
+                    UpdateTeleportingToPoint();
                     break;
 
                 case State.KuganeTowerClimbing:
@@ -543,6 +597,18 @@ public sealed class SightseeingAutomation
 
     private void TryStartNext(IReadOnlyList<CollectibleEntry> entries, IReadOnlyList<CollectibleEntry> pendingInZone)
     {
+        // Nutzeranforderung: auch beim (Neu-)Start der Automation prüfen, ob gerade getaucht wird -
+        // z.B. wenn der Nutzer "Auto Sightseeing" direkt unter Wasser klickt, statt das erst nach dem
+        // ersten erledigten Punkt zu merken (siehe PostCompletionTeleportAetheryteWhenDiving-Kommentar,
+        // gleiche Ursache: ein normaler Laufweg startet aus dieser Tiefe nie).
+        if (Plugin.Condition[ConditionFlag.Diving]
+            && PostCompletionTeleportAetheryteWhenDiving.TryGetValue(Plugin.ResolveEffectiveTerritoryId(Plugin.ClientState.TerritoryType), out var divingAetheryteName))
+        {
+            Plugin.Log.Info("[SightseeingAutomation] TryStartNext: taucht gerade - teleportiere erst zu \"" + divingAetheryteName + "\", bevor der nächste Punkt gewählt wird.");
+            TryTeleportToAetheryteAfterCompletion(divingAetheryteName);
+            return;
+        }
+
         // Nur WIRKLICH gerade erledigbare Punkte als Kandidaten - ein nur wegen Wetter/Uhrzeit
         // gesperrter Punkt (siehe IsSightseeingOnlyTemporarilyUnavailable) zählt hier bewusst NICHT
         // als verfügbar (Nutzeranforderung: "soll erst losgehen, wenn der Timer auf 0 ist"), sondern
@@ -630,6 +696,19 @@ public sealed class SightseeingAutomation
             return;
         }
 
+        // Siehe ForcedNextSightseeingEntryId-Kommentar - erzwungener Nachfolger hat Vorrang vor der
+        // sonst üblichen Nächstgelegen-Auswahl.
+        if (lastCompletedEntryId.HasValue
+            && ForcedNextSightseeingEntryId.TryGetValue(lastCompletedEntryId.Value, out var forcedNextId)
+            && candidates.FirstOrDefault(e => e.Id == forcedNextId) is { } forcedNext)
+        {
+            lastCompletedEntryId = null;
+            StartMovingTo(forcedNext);
+            return;
+        }
+
+        lastCompletedEntryId = null;
+
         var playerPos = Plugin.ObjectTable.LocalPlayer?.Position ?? Vector3.Zero;
         var next = candidates.OrderBy(e => Vector3.Distance(playerPos, e.WorldPosition!.Value)).First();
         StartMovingTo(next);
@@ -644,20 +723,52 @@ public sealed class SightseeingAutomation
         if (entry.Id == KuganeTowerJump.AdventureId)
         {
             currentTargetEntry = entry;
+            climbingAsZuikoPrerequisite = false;
             Plugin.Instance.KuganeTowerJump.Start();
             state = State.KuganeTowerClimbing;
             return;
         }
 
-        var attempts = attemptCounts.GetValueOrDefault(entry.Id, 0) + 1;
-        attemptCounts[entry.Id] = attempts;
-        if (attempts > MaxAttemptsPerTarget)
+        // "The Statue of Zuiko" (siehe Plugin.cs #2162882) beginnt am echten Kugane-Turm-Gipfel -
+        // steht man dort nicht schon (grob, siehe PrerequisiteClimbSkipDistance), erst per KuganeTowerJump
+        // real hochklettern (currentTargetEntry bleibt dabei Zuiko selbst, NICHT der Turm-Punkt, damit
+        // dessen eigener Freischalt-Status unangetastet bleibt) - sobald oben, läuft UpdateKuganeTowerClimbing
+        // direkt in Zuikos eigene Route weiter, statt die (hier nicht zutreffende) generische
+        // Turm-Freischalt-Logik auszulösen. Bewusst kein PrerequisiteClimbAdventureId/
+        // ResolvePuzzleWithPrerequisiteClimb mehr dafür (siehe Plugin.cs-Kommentar) - das würde die
+        // veraltete Shiokaze-Schrittliste voranstellen statt der echten, dieses Spiel lang neu gebauten
+        // Klettersequenz.
+        if (entry.Id == StatueOfZuikoAdventureId)
         {
-            skippedIds.Add(entry.Id);
-            lastSkipReason = Loc.T("zu oft versucht", "too many attempts");
-            StatusText = Loc.T($"Übersprungen (zu oft versucht): {entry.Name}", $"Skipped (too many attempts): {entry.Name}");
-            state = State.Idle;
-            return;
+            var playerPosForZuiko = Plugin.ObjectTable.LocalPlayer?.Position;
+            var alreadyOnTop = playerPosForZuiko.HasValue
+                                && Vector3.Distance(playerPosForZuiko.Value, KuganeTowerJump.FinalPosition) <= PrerequisiteClimbSkipDistance;
+            if (!alreadyOnTop)
+            {
+                currentTargetEntry = entry;
+                climbingAsZuikoPrerequisite = true;
+                Plugin.Instance.KuganeTowerJump.Start();
+                state = State.KuganeTowerClimbing;
+                return;
+            }
+        }
+
+        // "The Statue of Zuiko" wird nach jedem Sturz über RestartPuzzleFromStart erneut hierher
+        // geleitet (Klettern + Neustart der eigenen Route, siehe dortigen Kommentar) - der generische
+        // attemptCounts/MaxAttemptsPerTarget-Zähler (2 Versuche) würde das viel zu früh abbrechen, noch
+        // bevor der eigene, großzügigere puzzleAttempts/MaxPuzzleAttempts-Zähler (10) überhaupt greift.
+        if (entry.Id != StatueOfZuikoAdventureId)
+        {
+            var attempts = attemptCounts.GetValueOrDefault(entry.Id, 0) + 1;
+            attemptCounts[entry.Id] = attempts;
+            if (attempts > MaxAttemptsPerTarget)
+            {
+                skippedIds.Add(entry.Id);
+                lastSkipReason = Loc.T("zu oft versucht", "too many attempts");
+                StatusText = Loc.T($"Übersprungen (zu oft versucht): {entry.Name}", $"Skipped (too many attempts): {entry.Name}");
+                state = State.Idle;
+                return;
+            }
         }
 
         currentTargetEntry = entry;
@@ -667,6 +778,7 @@ public sealed class SightseeingAutomation
         didFinalApproach = false;
         interWaypointPauseStartedAt = null;
         dismountedAt = null;
+        resumeAtPuzzleStepIndex = null;
         pendingApproachWaypoints = null;
         pendingApproachWaypointIndex = 0;
         hasLandedAtFirstApproachWaypoint = false;
@@ -680,6 +792,14 @@ public sealed class SightseeingAutomation
         puzzleAttempts = 0;
         puzzleStepRetries = 0;
         dismountStuckSince = null;
+
+        // Manche Sightseeing-Punkte sind von der normalen Ankunftsposition aus kaum sauber erreichbar
+        // (Nutzer-Report, z.B. Yanxia "Prism Lake") - dort erst per Lifestream zu einem konkreten,
+        // bekannten Ätheryten teleportieren, DANACH ganz normal weiter (gleiches Prinzip wie
+        // AetherCurrentAutomation.PreStartTeleportAetheryteNames).
+        if (PreApproachTeleportAetheryteNames.TryGetValue(entry.Name, out var preApproachAetheryteName)
+            && TryTeleportToPointAetheryte(preApproachAetheryteName))
+            return;
 
         // Sightseeing-Punkte einer geteilten Hauptstadt können in einem ANDEREN Bezirk liegen als
         // dem, in dem man gerade steht (siehe siblingTerritories-Filter in CompactOverlayWindow, z.B.
@@ -777,8 +897,47 @@ public sealed class SightseeingAutomation
             // Jumping Puzzle: erst normal (auch beritten/fliegend) in die Nähe des Startpunkts, der
             // Rest läuft über UpdateJumpingPuzzle.
             currentTargetPosition = currentPuzzle.Start;
+
+            // Steht man (z.B. direkt nach einer vorgeschalteten Kletterei, siehe "The Statue of
+            // Zuiko"/KuganeTowerJump.FinalPosition) schon (ungefähr) am Startpunkt, NICHT erst normal
+            // hinlaufen/aufmounten - ein Lauf-/Flugauftrag über ~0 Distanz wird von vnavmesh teils
+            // nie als "angekommen" erkannt, die Automation blieb dann bis zum Timeout hängen und brach
+            // ab (Nutzer-Report). Direkt in die Puzzle-eigene Anflug-/Startlogik (BeginJumpingPuzzle).
+            var playerPosNow = Plugin.ObjectTable.LocalPlayer?.Position;
+            if (playerPosNow.HasValue && Vector3.Distance(playerPosNow.Value, currentPuzzle.Start) <= ArrivalTolerance)
+            {
+                BeginJumpingPuzzle();
+                return;
+            }
+
+            // Nutzeranforderung ("The Statue of Zuiko"): steht man beim Start schon grob in der Nähe
+            // von Schritt 1 (z.B. weil man gerade erst dort hingelaufen/-gefallen ist), nicht erst
+            // zum weit entfernten Startpunkt (Kugane-Turm-Gipfel) zurück. Großzügigere Toleranz als
+            // ArrivalTolerance (dieselbe wie beim Kletter-Vorbedingungs-Check oben in StartMovingTo) -
+            // liegt man innerhalb davon, aber noch nicht GENAU auf Schritt 1, erst normal (per
+            // currentTargetPosition/UpdateMoving) dorthin laufen statt die exakte Zielkoordinate zu
+            // verlangen; resumeAtPuzzleStepIndex sorgt dafür, dass die Ankunft dann BeginPuzzleStep(0)
+            // statt erneut BeginJumpingPuzzle (das wieder zum Startpunkt zurückfliegen würde) auslöst.
+            if (entry.Id == StatueOfZuikoAdventureId && playerPosNow.HasValue
+                && currentPuzzle.Steps.Length > 0
+                && Vector3.Distance(playerPosNow.Value, currentPuzzle.Steps[0].Target) <= PrerequisiteClimbSkipDistance)
+            {
+                if (Vector3.Distance(playerPosNow.Value, currentPuzzle.Steps[0].Target) <= ArrivalTolerance)
+                {
+                    Plugin.Log.Info($"[SightseeingAutomation] {entry.Name}: schon nah an Schritt 1 - starte dort statt am Startpunkt.");
+                    StopPath();
+                    state = State.JumpingPuzzle;
+                    stateEnteredAt = DateTime.UtcNow;
+                    BeginPuzzleStep(0);
+                    return;
+                }
+
+                Plugin.Log.Info($"[SightseeingAutomation] {entry.Name}: grob nah an Schritt 1 - laufe dorthin statt zum Startpunkt.");
+                currentTargetPosition = currentPuzzle.Steps[0].Target;
+                resumeAtPuzzleStepIndex = 0;
+            }
         }
-        else if (Plugin.TryGetSightseeingApproachWaypoints(entry.Id, out var waypoints))
+        else if (Plugin.TryGetSightseeingApproachWaypoints(entry.Id, entry.Name, out var waypoints))
         {
             pendingApproachWaypoints = waypoints;
             pendingApproachWaypointIndex = 0;
@@ -1040,7 +1199,7 @@ public sealed class SightseeingAutomation
 
         var mounted = Plugin.Condition[ConditionFlag.Mounted];
         var accepted = false;
-        if (mounted && Plugin.CanFly)
+        if (currentLegAllowsFlying && mounted && Plugin.CanFly)
             accepted = pathfindAndMoveCloseTo.InvokeFunc(target, true, FinalApproachTolerance);
 
         if (!accepted)
@@ -1060,6 +1219,16 @@ public sealed class SightseeingAutomation
     {
         currentTargetPosition = waypoint.Position;
         currentLegAllowsFlying = waypoint.AllowFlying;
+
+        // DirectFly: vnavmesh erkennt diesen Punkt nicht als gültiges Pathfinding-Ziel (lehnt den
+        // Versuch ab/fliegt gar nicht erst los) - stattdessen dieselbe gerade-Linie-Bewegung wie bei
+        // den Jumping-Puzzle-Schritten nutzen, die keine Wegsuche braucht.
+        if (waypoint.DirectFly)
+        {
+            moveToPath.InvokeAction(new List<Vector3> { waypoint.Position }, true);
+            return true;
+        }
+
         return TryBeginPathfindAccepted();
     }
 
@@ -1183,6 +1352,18 @@ public sealed class SightseeingAutomation
         {
             if (currentPuzzle != null)
             {
+                // Siehe BeginNavigateToEntry-Kommentar - hier wurde zu einem bestimmten Schritt
+                // gelaufen (nicht zum eigentlichen Puzzle-Start), BeginJumpingPuzzle würde stattdessen
+                // wieder zum (u.U. weit entfernten) Startpunkt zurückfliegen.
+                if (resumeAtPuzzleStepIndex is { } resumeStepIndex)
+                {
+                    resumeAtPuzzleStepIndex = null;
+                    state = State.JumpingPuzzle;
+                    stateEnteredAt = DateTime.UtcNow;
+                    BeginPuzzleStep(resumeStepIndex);
+                    return;
+                }
+
                 BeginJumpingPuzzle();
                 return;
             }
@@ -1197,7 +1378,7 @@ public sealed class SightseeingAutomation
                 // Charakter u.U. noch leicht in der Luft stehen) - sonst kann der Bodenlaufweg zum
                 // nächsten (ggf. nicht-fliegenden) Zwischenstopp abgelehnt werden, weil kein gültiger
                 // Startpunkt auf dem Navmesh gefunden wird.
-                if (pendingApproachWaypointIndex == 0 && !hasLandedAtFirstApproachWaypoint)
+                if (pendingApproachWaypointIndex == 0 && !hasLandedAtFirstApproachWaypoint && !waypoints[pendingApproachWaypointIndex + 1].DirectFly)
                 {
                     hasLandedAtFirstApproachWaypoint = true;
                     if (pathfindAndMoveCloseTo.InvokeFunc(waypoints[0].Position, false, ApproachWaypointLandingTolerance))
@@ -1504,6 +1685,64 @@ public sealed class SightseeingAutomation
     }
 
     /// <summary>
+    /// Siehe StartMovingTo-Kommentar. Key = Name des Sightseeing-Punkts, Wert = Name des Ätheryten,
+    /// zu dem VOR dem eigentlichen Anlauf teleportiert wird.
+    /// </summary>
+    private static readonly Dictionary<string, string> PreApproachTeleportAetheryteNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Prism Lake"] = "The House of the Fierce", // Yanxia
+    };
+
+    /// <summary>Siehe PreApproachTeleportAetheryteNames-Kommentar - wie TryTeleportToAetheryteAfterCompletion, aber führt danach BeginNavigateToEntry statt FinishCurrent aus.</summary>
+    private bool TryTeleportToPointAetheryte(string aetheryteName)
+    {
+        if (!IsLifestreamAvailable())
+            return false;
+
+        var aetheryteId = Plugin.ResolveAetheryteIdByName(aetheryteName);
+        if (aetheryteId == null || !lifestreamTeleport.InvokeFunc(aetheryteId.Value, (byte)0))
+        {
+            Plugin.Log.Warning($"[SightseeingAutomation] TryTeleportToPointAetheryte({currentTargetEntry?.Name}): Teleport zu \"{aetheryteName}\" nicht möglich - laufe normal von hier aus los.");
+            return false;
+        }
+
+        postCompletionTeleportFinishedAt = null;
+        postCompletionTeleportHasSeenLoadingScreen = false;
+        state = State.TeleportingToPoint;
+        stateEnteredAt = DateTime.UtcNow;
+        StatusText = Loc.T($"Teleportiere zu {aetheryteName}, dann: {currentTargetEntry?.Name}...", $"Teleporting to {aetheryteName}, then: {currentTargetEntry?.Name}...");
+        return true;
+    }
+
+    /// <summary>Wie UpdateTeleportingHomeAfterCompletion, führt danach aber BeginNavigateToEntry statt FinishCurrent aus.</summary>
+    private void UpdateTeleportingToPoint()
+    {
+        if (currentTargetEntry == null)
+        {
+            state = State.Idle;
+            return;
+        }
+
+        var loading = Plugin.Condition[ConditionFlag.BetweenAreas] || Plugin.Condition[ConditionFlag.BetweenAreas51];
+        if (loading)
+            postCompletionTeleportHasSeenLoadingScreen = true;
+
+        if (loading || !postCompletionTeleportHasSeenLoadingScreen)
+        {
+            postCompletionTeleportFinishedAt = null;
+            if (DateTime.UtcNow - stateEnteredAt > DistrictTravelTimeout)
+                BeginNavigateToEntry(currentTargetEntry);
+            return;
+        }
+
+        postCompletionTeleportFinishedAt ??= DateTime.UtcNow;
+        if (DateTime.UtcNow - postCompletionTeleportFinishedAt.Value < DistrictTravelSettleDelay)
+            return;
+
+        BeginNavigateToEntry(currentTargetEntry);
+    }
+
+    /// <summary>
     /// Nach Erledigen eines Punkts MIT von Hand hinterlegten Rückweg-Zwischenstopps (siehe Plugin.
     /// SightseeingPostCompletionWaypoints, z.B. Summerford Farms) erst zu Fuß der Reihe nach dorthin,
     /// statt direkt loszufliegen - der enge Anflugweg (Tür/Wand) muss zu Fuß auch wieder raus. Nur,
@@ -1515,9 +1754,40 @@ public sealed class SightseeingAutomation
     // enden an völlig unterschiedlichen, oft schwer begehbaren Stellen).
     private static readonly HashSet<uint> PostCompletionTeleportHomeTerritoryIds = new() { 628 };
 
+    /// <summary>
+    /// Nutzer-Report (The Ruby Sea, Punkt "Tamamizu"): nach einem Punkt, der unberitten getaucht
+    /// erreicht wird, bleibt der Charakter danach am Taucheingang hängen - ein normaler Laufweg zum
+    /// nächsten Punkt (meist über Wasser) startet dann nie (gleiches Problem/dieselbe Ursache wie bei
+    /// AetherCurrentAutomation: vnavmeshs Bodenlaufauftrag findet in dieser Tiefe keinen Weg). Statt
+    /// EINEN bestimmten Punktnamen fest zu verdrahten, daher ALLGEMEIN: taucht der Charakter gerade
+    /// noch (Condition[Diving]), wenn der nächste Punkt ansteht, erst zu einem je Zone hinterlegten,
+    /// bekannten Ätheryten teleportieren, DANACH ganz normal mit den übrigen Punkten weitermachen -
+    /// gleiches Prinzip wie AetherCurrentAutomation.PreStartTeleportAetheryteNames, nur NACH statt VOR
+    /// dem jeweiligen Punkt. Key = TerritoryTypeId, Wert = Name des Ziel-Ätheryten.
+    /// </summary>
+    private static readonly Dictionary<uint, string> PostCompletionTeleportAetheryteWhenDiving = new()
+    {
+        [613] = "Onokoro", // The Ruby Sea
+        [622] = "The Dawn Throne", // The Azim Steppe
+    };
+
     private void TryWalkOutOrFinish(IReadOnlyList<CollectibleEntry> entries)
     {
         if (currentTargetEntry != null
+            && Plugin.Condition[ConditionFlag.Diving]
+            && PostCompletionTeleportAetheryteWhenDiving.TryGetValue(Plugin.ResolveEffectiveTerritoryId(Plugin.ClientState.TerritoryType), out var teleportAetheryteName))
+        {
+            Plugin.Log.Info($"[SightseeingAutomation] TryWalkOutOrFinish({currentTargetEntry.Name}): taucht noch - teleportiere zu \"{teleportAetheryteName}\", statt normal weiterzulaufen.");
+            TryTeleportToAetheryteAfterCompletion(teleportAetheryteName);
+            return;
+        }
+
+        // Nutzeranforderung: beim Kugane-Turm-Punkt selbst (Shiokaze Hostelry) KEIN Teleport zum
+        // Haupt-Ätheryten, obwohl Kugane sonst in PostCompletionTeleportHomeTerritoryIds steht - direkt
+        // danach soll ohne Umweg "The Statue of Zuiko" weitergehen (siehe ForcedNextSightseeingEntryId),
+        // ein Teleport würde dafür erst wieder zurück zum Turm-Gipfel laufen lassen.
+        if (currentTargetEntry != null
+            && currentTargetEntry.Id != KuganeTowerJump.AdventureId
             && PostCompletionTeleportHomeTerritoryIds.Contains(Plugin.ResolveEffectiveTerritoryId(Plugin.ClientState.TerritoryType)))
         {
             TryTeleportHomeAfterCompletion();
@@ -1570,6 +1840,40 @@ public sealed class SightseeingAutomation
         StatusText = Loc.T("Teleportiere zum Haupt-Ätheryten...", "Teleporting to the main aetheryte...");
     }
 
+    /// <summary>Siehe PostCompletionTeleportAetheryteNames - wie TryTeleportHomeAfterCompletion, aber zu einem konkret benannten statt dem Haupt-Ätheryten.</summary>
+    private void TryTeleportToAetheryteAfterCompletion(string aetheryteName)
+    {
+        // Wird auch aus TryStartNext aufgerufen, BEVOR überhaupt ein Ziel gewählt wurde (Nutzer-
+        // Anforderung: Tauchgang-Check schon beim (Neu-)Start prüfen) - dann ist currentTargetEntry
+        // noch null, FinishCurrent() (das currentTargetEntry voraussetzt) darf hier NICHT laufen,
+        // sonst NullReferenceException. Einfach im Leerlauf bleiben, nächster Tick versucht es erneut.
+        void FinishOrStayIdle()
+        {
+            if (currentTargetEntry != null)
+                FinishCurrent();
+        }
+
+        if (!IsLifestreamAvailable())
+        {
+            FinishOrStayIdle();
+            return;
+        }
+
+        var aetheryteId = Plugin.ResolveAetheryteIdByName(aetheryteName);
+        if (aetheryteId == null || !lifestreamTeleport.InvokeFunc(aetheryteId.Value, (byte)0))
+        {
+            Plugin.Log.Warning($"[SightseeingAutomation] TryTeleportToAetheryteAfterCompletion({currentTargetEntry?.Name}): Teleport zu \"{aetheryteName}\" nicht möglich - mache normal weiter.");
+            FinishOrStayIdle();
+            return;
+        }
+
+        postCompletionTeleportFinishedAt = null;
+        postCompletionTeleportHasSeenLoadingScreen = false;
+        state = State.TeleportingHomeAfterCompletion;
+        stateEnteredAt = DateTime.UtcNow;
+        StatusText = Loc.T($"Teleportiere zu {aetheryteName}...", $"Teleporting to {aetheryteName}...");
+    }
+
     private bool postCompletionTeleportHasSeenLoadingScreen;
 
     /// <summary>
@@ -1584,6 +1888,17 @@ public sealed class SightseeingAutomation
     /// </summary>
     private void UpdateTeleportingHomeAfterCompletion()
     {
+        // Siehe TryTeleportToAetheryteAfterCompletion-Kommentar - dieser Zustand kann auch OHNE
+        // gewähltes Ziel erreicht werden (Tauchgang-Check direkt in TryStartNext), dann darf
+        // FinishCurrent() (setzt currentTargetEntry voraus) nicht laufen.
+        void FinishOrGoIdle()
+        {
+            if (currentTargetEntry != null)
+                FinishCurrent();
+            else
+                state = State.Idle;
+        }
+
         var loading = Plugin.Condition[ConditionFlag.BetweenAreas] || Plugin.Condition[ConditionFlag.BetweenAreas51];
         if (loading)
             postCompletionTeleportHasSeenLoadingScreen = true;
@@ -1592,7 +1907,7 @@ public sealed class SightseeingAutomation
         {
             postCompletionTeleportFinishedAt = null;
             if (DateTime.UtcNow - stateEnteredAt > DistrictTravelTimeout)
-                FinishCurrent();
+                FinishOrGoIdle();
             return;
         }
 
@@ -1600,7 +1915,7 @@ public sealed class SightseeingAutomation
         if (DateTime.UtcNow - postCompletionTeleportFinishedAt.Value < DistrictTravelSettleDelay)
             return;
 
-        FinishCurrent();
+        FinishOrGoIdle();
     }
 
     /// <summary>
@@ -1630,6 +1945,17 @@ public sealed class SightseeingAutomation
 
         if (climb.ReachedTop)
         {
+            // Nur als Vorbedingung für "The Statue of Zuiko" geklettert (siehe StartMovingTo-
+            // Kommentar) - der Turm-Punkt selbst (currentTargetEntry wäre dafür nötig) wird hier
+            // bewusst NICHT abgeschlossen, stattdessen direkt in Zuikos eigene Route (Plugin.cs
+            // #2162882) weiter, jetzt wo PrerequisiteClimbSkipDistance erfüllt ist.
+            if (climbingAsZuikoPrerequisite)
+            {
+                climbingAsZuikoPrerequisite = false;
+                StartMovingTo(currentTargetEntry);
+                return;
+            }
+
             // Minimaler Platzhalter-Puzzle-Datensatz nur für die Wiederverwendung von
             // BeginFinalPrecisePosition/FinalPrecisePosition/RestartPuzzleFromStart (die alle
             // currentPuzzle lesen) - KuganeTowerJump führt selbst keinen Plugin.SightseeingJumpingPuzzle.
@@ -1792,6 +2118,9 @@ public sealed class SightseeingAutomation
         // erst erreicht) statt zum nächsten Punkt weiterzugehen.
         skippedIds.Add(currentTargetEntry.Id);
 
+        // Siehe ForcedNextSightseeingEntryId-Kommentar.
+        lastCompletedEntryId = currentTargetEntry.Id;
+
         currentTargetEntry = null;
         state = State.Idle;
     }
@@ -1915,6 +2244,21 @@ public sealed class SightseeingAutomation
     private const int MaxPuzzleStepRetries = 50;
     private const float PuzzleStepRetryHeightMargin = 0.5f;
     private const float PuzzleStepRetryRadius = 3f;
+
+    // Nutzer-Report (Bokairo Inn): fällt man an einer bekannten Stelle herunter, die NICHT mehr auf
+    // demselben Dach wie der Absprungpunkt liegt (also nicht über UpdatePuzzleFailure/stillOnPlatform
+    // abgefangen wird), muss nicht das ganze Rätsel von vorne beginnen - stattdessen gezielt zu einem
+    // bestimmten späteren Schritt zurücklaufen und dort fortsetzen (Key = Adventure-RowId).
+    private static readonly Dictionary<uint, (Vector3 FallPosition, int ResumeStepIndex)[]> PuzzleFallResumeOverrides = new()
+    {
+        [2162852] = new[]
+        {
+            (new Vector3(-77.87369f, 36.059944f, -183.49011f), 21), // Bokairo Inn -> Punkt 22
+            (new Vector3(-48.456764f, 22.486065f, -181.1468f), 6), // Bokairo Inn -> Sprung auf -49.26364f, 24.041245f, -180.1362f (daneben gesprungen)
+            (new Vector3(-81.255615f, 27.737486f, -181.99854f), 14), // Bokairo Inn -> Punkt 15 (-80.739044f, 31.059185f, -179.96072f)
+        },
+    };
+    private const float PuzzleFallResumeOverrideTolerance = 3f;
     private const float PuzzleStartTolerance = 0.3f;
     private const float PuzzleStartExactTolerance = 0.1f;
     private const float PuzzlePointTolerance = 1.0f;
@@ -1962,6 +2306,11 @@ public sealed class SightseeingAutomation
         StopPath();
         state = State.JumpingPuzzle;
         stateEnteredAt = DateTime.UtcNow;
+
+        // Siehe Plugin.TryRemoveJogStatus-Kommentar (gleiches Vorgehen wie bei KuganeTowerJump.Start) -
+        // ein aktiver "Jog"-Status würde die auf normale Laufgeschwindigkeit abgestimmten Sprung-
+        // Timings/-Distanzen dieser Jumping Puzzles durcheinanderbringen.
+        Plugin.TryRemoveJogStatus();
 
         // Schritt 1 ist selbst ein Flug-Schritt (SightseeingPuzzleStep.Fly, z.B. "Halo"): zum
         // Startpunkt NICHT absteigen (es geht ja sofort beritten weiter), sondern beritten bleiben -
@@ -2450,7 +2799,13 @@ public sealed class SightseeingAutomation
                     return;
                 }
 
-                if (!IsAtPuzzlePoint(playerPos, step.Target))
+                // Nutzeranforderung: landet man nach einem Sprung nicht EXAKT auf dem Zielpunkt
+                // (kleine Landeabweichung, kein echter Fehlsprung), trotzdem normal zum nächsten
+                // Schritt weiter, statt das als Fehlversuch zu werten (der sonst unnötig oft einen
+                // Neustart/erneuten Sprung auslöste). Nur bei ausdrücklich "Exact"-markierten Schritten
+                // (z.B. der eigentliche Sightseeing-Punkt) bleibt die enge Toleranz bestehen - dort
+                // zählt wirklich nur die exakte Position.
+                if (!IsAtPuzzlePoint(playerPos, step.Target, step.Exact ? null : PuzzleStepRetryRadius))
                 {
                     FailPuzzleAttempt($"Schritt {puzzleStepIndex + 1} nicht erreicht");
                     return;
@@ -2602,6 +2957,36 @@ public sealed class SightseeingAutomation
             return;
         }
 
+        // Siehe PuzzleFallResumeOverrides-Kommentar - gezielter Wiedereinstieg statt komplett von
+        // vorne, wenn die Absturzstelle einer bekannten Position entspricht.
+        var fallPos = Plugin.ObjectTable.LocalPlayer?.Position;
+        if (fallPos.HasValue && currentTargetEntry != null
+            && PuzzleFallResumeOverrides.TryGetValue(currentTargetEntry.Id, out var overrides))
+        {
+            foreach (var (overrideFallPos, resumeStepIndex) in overrides)
+            {
+                if (Vector3.Distance(fallPos.Value, overrideFallPos) <= PuzzleFallResumeOverrideTolerance)
+                {
+                    BeginResumeAtStep(resumeStepIndex, fallPos.Value);
+                    return;
+                }
+            }
+        }
+
+
+        // "The Statue of Zuiko" (siehe StartMovingTo-Kommentar): der Startpunkt liegt auf dem
+        // Kugane-Turm-Gipfel, von einer Absturzstelle (meist ganz unten) aus NICHT per normalem
+        // Flug-/Laufauftrag erreichbar (genau deshalb gibt es die eigene KuganeTowerJump-Kletterei
+        // überhaupt) - daher nicht BeginJumpingPuzzle direkt, sondern erneut über StartMovingTo, das
+        // bei Bedarf erst die Kletterei wiederholt, bevor Zuikos eigene Route von vorne beginnt
+        // (Nutzeranforderung: "erst wieder das Kugane Tower Rätsel machen und dann mit dem Tower
+        // wieder starten").
+        if (currentTargetEntry!.Id == StatueOfZuikoAdventureId)
+        {
+            StartMovingTo(currentTargetEntry);
+            return;
+        }
+
         // Startpunkt in der Luft (DismountAtStart): nach einem Absturz (Nutzer-Report) erst wieder
         // GENAU dorthin zurück statt einfach von der Absturzstelle aus weiterzumachen - sonst würde
         // z.B. direkt von unten am Boden aus zum Sightseeing-Punkt gelaufen, ohne den eigentlich
@@ -2635,7 +3020,25 @@ public sealed class SightseeingAutomation
         SetPuzzlePhase(PuzzlePhase.Dismounting);
     }
 
-    private static bool IsAtPuzzlePoint(Vector3 playerPos, Vector3 point) =>
-        Vector2.Distance(new Vector2(playerPos.X, playerPos.Z), new Vector2(point.X, point.Z)) <= PuzzlePointTolerance
-        && MathF.Abs(playerPos.Y - point.Y) <= PuzzlePointTolerance;
+    /// <summary>Siehe PuzzleFallResumeOverrides/PuzzleNearestStepResumeRadius-Kommentare - läuft zum Absprungpunkt des angegebenen Schritts zurück und setzt dort fort, statt das ganze Rätsel neu zu beginnen.</summary>
+    private void BeginResumeAtStep(int stepIndex, Vector3 fallPos)
+    {
+        puzzleStepIndex = stepIndex;
+        var from = CurrentStepFromPoint();
+        Plugin.Log.Info($"[SightseeingAutomation] Jumping Puzzle {currentTargetEntry?.Name}: Sturz nah an Schritt {stepIndex + 1} - laufe dorthin zurück statt ganz von vorne.");
+        puzzleReturnFloorY = MathF.Min(fallPos.Y, from.Y) - PuzzleStepRetryHeightMargin;
+        SetExactPathTolerance(stepIndex > 0 && currentPuzzle!.Steps[stepIndex - 1].Exact);
+        moveToPath.InvokeAction(new List<Vector3> { from }, false);
+        SetPuzzlePhase(PuzzlePhase.ReturningToStepStart);
+        StatusText = Loc.T(
+            $"Jumping Puzzle: Sturz - laufe zurück zu Schritt {stepIndex + 1}...",
+            $"Jumping puzzle: fell - walking back to step {stepIndex + 1}...");
+    }
+
+    private static bool IsAtPuzzlePoint(Vector3 playerPos, Vector3 point, float? tolerance = null)
+    {
+        var t = tolerance ?? PuzzlePointTolerance;
+        return Vector2.Distance(new Vector2(playerPos.X, playerPos.Z), new Vector2(point.X, point.Z)) <= t
+               && MathF.Abs(playerPos.Y - point.Y) <= t;
+    }
 }

@@ -1,5 +1,16 @@
 [
   {
+    "version": "2.4.0",
+    "date": "2026-10-10",
+    "title": "ToDo List Automation",
+    "title_de": "ToDo-Listen-Automatik",
+    "changes": [
+      { "type": "new", "text": "Added ToDo list integration for the automations.", "text_de": "ToDo-Listen-Integration für die Automatiken hinzugefügt." },
+      { "type": "improved", "text": "Added more Aether Currents from Stormblood.", "text_de": "Weitere Ätherströmungen aus Stormblood hinzugefügt." },
+      { "type": "improved", "text": "Added more Sightseeing spots from Stormblood.", "text_de": "Weitere Sightseeing-Punkte aus Stormblood hinzugefügt." }
+    ]
+  },
+  {
     "version": "2.3.0",
     "date": "2026-10-08",
     "title": "Order & Collapsible Menu",

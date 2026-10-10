@@ -214,8 +214,9 @@
         "Category": "Aether Current",
         "TerritoryTypeId": 612,
         "MapId": 367,
-        "VendorMapX": 36.3,
-        "VendorMapY": 17.2,
+        "VendorMapX": 11.7,
+        "VendorMapY": 16.4,
+        "WorldPosition": {"X": -487.11478, "Y": 76.46173, "Z": -250.21686},
         "Source": "Field exploration"
     },
     {
@@ -225,8 +226,9 @@
         "Category": "Aether Current",
         "TerritoryTypeId": 612,
         "MapId": 367,
-        "VendorMapX": 27.9,
-        "VendorMapY": 21.6,
+        "VendorMapX": 24.5,
+        "VendorMapY": 11.4,
+        "WorldPosition": {"X": 155.3961, "Y": 53.315468, "Z": -499.96936},
         "Source": "Field exploration"
     },
     {
@@ -236,8 +238,9 @@
         "Category": "Aether Current",
         "TerritoryTypeId": 612,
         "MapId": 367,
-        "VendorMapX": 24.5,
-        "VendorMapY": 11.4,
+        "VendorMapX": 27.9,
+        "VendorMapY": 21.6,
+        "WorldPosition": {"X": 323.06058, "Y": 88.88896, "Z": 11.489729},
         "Source": "Field exploration"
     },
     {
@@ -247,35 +250,25 @@
         "Category": "Aether Current",
         "TerritoryTypeId": 612,
         "MapId": 367,
-        "VendorMapX": 11.7,
-        "VendorMapY": 16.4,
+        "VendorMapX": 36.3,
+        "VendorMapY": 17.2,
+        "WorldPosition": {"X": 741.9627, "Y": 181.14693, "Z": -214.16954},
         "Source": "Field exploration"
     },
     {
         "Id": 2818178,
-        "Name": "Aether Current - The Ruby Sea #1",
+        "Name": "Aether Current - The Ruby Sea #4",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 613,
         "MapId": 371,
-        "VendorMapX": 5.3,
-        "VendorMapY": 26.1,
+        "VendorMapX": 29.9,
+        "VendorMapY": 37.5,
         "Source": "Field exploration"
     },
     {
         "Id": 2818182,
         "Name": "Aether Current - The Ruby Sea #2",
-        "Type": "AetherCurrent",
-        "Category": "Aether Current",
-        "TerritoryTypeId": 613,
-        "MapId": 371,
-        "VendorMapX": 35.3,
-        "VendorMapY": 20.4,
-        "Source": "Field exploration"
-    },
-    {
-        "Id": 2818185,
-        "Name": "Aether Current - The Ruby Sea #3",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 613,
@@ -286,14 +279,27 @@
         "Source": "Field exploration"
     },
     {
-        "Id": 2818187,
-        "Name": "Aether Current - The Ruby Sea #4",
+        "Id": 2818185,
+        "Name": "Aether Current - The Ruby Sea #3",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 613,
         "MapId": 371,
-        "VendorMapX": 29.9,
-        "VendorMapY": 37.5,
+        "VendorMapX": 35.3,
+        "VendorMapY": 20.4,
+        "WorldPosition": {"X": 693.22186, "Y": 2.0401702, "Z": -53.705997},
+        "Source": "Field exploration"
+    },
+    {
+        "Id": 2818187,
+        "Name": "Aether Current - The Ruby Sea #1",
+        "Type": "AetherCurrent",
+        "Category": "Aether Current",
+        "TerritoryTypeId": 613,
+        "MapId": 371,
+        "VendorMapX": 5.3,
+        "VendorMapY": 26.1,
+        "WorldPosition": {"X": -804.2868, "Y": 36.194447, "Z": 235.21162},
         "Source": "Field exploration"
     },
     {
@@ -305,6 +311,7 @@
         "MapId": 354,
         "VendorMapX": 31.4,
         "VendorMapY": 29.5,
+        "WorldPosition": {"X": 497.6848, "Y": 16.400618, "Z": 401.83954},
         "Source": "Field exploration"
     },
     {
@@ -316,6 +323,7 @@
         "MapId": 354,
         "VendorMapX": 24.7,
         "VendorMapY": 21.2,
+        "WorldPosition": {"X": 164.21701, "Y": 144.6991, "Z": -12.55179},
         "Source": "Field exploration"
     },
     {
@@ -327,6 +335,7 @@
         "MapId": 354,
         "VendorMapX": 30.6,
         "VendorMapY": 37.9,
+        "WorldPosition": {"X": 457.5223, "Y": 32.67969, "Z": 821.2109},
         "Source": "Field exploration"
     },
     {
@@ -338,6 +347,7 @@
         "MapId": 354,
         "VendorMapX": 19.7,
         "VendorMapY": 32.7,
+        "WorldPosition": {"X": -98.344, "Y": 12.973045, "Z": 563.757},
         "Source": "Field exploration"
     },
     {
@@ -347,8 +357,9 @@
         "Category": "Aether Current",
         "TerritoryTypeId": 620,
         "MapId": 368,
-        "VendorMapX": 24.4,
-        "VendorMapY": 30.6,
+        "VendorMapX": 25.5,
+        "VendorMapY": 6.4,
+        "WorldPosition": {"X": 202.86786, "Y": 133.96817, "Z": -753.8922},
         "Source": "Field exploration"
     },
     {
@@ -358,8 +369,9 @@
         "Category": "Aether Current",
         "TerritoryTypeId": 620,
         "MapId": 368,
-        "VendorMapX": 11.7,
-        "VendorMapY": 26.4,
+        "VendorMapX": 16,
+        "VendorMapY": 15.8,
+        "WorldPosition": {"X": -271.6782, "Y": 157.94206, "Z": -280.1662},
         "Source": "Field exploration"
     },
     {
@@ -369,8 +381,9 @@
         "Category": "Aether Current",
         "TerritoryTypeId": 620,
         "MapId": 368,
-        "VendorMapX": 16,
-        "VendorMapY": 15.8,
+        "VendorMapX": 11.7,
+        "VendorMapY": 26.4,
+        "WorldPosition": {"X": -485.71423, "Y": 304.58737, "Z": 247.91147},
         "Source": "Field exploration"
     },
     {
@@ -380,8 +393,9 @@
         "Category": "Aether Current",
         "TerritoryTypeId": 620,
         "MapId": 368,
-        "VendorMapX": 25.5,
-        "VendorMapY": 6.4,
+        "VendorMapX": 24.4,
+        "VendorMapY": 30.6,
+        "WorldPosition": {"X": 146.72594, "Y": 303.80078, "Z": 461.06265},
         "Source": "Field exploration"
     },
     {
@@ -426,6 +440,7 @@
         "MapId": 369,
         "VendorMapX": 26.7,
         "VendorMapY": 22.8,
+        "WorldPosition": {"X": 262.4211, "Y": 78.1479, "Z": 69.44642},
         "Source": "Field exploration"
     },
     {
@@ -437,6 +452,7 @@
         "MapId": 372,
         "VendorMapX": 32.8,
         "VendorMapY": 30.2,
+        "WorldPosition": {"X": 569.5393, "Y": -19.50716, "Z": 437.52484},
         "Source": "Field exploration"
     },
     {
@@ -460,6 +476,7 @@
         "MapId": 372,
         "VendorMapX": 23.5,
         "VendorMapY": 20.4,
+        "WorldPosition": {"X": 104.39758, "Y": 116.043, "Z": -48.217506},
         "Source": "Field exploration"
     },
     {
