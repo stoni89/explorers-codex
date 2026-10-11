@@ -494,7 +494,27 @@ public sealed class Plugin : IDalamudPlugin
     private void DrawUI()
     {
         TickPendingAchievementSearch();
+        LogMsqSoloDutyEntryOnce();
         WindowSystem.Draw();
+    }
+
+    // Für LogMsqSoloDutyEntryOnce - true, sobald IsInMsqSoloDuty() im vorigen Frame zutraf, damit beim
+    // Betreten (false -> true) genau einmal geloggt wird, nicht jeden Frame erneut.
+    private bool wasInMsqSoloDutyLastFrame;
+
+    /// <summary>
+    /// Nutzeranforderung: die Diagnose-Zeile (siehe GetMsqSoloDutyDebugText) ins Plugin-Log schreiben,
+    /// sobald man eine MSQ-Solo-Duty betritt - bewusst NUR im Log, keine Anzeige im Overlay (Nutzer
+    /// wollte dort keine zusätzliche Zeile). In DrawUI statt im Overlay-Draw aufgerufen, damit es auch
+    /// bei geschlossenem/eingeklapptem Overlay-Fenster zuverlässig feuert.
+    /// </summary>
+    private void LogMsqSoloDutyEntryOnce()
+    {
+        var isInMsqSoloDuty = IsInMsqSoloDuty();
+        if (isInMsqSoloDuty && !wasInMsqSoloDutyLastFrame)
+            Log.Info($"[MsqSoloDuty] Betreten: {GetMsqSoloDutyDebugText()}");
+
+        wasInMsqSoloDutyLastFrame = isInMsqSoloDuty;
     }
 
     private void ToggleMainUI() => CodexMenuWindow.IsOpen = !CodexMenuWindow.IsOpen;
@@ -4846,12 +4866,12 @@ public sealed class Plugin : IDalamudPlugin
     /// <summary>
     /// Ätherströmungen mit einer manuell erfassten Zusatz-Quest-Voraussetzung (gleiches Prinzip wie
     /// AetheryteRequiredQuest/ChocobokeepRequiredQuest) - Key = Ätherströmungs-Id, Wert = Name der
-    /// zuvor abzuschließenden Quest. Nutzer-Report: The Lochs #3 braucht dieselbe Quest
+    /// zuvor abzuschließenden Quest. Nutzer-Report: The Lochs #4 braucht dieselbe Quest
     /// "Freiheit oder Tod" wie der Ätheryte "The Ala Mhigan Quarter".
     /// </summary>
     private static readonly Dictionary<uint, string> AetherCurrentRequiredQuest = new()
     {
-        [2818171] = "Freiheit oder Tod", // The Lochs #3
+        [2818172] = "Freiheit oder Tod", // The Lochs #4
     };
 
     // "Simply to Dye For" (schaltet Färben frei) braucht die abgeschlossene Artefakt-Rüstungsquest
@@ -7963,25 +7983,74 @@ public sealed class Plugin : IDalamudPlugin
 
     /// <summary>
     /// Ob man sich GERADE JETZT in einer MSQ-Solo-Duty befindet (Nutzeranforderung: Overlay dort
-    /// ausblenden, danach wieder einblenden). Bewusst über TerritoryType.ContentFinderCondition der
-    /// AKTUELLEN Zone statt IDutyState.ContentFinderCondition - Quest Battles laufen nicht über die
-    /// normale Duty-Finder-Warteschlange, IDutyState blieb dabei laut Nutzer-Report (Beispiel "Divine
-    /// Intervention") leer/das Overlay verschwand nicht. Die Instanz-Zone selbst kennt ihre CFC aber
-    /// immer direkt über die Lumina-Zonendaten, unabhängig davon, wie man reingekommen ist. ContentType
-    /// wird per Namenstext ("Quest Battles", englisch) statt Raten der RowId geprüft (Konvention wie
-    /// GetEnglishClassJobCategoryName).
+    /// ausblenden, danach wieder einblenden). Primär über GameMain.CurrentContentFinderConditionId
+    /// (die vom Client selbst geführte ID der GERADE AKTIVEN Duty) statt TerritoryType.
+    /// ContentFinderCondition der Zone - Nutzer-Report "The Key to Victory": diese Quest Battle läuft
+    /// in der UNVERÄNDERTEN Zone (The Lochs bleibt TerritoryType 686, keine eigene Instanz-Zone), deren
+    /// TerritoryType entsprechend gar keine ContentFinderCondition kennt, obwohl man laut Spiel
+    /// durchaus "in einer Duty" ist. GameMain kennt die aktive Duty-CFC dagegen unabhängig davon, ob
+    /// dafür die Zone gewechselt wurde. IDutyState.ContentFinderCondition bewusst NICHT verwendet -
+    /// Quest Battles laufen nicht über die normale Duty-Finder-Warteschlange, blieb laut früherem
+    /// Nutzer-Report (Beispiel "Divine Intervention") leer. Die alte TerritoryType-Prüfung bleibt als
+    /// Fallback (für den Fall, dass GameMain mal keine CFC meldet, es aber doch eine eigene Instanz-Zone
+    /// ist). ContentType wird per Namenstext ("Quest Battles", englisch) statt Raten der RowId geprüft
+    /// (Konvention wie GetEnglishClassJobCategoryName).
     /// </summary>
-    public static bool IsInMsqSoloDuty()
+    public static unsafe bool IsInMsqSoloDuty()
     {
-        if (!IsInInstancedContent())
-            return false;
+        var gameMain = GameMain.Instance();
+        uint? contentFinderConditionId = gameMain != null && gameMain->CurrentContentFinderConditionId != 0
+            ? gameMain->CurrentContentFinderConditionId
+            : null;
+
+        if (contentFinderConditionId == null)
+        {
+            if (!IsInInstancedContent())
+                return false;
+
+            var territorySheet = DataManager.GetExcelSheet<TerritoryType>();
+            if (territorySheet == null || !territorySheet.TryGetRow(ClientState.TerritoryType, out var territory))
+                return false;
+
+            contentFinderConditionId = territory.ContentFinderCondition.ValueNullable?.RowId;
+            if (contentFinderConditionId == null)
+                return false;
+        }
+
+        var cfcSheet = DataManager.GetExcelSheet<ContentFinderCondition>();
+        var contentTypeId = cfcSheet != null && cfcSheet.TryGetRow(contentFinderConditionId.Value, out var cfc)
+            ? cfc.ContentType.RowId
+            : (uint?)null;
+        return contentTypeId != null && GetEnglishContentTypeName(contentTypeId.Value).Equals("Quest Battles", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Diagnose-Zeile für IsInMsqSoloDuty (siehe LogMsqSoloDutyEntryOnce - landet ausschließlich im
+    /// Plugin-Log, nicht im Overlay) - Nutzer-Report "The Key to Victory" wird trotz Fix weiterhin im
+    /// Overlay angezeigt; zeigt alle Rohwerte, die in die Erkennung einfließen, damit sich der
+    /// tatsächliche Grund beim nächsten Antreffen dieser Duty ohne weitere Codeänderung ablesen lässt.
+    /// </summary>
+    public static unsafe string GetMsqSoloDutyDebugText()
+    {
+        var gameMain = GameMain.Instance();
+        var cfcIdFromGameMain = gameMain != null ? gameMain->CurrentContentFinderConditionId : (ushort)0;
+        var boundByDuty = Condition[ConditionFlag.BoundByDuty];
+        var boundByDuty56 = Condition[ConditionFlag.BoundByDuty56];
+        var boundByDuty95 = Condition[ConditionFlag.BoundByDuty95];
 
         var territorySheet = DataManager.GetExcelSheet<TerritoryType>();
-        if (territorySheet == null || !territorySheet.TryGetRow(ClientState.TerritoryType, out var territory))
-            return false;
+        var territoryCfcId = territorySheet != null && territorySheet.TryGetRow(ClientState.TerritoryType, out var territory)
+            ? territory.ContentFinderCondition.ValueNullable?.RowId
+            : null;
 
-        var contentTypeId = territory.ContentFinderCondition.ValueNullable?.ContentType.RowId;
-        return contentTypeId != null && GetEnglishContentTypeName(contentTypeId.Value).Equals("Quest Battles", StringComparison.OrdinalIgnoreCase);
+        var cfcSheet = DataManager.GetExcelSheet<ContentFinderCondition>();
+        var effectiveCfcId = cfcIdFromGameMain != 0 ? (uint)cfcIdFromGameMain : territoryCfcId;
+        var contentTypeName = effectiveCfcId != null && cfcSheet != null && cfcSheet.TryGetRow(effectiveCfcId.Value, out var cfc)
+            ? GetEnglishContentTypeName(cfc.ContentType.RowId)
+            : "-";
+
+        return $"BoundByDuty={boundByDuty}/{boundByDuty56}/{boundByDuty95}  GameMain.CFC={cfcIdFromGameMain}  " +
+               $"Territory.CFC={territoryCfcId?.ToString() ?? "-"}  ContentType={contentTypeName}  IsMsqSoloDuty={IsInMsqSoloDuty()}";
     }
 
     public static bool IsChocoboCompanionSummoned() => GetChocoboSummonTimeLeft() > 0f;
