@@ -30,6 +30,20 @@ public sealed class SightseeingAutomation
         TeleportingHomeAfterCompletion,
         TeleportingToPoint,
         KuganeTowerClimbing,
+        GateRoute,
+    }
+
+    // Siehe SightseeingGateRoutes-Kommentar - State.MovingTo läuft (innerhalb BeginNavigateToEntry)
+    // zuerst ganz normal zum Tor-NPC (Route.GatePosition), erst DANACH übernimmt dieser Zustand:
+    // ansprechen, Dialog/Ja-Nein bestätigen, Ladeanimation abwarten, dann ganz normal weiter
+    // (BeginNavigateToEntry erneut, das selbst wieder aufmountet und die hinterlegten
+    // Zwischenstopps/den echten Zielpunkt anläuft) - gleiches Prinzip wie AetherCurrentAutomation.
+    // GatePhase/UpdateGateRoute bzw. QuestAutomation.GateGuardPhase/UpdateGateGuardRoute.
+    private enum GatePhase
+    {
+        Approaching,
+        Interacting,
+        WaitingForLoadingScreen,
     }
 
     private static readonly TimeSpan MountWaitTimeout = TimeSpan.FromSeconds(6);
@@ -174,6 +188,23 @@ public sealed class SightseeingAutomation
     private int postCompletionWaypointIndex;
     private bool hasEnsuredExactPosition;
     private bool walkOutJumpSent;
+
+    // Siehe SightseeingGateRoutes-Kommentar - Zustand der Tor-NPC-Routine (State.GateRoute).
+    // gateRouteCompletedForEntryId verhindert, dass BeginNavigateToEntry nach der Rückkehr aus dem
+    // Tor (erneuter eigener Aufruf, siehe UpdateGateRoute) denselben Tor-Check noch einmal auslöst -
+    // zurückgesetzt in StartMovingTo bei jedem neuen Zielpunkt.
+    private (Vector3 GatePosition, string NpcName)? activeGateRoute;
+    // Siehe BeginGateRoute-Kommentar - State.Mounting weiß sonst nur, wie es zu State.MovingTo
+    // weitergeht (BeginPathfind), nicht zu State.GateRoute (BeginGateRoute erneut).
+    private (Vector3 GatePosition, string NpcName)? pendingGateRouteAfterMount;
+    private GatePhase gatePhase;
+    private uint? gateRouteCompletedForEntryId;
+    private bool gateHasSeenPathRunning;
+    private int gateInteractAttempts;
+    private DateTime gateInteractedAt;
+    private DateTime? gateDismountedAt;
+    private bool gateHasSeenLoadingScreen;
+    private DateTime? gateLoadingEndedAt;
 
     // Siehe BeginJumpingPuzzle/PuzzlePhase.FlyingToStartMounting - ob nach dem (ggf. erst nötigen)
     // Aufsteigen am Startpunkt beritten weitergeflogen wird (Schritt 1 = Flug-Schritt) oder dort
@@ -453,6 +484,10 @@ public sealed class SightseeingAutomation
 
                 case State.KuganeTowerClimbing:
                     UpdateKuganeTowerClimbing(sightseeingInZone);
+                    break;
+
+                case State.GateRoute:
+                    UpdateGateRoute();
                     break;
             }
         }
@@ -787,6 +822,7 @@ public sealed class SightseeingAutomation
         lastPathRetryAt = DateTime.MinValue;
         hasEnsuredExactPosition = false;
         currentLegAllowsFlying = true;
+        pendingGateRouteAfterMount = null;
         currentPuzzle = Plugin.TryGetSightseeingJumpingPuzzle(entry.Id, out var puzzle) ? puzzle : null;
         currentPuzzle = ResolvePuzzleWithPrerequisiteClimb(currentPuzzle);
         puzzleAttempts = 0;
@@ -883,6 +919,15 @@ public sealed class SightseeingAutomation
             currentTargetEntry = null;
             state = State.Idle;
             StatusText = Loc.T("Warte auf vnavmesh-Navmesh für diese Zone...", "Waiting for vnavmesh's navmesh for this zone...");
+            return;
+        }
+
+        // Siehe SightseeingGateRoutes-Kommentar - läuft nur EINMAL pro Anlauf (gateRouteCompletedForEntryId),
+        // da ResumeAfterGateRoute nach dem Öffnen des Tors selbst wieder BeginNavigateToEntry aufruft.
+        if (gateRouteCompletedForEntryId != entry.Id
+            && SightseeingGateRoutes.TryGetValue(entry.Name, out var gateRoute))
+        {
+            BeginGateRoute(gateRoute);
             return;
         }
 
@@ -1267,12 +1312,28 @@ public sealed class SightseeingAutomation
     {
         if (Plugin.Condition[ConditionFlag.Mounted])
         {
+            if (pendingGateRouteAfterMount is { } route)
+            {
+                pendingGateRouteAfterMount = null;
+                BeginGateRoute(route);
+                return;
+            }
+
             BeginPathfind();
             return;
         }
 
         if (DateTime.UtcNow - stateEnteredAt > MountWaitTimeout)
+        {
+            if (pendingGateRouteAfterMount is { } route)
+            {
+                pendingGateRouteAfterMount = null;
+                BeginGateRoute(route);
+                return;
+            }
+
             BeginPathfind();
+        }
     }
 
     private void UpdateMoving(IReadOnlyList<CollectibleEntry> entries)
@@ -1691,6 +1752,10 @@ public sealed class SightseeingAutomation
     private static readonly Dictionary<string, string> PreApproachTeleportAetheryteNames = new(StringComparer.OrdinalIgnoreCase)
     {
         ["Prism Lake"] = "The House of the Fierce", // Yanxia
+        // Nutzer-Report: "The Sunken Destroyer" (The Lochs) läuft beim direkten Anlauf (z.B. wenn man
+        // noch im Wasser steht) immer vom Punkt weg - stattdessen IMMER erst zu "Porta Praetoria"
+        // teleportieren, dann von dort aus ganz normal anlaufen.
+        ["The Sunken Destroyer"] = "Porta Praetoria", // The Lochs
     };
 
     /// <summary>Siehe PreApproachTeleportAetheryteNames-Kommentar - wie TryTeleportToAetheryteAfterCompletion, aber führt danach BeginNavigateToEntry statt FinishCurrent aus.</summary>
@@ -1743,6 +1808,232 @@ public sealed class SightseeingAutomation
     }
 
     /// <summary>
+    /// Manche Sightseeing-Punkte liegen hinter einem Tor, das erst ein NPC durch Ansprechen + Ja/Nein-
+    /// Bestätigung öffnet (Nutzer-Report "The Hidden Tunnel", The Lochs: zur Wache "Ala Mhigan
+    /// Resistance Gate Guard" laufen, ansprechen, Ja bestätigen, Ladeanimation abwarten) - danach läuft
+    /// BeginNavigateToEntry ganz normal weiter (mountet auf, läuft die hinterlegten Zwischenstopps
+    /// Plugin.SightseeingApproachWaypointsByName/den echten Zielpunkt
+    /// Plugin.SightseeingApproachOverridesByName an, siehe BeginNavigateToEntry-Aufruf in
+    /// ResumeAfterGateRoute). Key = Name des Sightseeing-Punkts, Wert = (Position vor dem Tor-NPC, Name
+    /// des NPCs). Gleiches Prinzip wie Plugin.AetherCurrentGateRoutes/QuestAutomation.GateGuardRoutes,
+    /// nur eigenständig hier, da Sightseeing-Punkte über ihren Anzeigenamen statt eine feste Id
+    /// identifiziert werden.
+    /// </summary>
+    private static readonly Dictionary<string, (Vector3 GatePosition, string NpcName)> SightseeingGateRoutes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["The Hidden Tunnel"] = (new Vector3(679.19556f, 70f, 513.458f), "Ala Mhigan Resistance Gate Guard"), // The Lochs
+    };
+
+    private const int GateMaxInteractAttempts = 3;
+    private const float GateObjectSearchRadius = 8f;
+    private static readonly TimeSpan GateDismountSettleDelay = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan GateInteractRetryInterval = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan GateLoadingTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>Siehe SightseeingGateRoutes-Kommentar - läuft zuerst ganz normal (auch beritten/fliegend) zur Position vor dem Tor-NPC, bevor UpdateGateRoute übernimmt.</summary>
+    private void BeginGateRoute((Vector3 GatePosition, string NpcName) route)
+    {
+        currentTargetPosition = route.GatePosition;
+
+        // Nutzer-Report: lief zu Fuß zum Wachposten statt zu fliegen - BeginGateRoute wird direkt aus
+        // BeginNavigateToEntry aufgerufen, VOR dessen eigenem (geteiltem) Mount-Aufruf am Ende der
+        // Methode, der hier wegen des frühen return nie erreicht wird. Ohne eigenen Mount-Versuch blieb
+        // der Charakter z.B. nach einem vorherigen Punkt, der absichtlich abgemountet hatte (siehe
+        // "The Ala Mhigan Quarter #2"), unberitten, wodurch TryBeginPathfindAccepted mangels Mount
+        // direkt auf Fußweg zurückfiel.
+        if (Plugin.TryRequestAetheryteMount())
+        {
+            pendingGateRouteAfterMount = route;
+            state = State.Mounting;
+            stateEnteredAt = DateTime.UtcNow;
+            StatusText = Loc.T($"Rufe Mount, dann: Wachposten ({currentTargetEntry?.Name})...", $"Summoning mount, then: gate guard ({currentTargetEntry?.Name})...");
+            return;
+        }
+
+        if (!TryBeginPathfindAccepted())
+        {
+            SkipCurrent(Loc.T("vnavmesh lehnt Laufweg zum Wachposten ab", "vnavmesh rejected the path to the gate guard"));
+            return;
+        }
+
+        activeGateRoute = route;
+        gatePhase = GatePhase.Approaching;
+        gateHasSeenPathRunning = false;
+        state = State.GateRoute;
+        stateEnteredAt = DateTime.UtcNow;
+        StatusText = Loc.T($"Laufe zum Wachposten: {currentTargetEntry?.Name}...", $"Walking to the gate guard: {currentTargetEntry?.Name}...");
+    }
+
+    /// <summary>
+    /// Läuft eine SightseeingGateRoute ab: abmounten, mit dem Wachposten-NPC interagieren, ein
+    /// aufkommendes Ja/Nein-Fenster bestätigen (auch mehrzeiligem Dialogtext davor, siehe
+    /// Plugin.TryAdvanceTalkDialogue), dann die Ladeanimation abwarten - danach ganz normal weiter
+    /// über BeginNavigateToEntry (siehe ResumeAfterGateRoute).
+    /// </summary>
+    private void UpdateGateRoute()
+    {
+        if (currentTargetEntry == null || activeGateRoute is not { } route)
+        {
+            state = State.Idle;
+            return;
+        }
+
+        switch (gatePhase)
+        {
+            case GatePhase.Approaching:
+            {
+                if (pathIsRunning.InvokeFunc())
+                {
+                    gateHasSeenPathRunning = true;
+                    if (DateTime.UtcNow - stateEnteredAt > StepMaxDuration)
+                        FailGateRoute("Laufweg zum Wachposten dauert zu lange", "Path to the gate guard is taking too long");
+
+                    return;
+                }
+
+                if (!gateHasSeenPathRunning)
+                    return;
+
+                gatePhase = GatePhase.Interacting;
+                gateInteractAttempts = 0;
+                gateDismountedAt = null;
+                stateEnteredAt = DateTime.UtcNow;
+                StatusText = Loc.T($"Spreche mit dem Wachposten: {currentTargetEntry.Name}...", $"Talking to the gate guard: {currentTargetEntry.Name}...");
+                return;
+            }
+
+            case GatePhase.Interacting:
+            {
+                if (Plugin.TryConfirmSelectYesno())
+                {
+                    gatePhase = GatePhase.WaitingForLoadingScreen;
+                    gateHasSeenLoadingScreen = false;
+                    gateLoadingEndedAt = null;
+                    stateEnteredAt = DateTime.UtcNow;
+                    StatusText = Loc.T($"Warte auf Ladeanimation: {currentTargetEntry.Name}...", $"Waiting for the loading animation: {currentTargetEntry.Name}...");
+                    return;
+                }
+
+                // Zwischen Interact und der Ja/Nein-Abfrage kommt erst noch mehrzeiliger Dialogtext.
+                Plugin.TryAdvanceTalkDialogue();
+
+                if (Plugin.Condition[ConditionFlag.Mounted])
+                {
+                    Plugin.TryDismount();
+                    gateDismountedAt = null;
+                    return;
+                }
+
+                gateDismountedAt ??= DateTime.UtcNow;
+                if (DateTime.UtcNow - gateDismountedAt.Value < GateDismountSettleDelay)
+                    return;
+
+                if (gateInteractAttempts > 0 && DateTime.UtcNow - gateInteractedAt < GateInteractRetryInterval)
+                    return;
+
+                if (gateInteractAttempts >= GateMaxInteractAttempts)
+                {
+                    FailGateRoute("Wachposten reagiert nicht", "The gate guard does not respond");
+                    return;
+                }
+
+                if (DateTime.UtcNow - stateEnteredAt > StepMaxDuration)
+                {
+                    FailGateRoute("Wachposten nicht gefunden", "Gate guard not found");
+                    return;
+                }
+
+                var npc = FindNearestGateRouteNpc(route.GatePosition, GateObjectSearchRadius, route.NpcName);
+                if (npc == null)
+                    return;
+
+                if (!Plugin.IsCurrentTarget(npc))
+                {
+                    Plugin.SetTarget(npc);
+                    return;
+                }
+
+                Plugin.Log.Info($"[SightseeingAutomation] UpdateGateRoute({currentTargetEntry.Name}): interagiere mit '{npc.Name}'.");
+                Plugin.InteractWithGameObject(npc);
+                gateInteractAttempts++;
+                gateInteractedAt = DateTime.UtcNow;
+                return;
+            }
+
+            case GatePhase.WaitingForLoadingScreen:
+            {
+                // Falls das Fenster ein zweites Mal kommt (siehe NoFlyAreaExit.UpdateWaitingForExit).
+                Plugin.TryConfirmSelectYesno();
+
+                var loading = Plugin.Condition[ConditionFlag.BetweenAreas] || Plugin.Condition[ConditionFlag.BetweenAreas51];
+                if (loading)
+                    gateHasSeenLoadingScreen = true;
+
+                if (loading || !gateHasSeenLoadingScreen)
+                {
+                    gateLoadingEndedAt = null;
+                    if (DateTime.UtcNow - stateEnteredAt > GateLoadingTimeout)
+                        ResumeAfterGateRoute();
+
+                    return;
+                }
+
+                // Direkt nach Ende der Ladeanimation ist der Charakter noch nicht wieder voll "steuerbar".
+                gateLoadingEndedAt ??= DateTime.UtcNow;
+                if (DateTime.UtcNow - gateLoadingEndedAt.Value < GateDismountSettleDelay)
+                    return;
+
+                ResumeAfterGateRoute();
+                return;
+            }
+        }
+    }
+
+    private void ResumeAfterGateRoute()
+    {
+        var entry = currentTargetEntry;
+        activeGateRoute = null;
+        if (entry == null)
+        {
+            state = State.Idle;
+            return;
+        }
+
+        gateRouteCompletedForEntryId = entry.Id;
+        BeginNavigateToEntry(entry);
+    }
+
+    private void FailGateRoute(string de, string en)
+    {
+        activeGateRoute = null;
+        SkipCurrent(Loc.T(de, en));
+    }
+
+    /// <summary>Wie QuestAutomation.FindNearestGateGuardObject - ein Wachposten-NPC ist ein echter Charakter (ICharacter), nicht statisch, daher ohne ObjectKind-Einschränkung.</summary>
+    private static Dalamud.Game.ClientState.Objects.Types.IGameObject? FindNearestGateRouteNpc(Vector3 nearPosition, float maxDistance, string npcName)
+    {
+        Dalamud.Game.ClientState.Objects.Types.IGameObject? nearest = null;
+        var bestDistance = maxDistance;
+
+        foreach (var obj in Plugin.ObjectTable)
+        {
+            if (!obj.IsTargetable)
+                continue;
+            if (!string.Equals(obj.Name.TextValue, npcName, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var distance = Vector3.Distance(obj.Position, nearPosition);
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                nearest = obj;
+            }
+        }
+
+        return nearest;
+    }
+
+    /// <summary>
     /// Nach Erledigen eines Punkts MIT von Hand hinterlegten Rückweg-Zwischenstopps (siehe Plugin.
     /// SightseeingPostCompletionWaypoints, z.B. Summerford Farms) erst zu Fuß der Reihe nach dorthin,
     /// statt direkt loszufliegen - der enge Anflugweg (Tür/Wand) muss zu Fuß auch wieder raus. Nur,
@@ -1769,10 +2060,33 @@ public sealed class SightseeingAutomation
     {
         [613] = "Onokoro", // The Ruby Sea
         [622] = "The Dawn Throne", // The Azim Steppe
+        // Nutzer-Report: "The Sunken Destroyer" (The Lochs) soll danach zu "Porta Praetoria" zurück.
+        [621] = "Porta Praetoria", // The Lochs
+    };
+
+    /// <summary>
+    /// Wie PostCompletionTeleportAetheryteWhenDiving, aber punktgenau statt zonen-/tauch-gebunden -
+    /// Nutzer-Report "The Hidden Tunnel" (The Lochs): IMMER nach diesem Punkt zu "The Ala Mhigan
+    /// Quarter" zurückteleportieren, unabhängig vom Diving-Status. Key = Name des Sightseeing-Punkts,
+    /// Wert = Name des Ziel-Ätheryten. Wird VOR PostCompletionTeleportAetheryteWhenDiving geprüft (am
+    /// spezifischsten).
+    /// </summary>
+    private static readonly Dictionary<string, string> PostCompletionTeleportAetheryteNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["The Hidden Tunnel"] = "The Ala Mhigan Quarter", // The Lochs
+        ["The Ala Mhigan Quarter #2"] = "The Ala Mhigan Quarter", // The Lochs
     };
 
     private void TryWalkOutOrFinish(IReadOnlyList<CollectibleEntry> entries)
     {
+        if (currentTargetEntry != null
+            && PostCompletionTeleportAetheryteNames.TryGetValue(currentTargetEntry.Name, out var namedTeleportAetheryteName))
+        {
+            Plugin.Log.Info($"[SightseeingAutomation] TryWalkOutOrFinish({currentTargetEntry.Name}): teleportiere zu \"{namedTeleportAetheryteName}\", statt normal weiterzulaufen.");
+            TryTeleportToAetheryteAfterCompletion(namedTeleportAetheryteName);
+            return;
+        }
+
         if (currentTargetEntry != null
             && Plugin.Condition[ConditionFlag.Diving]
             && PostCompletionTeleportAetheryteWhenDiving.TryGetValue(Plugin.ResolveEffectiveTerritoryId(Plugin.ClientState.TerritoryType), out var teleportAetheryteName))
