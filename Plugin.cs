@@ -374,8 +374,79 @@ public sealed class Plugin : IDalamudPlugin
     public static bool HasMissingRequiredDependency() =>
         Dependencies.Any(d => d.Required && !IsDependencySatisfied(d.InternalName, d.Group));
 
-    public static bool IsPluginLoaded(string internalName) =>
-        PluginInterface.InstalledPlugins.Any(p => p.InternalName == internalName && p.IsLoaded);
+    /// <summary>Anzahl der Pflicht-Probleme (Plugin ODER Gruppe) - für den Sidebar-Badge/die Statusbanner-Überschrift. Eine unerfüllte Gruppe (z.B. Combat) zählt dabei nur EINMAL, nicht pro Mitglied.</summary>
+    public static int MissingRequiredDependencyCount() =>
+        Dependencies.Where(d => d.Required && !IsDependencySatisfied(d.InternalName, d.Group))
+            .Select(d => d.Group ?? d.InternalName)
+            .Distinct()
+            .Count();
+
+    /// <summary>"Gesperrt - fehlende Plugins: Lifestream, Saucy (deaktiviert)" - für den Tooltip der im Overlay gesperrten Auto-Knöpfe (siehe CodexOverlayWindow.DrawAutoButton).</summary>
+    public static string BuildMissingDependenciesTooltip()
+    {
+        var names = Dependencies
+            .Where(d => d.Required)
+            .GroupBy(d => d.Group ?? d.InternalName)
+            .Where(g => !g.Any(d => IsDependencySatisfied(d.InternalName, d.Group)))
+            .Select(g =>
+            {
+                if (g.Key == CombatDependencyGroup)
+                    return Loc.T("Kampf-Plugin", "Combat plugin");
+
+                var d = g.First();
+                return GetDependencyStatus(d.InternalName) == DependencyStatus.Disabled
+                    ? Loc.T($"{d.DisplayName} (deaktiviert)", $"{d.DisplayName} (disabled)")
+                    : d.DisplayName;
+            });
+
+        return Loc.T($"Gesperrt - fehlende Plugins: {string.Join(", ", names)}", $"Locked - missing plugins: {string.Join(", ", names)}");
+    }
+
+    // Nutzeranforderung: Plugin-Status höchstens 1x/Sekunde neu ermitteln statt bei jedem UI-Frame neu
+    // über InstalledPlugins zu iterieren (das hier gezeichnete Plugins-Seite/Overlay/Sidebar-Badge
+    // fragen ihn mehrfach pro Frame ab). Ändert sich der tatsächliche Plugin-Zustand, wirkt das
+    // spätestens eine Sekunde später, ohne Neustart.
+    private static readonly TimeSpan DependencyStatusCacheInterval = TimeSpan.FromSeconds(1);
+    private static readonly Dictionary<string, (DateTime CachedAtUtc, bool Loaded)> pluginLoadedCache = new();
+    private static readonly Dictionary<string, (DateTime CachedAtUtc, DependencyStatus Status)> dependencyStatusCache = new();
+
+    public static bool IsPluginLoaded(string internalName)
+    {
+        var now = DateTime.UtcNow;
+        if (pluginLoadedCache.TryGetValue(internalName, out var cached) && now - cached.CachedAtUtc < DependencyStatusCacheInterval)
+            return cached.Loaded;
+
+        var loaded = PluginInterface.InstalledPlugins.Any(p => p.InternalName == internalName && p.IsLoaded);
+        pluginLoadedCache[internalName] = (now, loaded);
+        return loaded;
+    }
+
+    /// <summary>Zustand eines einzelnen Begleit-Plugins - "Disabled" meint installiert, aber gerade nicht geladen (Nutzer hat es in /xlplugins ausgeschaltet).</summary>
+    public enum DependencyStatus
+    {
+        Installed,
+        Disabled,
+        Missing,
+    }
+
+    /// <summary>
+    /// Wie IsPluginLoaded, aber mit der vollen Installed/Disabled/Missing-Unterscheidung statt nur
+    /// "geladen ja/nein" (Nutzeranforderung: Plugins-Seite soll fehlende von nur deaktivierten Plugins
+    /// unterscheiden, statt beide gleich als "Installieren" zu behandeln). Dalamud liefert dafür keinen
+    /// direkten Wert - IExposedPlugin hat nur InternalName+IsLoaded - daher: gar nicht in
+    /// InstalledPlugins gefunden = Missing, gefunden aber IsLoaded=false = Disabled.
+    /// </summary>
+    public static DependencyStatus GetDependencyStatus(string internalName)
+    {
+        var now = DateTime.UtcNow;
+        if (dependencyStatusCache.TryGetValue(internalName, out var cached) && now - cached.CachedAtUtc < DependencyStatusCacheInterval)
+            return cached.Status;
+
+        var plugin = PluginInterface.InstalledPlugins.FirstOrDefault(p => p.InternalName == internalName);
+        var status = plugin == null ? DependencyStatus.Missing : plugin.IsLoaded ? DependencyStatus.Installed : DependencyStatus.Disabled;
+        dependencyStatusCache[internalName] = (now, status);
+        return status;
+    }
 
     /// <summary>Installiert - oder (bei einer Gruppe, siehe CombatDependencyGroup) ein anderes Plugin derselben Gruppe.</summary>
     public static bool IsDependencySatisfied(string internalName, string? group) =>
@@ -7082,6 +7153,17 @@ public sealed class Plugin : IDalamudPlugin
             return;
         automationsUpdatedForFrame = frame;
 
+        // Nutzeranforderung: läuft gerade eine Automation und ein Pflicht-Plugin wird währenddessen
+        // entladen/deaktiviert, sofort ALLE Automationen stoppen (Meldung in Log und Chat), statt mit
+        // einem fehlenden Aufruf kaputt weiterzulaufen - die Auto-Knöpfe im Overlay sind in diesem
+        // Zustand ohnehin gesperrt (siehe CodexOverlayWindow.DrawAutoButton), daher hier zusätzlich
+        // auch kein einziges Automations-Update mehr ausgeführt, solange blockiert ist.
+        if (HasMissingRequiredDependency())
+        {
+            StopAllZoneAutomationsForMissingDependency();
+            return;
+        }
+
         // ACHTUNG: der automatische, zeitgesteuerte Aufruf von CleanUpToDoList wurde WIEDER entfernt
         // (Nutzer-Report: die ToDo-Liste wurde trotz vorheriger Fixes [Index-Zuordnung per (Type,Id)
         // statt Listenposition, Sicherheitsnetz gegen Alles-auf-einmal-Löschen] erneut leer) - die
@@ -7196,6 +7278,44 @@ public sealed class Plugin : IDalamudPlugin
 
         if (!exitingNoFlyArea && !ToDoCrossZoneTraveler.IsBusy)
             GoToAutomation.Update();
+    }
+
+    /// <summary>
+    /// Siehe UpdateZoneAutomations-Kommentar - stoppt jede gerade AKTIVE Automation (nur die, die
+    /// wirklich liefen, andere bleiben unangetastet) und meldet das genau EINMAL in Log und Chat, wenn
+    /// dabei tatsächlich etwas gestoppt wurde. Läuft in den Frames DANACH (während weiterhin blockiert)
+    /// erneut, meldet dann aber nichts mehr, da ab da nichts Aktives mehr übrig ist - kein zusätzliches
+    /// "schon gemeldet"-Flag nötig.
+    /// </summary>
+    private void StopAllZoneAutomationsForMissingDependency()
+    {
+        var stoppedAny = false;
+        void StopIfActive(bool isActive, System.Action stop)
+        {
+            if (!isActive)
+                return;
+            stop();
+            stoppedAny = true;
+        }
+
+        StopIfActive(QuestAutomation.IsActive, QuestAutomation.Stop);
+        StopIfActive(AetheryteAutomation.IsActive, AetheryteAutomation.Stop);
+        StopIfActive(HuntingLogAutomation.IsActive, HuntingLogAutomation.Stop);
+        StopIfActive(AetherCurrentAutomation.IsActive, AetherCurrentAutomation.Stop);
+        StopIfActive(SightseeingAutomation.IsActive, SightseeingAutomation.Stop);
+        StopIfActive(ChocobokeepAutomation.IsActive, ChocobokeepAutomation.Stop);
+        StopIfActive(TripleTriadAutomation.IsActive, TripleTriadAutomation.Stop);
+        StopIfActive(GoToAutomation.ActiveEntry != null, GoToAutomation.Cancel);
+
+        if (!stoppedAny)
+            return;
+
+        var missing = string.Join(", ", Dependencies.Where(d => d.Required && !IsDependencySatisfied(d.InternalName, d.Group)).Select(d => d.DisplayName));
+        var message = Loc.T(
+            $"Automationen gestoppt - benötigtes Plugin fehlt oder ist deaktiviert: {missing}.",
+            $"Automations stopped - required plugin missing or disabled: {missing}.");
+        Log.Warning($"[Plugin] {message}");
+        ChatGui.Print($"[The Explorer's Codex] {message}");
     }
 
     /// <summary>Ein Auto-Knopf der Overlay-Knopfreihe (siehe GetZoneAutomationButtons) - Abschnitt 5.2 der neuen Design-Spezifikation.</summary>

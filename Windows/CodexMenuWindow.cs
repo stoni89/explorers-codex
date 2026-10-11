@@ -52,6 +52,13 @@ public class CodexMenuWindow : Window
 
     private MenuPage activePage = MenuPage.General;
 
+    /// <summary>Für den Overlay-Warnhinweis bei gesperrten Auto-Knöpfen (siehe CodexOverlayWindow.DrawAutoButtonsRow) - öffnet das Menü direkt auf der Plugins-Seite.</summary>
+    public void OpenToPluginsPage()
+    {
+        activePage = MenuPage.Plugins;
+        IsOpen = true;
+    }
+
     // Resize deaktiviert (Nutzeranforderung) - die feste Größe entspricht der zuletzt vom Nutzer
     // manuell eingestellten Fenstergröße (aus dalamudUI.ini: Size=1247,850), jetzt als fester Default
     // statt nur beim ersten Start übernommen.
@@ -331,7 +338,7 @@ public class CodexMenuWindow : Window
         CodexTheme.SectionLabel(Loc.T("SYSTEM", "SYSTEM"));
         ImGui.Dummy(new Vector2(0f, 6f * scale));
 
-        DrawNavItem(scale, MenuPage.Plugins, FontAwesomeIcon.Plug, Loc.T("Plugins", "Plugins"));
+        DrawNavItem(scale, MenuPage.Plugins, FontAwesomeIcon.Plug, Loc.T("Plugins", "Plugins"), badgeCount: Plugin.MissingRequiredDependencyCount());
 
         // Nutzeranforderung: Debug-Seite nur in der Dev-Version (Entwickler-Werkzeug, geht niemanden
         // in der installierten Version etwas an) - daher schon der Menüpunkt selbst ausgeblendet,
@@ -339,7 +346,7 @@ public class CodexMenuWindow : Window
         if (Plugin.PluginInterface.IsDev)
             DrawNavItem(scale, MenuPage.Debug, FontAwesomeIcon.Bug, Loc.T("Debug", "Debug"));
 
-        DrawNavItem(scale, MenuPage.Log, FontAwesomeIcon.FileAlt, Loc.T("Log", "Log"));
+        DrawNavItem(scale, MenuPage.Log, FontAwesomeIcon.Terminal, Loc.T("Log", "Log"));
         DrawNavItem(scale, MenuPage.Changelog, FontAwesomeIcon.FileAlt, Loc.T("Änderungen", "Changelog"),
             showNewBadge: ChangelogService.HasUnseenChangelog(plugin.Configuration));
         DrawNavItem(scale, MenuPage.About, FontAwesomeIcon.InfoCircle, Loc.T("Über", "About"));
@@ -399,7 +406,7 @@ public class CodexMenuWindow : Window
         }
     }
 
-    private void DrawNavItem(float scale, MenuPage page, FontAwesomeIcon icon, string label, bool showNewBadge = false)
+    private void DrawNavItem(float scale, MenuPage page, FontAwesomeIcon icon, string label, bool showNewBadge = false, int? badgeCount = null)
     {
         var selected = activePage == page;
 
@@ -441,6 +448,8 @@ public class CodexMenuWindow : Window
 
         if (showNewBadge)
             DrawNavNewBadge(scale, cursor, width, height);
+        if (badgeCount is > 0)
+            DrawNavCountBadge(scale, cursor, width, height, badgeCount.Value);
 
         if (clicked)
             activePage = page;
@@ -474,6 +483,29 @@ public class CodexMenuWindow : Window
 
         using (CodexTheme.FontChangelogTag.Push())
             drawList.AddText(new Vector2(badgeCursor.X + padding.X + diamondSize + diamondGap, badgeCursor.Y + padding.Y), ImGui.GetColorU32(CodexTheme.TextOnAccent), label);
+    }
+
+    /// <summary>Rundes Zahlen-Badge rechtsbündig in einem Menüpunkt (Plugins, Anzahl der Pflicht-Probleme) - Err-Fläche + dunkler Text
+    /// (CodexTheme.TextOnAccent, dieselbe "#1A1208"-Vorgabe wie der goldene Akzent-Text) - Nutzeranforderung: bei 0 kein Badge (siehe Aufrufer).</summary>
+    private static void DrawNavCountBadge(float scale, Vector2 itemCursor, float itemWidth, float itemHeight, int count)
+    {
+        var label = count.ToString();
+        float textWidth, textHeight;
+        using (CodexTheme.FontChangelogTag.Push())
+        {
+            var size = ImGui.CalcTextSize(label);
+            textWidth = size.X;
+            textHeight = size.Y;
+        }
+
+        var diameter = MathF.Max(16f * scale, textHeight + 6f * scale);
+        var badgeCenter = new Vector2(itemCursor.X + itemWidth - 12f * scale - diameter / 2f, itemCursor.Y + itemHeight / 2f);
+
+        var drawList = ImGui.GetWindowDrawList();
+        drawList.AddCircleFilled(badgeCenter, diameter / 2f, ImGui.GetColorU32(CodexTheme.ErrFg), 24);
+
+        using (CodexTheme.FontChangelogTag.Push())
+            drawList.AddText(badgeCenter - new Vector2(textWidth, textHeight) / 2f, ImGui.GetColorU32(CodexTheme.TextOnAccent), label);
     }
 
     /// <summary>Titel+Untertitel des gemeinsamen Seitenkopfs (siehe DrawContent) - je MenuPage, ohne About
@@ -1657,13 +1689,12 @@ public class CodexMenuWindow : Window
 
         CodexTheme.CardDivider(scale);
 
+        // Nutzeranforderung: der gespeicherte Wert bleibt erhalten (NICHT mehr automatisch
+        // zurückgesetzt/gespeichert, wenn Allagan Tools gerade fehlt) - er wirkt nur so lange nicht,
+        // bis das Plugin wieder da ist (effektiv geprüft über Plugin.IsAllaganToolsAvailable() an
+        // jeder Verbrauchsstelle, siehe dortigen Kommentar), dann gilt automatisch wieder der
+        // zuvor eingestellte Wert.
         var allaganToolsAvailable = Plugin.IsAllaganToolsAvailable();
-        if (config.EnableAllaganToolsIntegration && !allaganToolsAvailable)
-        {
-            config.EnableAllaganToolsIntegration = false;
-            config.Save();
-        }
-
         if (!allaganToolsAvailable)
             ImGui.BeginDisabled();
         var enableAllaganTools = config.EnableAllaganToolsIntegration;
@@ -1677,8 +1708,19 @@ public class CodexMenuWindow : Window
         if (!allaganToolsAvailable)
         {
             ImGui.EndDisabled();
-            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-                ImGui.SetTooltip(Loc.T("Allagan Tools ist nicht installiert.", "Allagan Tools is not installed."));
+            // Nutzeranforderung: Hinweiszeile + "Plugins öffnen"-Link statt nur eines Tooltips.
+            using (CodexTheme.FontBodySmall.Push())
+            {
+                var hintText = Loc.T("Benötigt Allagan Tools - installiere es, um diese Option zu nutzen.", "Requires Allagan Tools - install it to use this option.");
+                ImGui.TextColored(CodexTheme.TextMuted, hintText);
+                ImGui.SameLine(0f, 6f * scale);
+                var linkText = Loc.T("Plugins öffnen", "Open Plugins");
+                ImGui.TextColored(CodexTheme.Accent, linkText);
+                if (ImGui.IsItemHovered())
+                    ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
+                if (ImGui.IsItemClicked())
+                    Plugin.Instance.CodexMenuWindow.OpenToPluginsPage();
+            }
         }
 
         CodexTheme.CardDivider(scale);
@@ -1899,10 +1941,13 @@ public class CodexMenuWindow : Window
         var total = Plugin.Dependencies.Length;
         var installedCount = Plugin.Dependencies.Count(d => Plugin.IsPluginLoaded(d.InternalName));
         var ready = !Plugin.HasMissingRequiredDependency();
+        var problemCount = Plugin.MissingRequiredDependencyCount();
 
-        var bg = ready ? CodexTheme.OkBg : CodexTheme.WarnBg;
-        var border = ready ? CodexTheme.OkLine : CodexTheme.WarnLine;
-        var fg = ready ? CodexTheme.OkFg : CodexTheme.WarnFg;
+        // Nutzeranforderung: Err- statt Warn-Farben für den "nicht bereit"-Zustand (unterscheidet sich
+        // jetzt bewusst vom gelben Disabled-Zustand einzelner Zeilen weiter unten).
+        var bg = ready ? CodexTheme.OkBg : CodexTheme.ErrBg;
+        var border = ready ? CodexTheme.OkLine : CodexTheme.ErrLine;
+        var fg = ready ? CodexTheme.OkFg : CodexTheme.ErrFg;
 
         string boldPart, restPart;
         if (ready)
@@ -1913,16 +1958,10 @@ public class CodexMenuWindow : Window
         }
         else
         {
-            var missingNames = Plugin.Dependencies
-                .Where(d => d.Required && !Plugin.IsDependencySatisfied(d.InternalName, d.Group))
-                .Select(d => d.Group ?? d.InternalName)
-                .Distinct()
-                .Select(key => key == Plugin.CombatDependencyGroup
-                    ? Loc.T("Kampf-Plugin", "Combat plugin")
-                    : Plugin.Dependencies.First(d => d.InternalName == key).DisplayName)
-                .ToList();
-            boldPart = Loc.T($"Fehlt: {string.Join(", ", missingNames)}.", $"Missing: {string.Join(", ", missingNames)}.");
-            restPart = Loc.T("Automation ist deaktiviert, bis es installiert ist.", "Automation is disabled until it is installed.");
+            boldPart = Loc.T(
+                $"{problemCount} Plugin(s) benötigen Aufmerksamkeit - Automatiken sind gesperrt",
+                $"{problemCount} plugin{(problemCount == 1 ? "" : "s")} need attention - automations are locked");
+            restPart = Loc.T("Installiere oder aktiviere sie, die Auto-Knöpfe werden sofort wieder freigegeben.", "Install or enable them, the auto buttons unlock right away.");
         }
 
         var availWidth = width;
@@ -1934,7 +1973,16 @@ public class CodexMenuWindow : Window
         using (CodexTheme.FontBodyBold.Push())
             textHeight = ImGui.GetFontSize();
         var iconSize = 20f * scale;
-        var rowHeight = MathF.Max(iconSize, textHeight) + paddingY * 2f;
+
+        var buttonLabel = Loc.T("/xlplugins öffnen", "Open /xlplugins");
+        Vector2 buttonSize = default;
+        if (!ready)
+        {
+            using (CodexTheme.FontLogGhostButton.Push())
+                buttonSize = new Vector2(ImGui.CalcTextSize(buttonLabel).X + 12f * scale * 2f, 31f * scale);
+        }
+
+        var rowHeight = MathF.Max(MathF.Max(iconSize, textHeight) + paddingY * 2f, buttonSize.Y + paddingY * 2f);
 
         var cursor = ImGui.GetCursorScreenPos();
         var drawList = ImGui.GetWindowDrawList();
@@ -1962,13 +2010,11 @@ public class CodexMenuWindow : Window
 
         if (!ready)
         {
-            var firstMissing = Plugin.Dependencies.First(d => d.Required && !Plugin.IsDependencySatisfied(d.InternalName, d.Group));
-            var buttonSize = MeasureInstallButton(scale);
             var buttonX = cursor.X + availWidth - paddingX - buttonSize.X;
             var buttonY = cursor.Y + (rowHeight - buttonSize.Y) / 2f;
             ImGui.SetCursorScreenPos(new Vector2(buttonX, buttonY));
-            if (DrawInstallButton(scale, "##CodexPluginsBannerInstall", buttonSize))
-                Plugin.PluginInterface.OpenPluginInstallerTo(PluginInstallerOpenKind.AllPlugins, firstMissing.DisplayName);
+            if (DrawLogGhostButton(scale, "##CodexPluginsOpenInstaller", buttonLabel, buttonSize.X, active: false))
+                Plugin.PluginInterface.OpenPluginInstallerTo(PluginInstallerOpenKind.InstalledPlugins);
         }
 
         ImGui.SetCursorScreenPos(cursor + new Vector2(0f, rowHeight));
@@ -1979,43 +2025,110 @@ public class CodexMenuWindow : Window
         DrawPluginGroupHeader(scale, Loc.T("Kampf-Plugin", "Combat plugin"),
             Loc.T("EINS ERFORDERLICH", "ONE REQUIRED"), CodexTheme.TextCardTitle, CodexTheme.LineFrame, CodexTheme.BgSelected);
 
-        var effective = CombatPluginBridge.GetEffective();
         var combatEntries = Plugin.Dependencies.Where(d => d.Group == Plugin.CombatDependencyGroup).ToArray();
+        var satisfiedIndex = Array.FindIndex(combatEntries, e => Plugin.IsPluginLoaded(e.InternalName));
 
-        // Nutzeranforderung: derselbe rechte Randabstand wie bei den anderen Gruppen auf dieser Seite
-        // (siehe DrawPluginsPage.PluginsPageRightMargin) - über die feste Außenbreite der Tabelle.
-        ImGui.PushStyleVar(ImGuiStyleVar.CellPadding, new Vector2(6f * scale, 0f));
-        if (ImGui.BeginTable("##CodexPluginsCombatTable", 2, ImGuiTableFlags.None, new Vector2(width, 0f)))
+        // Nutzeranforderung: EINE gemeinsame Zeile für die ganze Gruppe statt einer eigenen Zeile je
+        // Kandidat (siehe DrawCombatPluginRow) - derselbe rechte Randabstand wie bei den anderen
+        // Gruppen auf dieser Seite (siehe DrawPluginsPage.PluginsPageRightMargin).
+        if (ImGui.BeginTable("##CodexPluginsCombatTable", 1, ImGuiTableFlags.None, new Vector2(width, 0f)))
         {
-            ImGui.TableSetupColumn("##CodexPluginsCombatCol0", ImGuiTableColumnFlags.WidthStretch, 1f);
-            ImGui.TableSetupColumn("##CodexPluginsCombatCol1", ImGuiTableColumnFlags.WidthStretch, 1f);
-            ImGui.TableNextRow();
-
-            foreach (var entry in combatEntries)
-            {
-                ImGui.TableNextColumn();
-                var installed = Plugin.IsPluginLoaded(entry.InternalName);
-                var kind = entry.InternalName == CombatPluginBridge.RotationSolverInternalName
-                    ? CombatPluginKind.RotationSolver
-                    : CombatPluginKind.WrathCombo;
-                var selected = effective == kind;
-                var description = selected
-                    ? Loc.T("Für die Automation ausgewählt", "Selected for automation")
-                    : Loc.T("Alternatives Kampf-Plugin", "Alternative combat plugin");
-
-                // Nutzeranforderung: der goldene Strich beim ausgewählten Kampf-Plugin geht jetzt bis
-                // ganz nach links an den Kartenrand und über die volle Kartenhöhe (siehe
-                // CodexTheme.BeginCard.accentBar), statt nur über die (schmalere, eingerückte)
-                // Zeilenhöhe wie vorher.
-                CodexTheme.BeginCard(scale, accentBar: selected);
-                if (DrawPluginRow(scale, entry.DisplayName, description, installed))
-                    Plugin.PluginInterface.OpenPluginInstallerTo(PluginInstallerOpenKind.AllPlugins, entry.DisplayName);
-                CodexTheme.EndCard();
-            }
-
+            ImGui.TableNextColumn();
+            CodexTheme.BeginCard(scale);
+            DrawCombatPluginRow(scale, combatEntries, satisfiedIndex);
+            CodexTheme.EndCard();
             ImGui.EndTable();
         }
-        ImGui.PopStyleVar();
+    }
+
+    /// <summary>
+    /// Kampf-Plugin-Gruppe als EINE Zeile statt je einer pro Kandidat (Nutzeranforderung) - rechts
+    /// entweder der Name des gefundenen Plugins ("Wrath Combo ✓") oder, wenn keins geladen ist, ein
+    /// kleiner Install-Link je Kandidat.
+    /// </summary>
+    private static void DrawCombatPluginRow(float scale,
+        (string InternalName, string DisplayName, string DescriptionDe, string DescriptionEn, bool Required, string? Group)[] entries, int satisfiedIndex)
+    {
+        var satisfied = satisfiedIndex >= 0;
+        var rowStartY = ImGui.GetCursorPosY();
+        var rowStartX = ImGui.GetCursorPosX();
+        var rightEdge = rowStartX + ImGui.GetContentRegionAvail().X;
+
+        var dotSize = 26f * scale;
+        float nameHeight, descHeight;
+        using (CodexTheme.FontPluginName.Push())
+            nameHeight = ImGui.GetFontSize();
+        using (CodexTheme.FontPluginDescription.Push())
+            descHeight = ImGui.GetFontSize();
+        var textBlockHeight = nameHeight + descHeight;
+
+        var verticalPadding = 3f * scale;
+        var height = MathF.Max(dotSize, textBlockHeight) + verticalPadding * 2f - 17f * scale;
+
+        if (!satisfied)
+        {
+            var rowMin = ImGui.GetCursorScreenPos();
+            ImGui.GetWindowDrawList().AddRectFilled(rowMin, rowMin + new Vector2(2f * scale, height), ImGui.GetColorU32(CodexTheme.ErrFg));
+        }
+
+        ImGui.SetCursorPosY(rowStartY + (height - dotSize) / 2f);
+        DrawPluginStatusDot(scale, satisfied ? Plugin.DependencyStatus.Installed : Plugin.DependencyStatus.Missing);
+
+        ImGui.SameLine(0f, 12f * scale);
+        var textX = ImGui.GetCursorPosX();
+
+        ImGui.SetCursorPosY(rowStartY + (height - textBlockHeight) / 2f);
+        using (CodexTheme.FontPluginName.Push())
+            ImGui.TextColored(CodexTheme.TextPrimary, Loc.T("Kampf-Plugin", "Combat plugin"));
+        ImGui.SetCursorPosX(textX);
+        ImGui.SetCursorPosY(ImGui.GetCursorPosY() - 14f * scale);
+        using (CodexTheme.FontPluginDescription.Push())
+            ImGui.TextColored(CodexTheme.TextMuted,
+                Loc.T($"{entries[0].DisplayName} oder {entries[1].DisplayName} - eins davon reicht", $"{entries[0].DisplayName} or {entries[1].DisplayName} - one of them is enough"));
+
+        if (satisfied)
+        {
+            var label = $"{entries[satisfiedIndex].DisplayName} ✓";
+            float labelWidth, textHeight;
+            using (CodexTheme.FontPluginInstalledLabel.Push())
+            {
+                var size = ImGui.CalcTextSize(label);
+                labelWidth = size.X;
+                textHeight = size.Y;
+            }
+            var rightX = rightEdge - labelWidth - 20f * scale;
+            ImGui.SetCursorPos(new Vector2(rightX, rowStartY + (height - textHeight) / 2f));
+            using (CodexTheme.FontPluginInstalledLabel.Push())
+                ImGui.TextColored(CodexTheme.OkFg, label);
+        }
+        else
+        {
+            var linkGap = 14f * scale;
+            var sizes = new Vector2[entries.Length];
+            using (CodexTheme.FontPluginInstalledLabel.Push())
+            {
+                for (var i = 0; i < entries.Length; i++)
+                    sizes[i] = ImGui.CalcTextSize(entries[i].DisplayName);
+            }
+            var totalWidth = sizes.Sum(s => s.X) + linkGap * (entries.Length - 1);
+            var x = rightEdge - totalWidth - 20f * scale;
+            for (var i = 0; i < entries.Length; i++)
+            {
+                var pos = new Vector2(x, rowStartY + (height - sizes[i].Y) / 2f);
+                ImGui.SetCursorPos(pos);
+                var clicked = ImGui.InvisibleButton($"##CodexCombatInstall{i}", sizes[i]);
+                var hovered = ImGui.IsItemHovered();
+                using (CodexTheme.FontPluginInstalledLabel.Push())
+                    ImGui.GetWindowDrawList().AddText(ImGui.GetItemRectMin(), ImGui.GetColorU32(CodexTheme.ErrFg), entries[i].DisplayName);
+                if (hovered)
+                    ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
+                if (clicked)
+                    Plugin.PluginInterface.OpenPluginInstallerTo(PluginInstallerOpenKind.AllPlugins, entries[i].DisplayName);
+                x += sizes[i].X + linkGap;
+            }
+        }
+
+        ImGui.SetCursorPosY(rowStartY + height);
     }
 
     private static void DrawRequiredPluginsGroup(float scale, float width)
@@ -2024,10 +2137,12 @@ public class CodexMenuWindow : Window
         var installedCount = requiredStandalone.Count(d => Plugin.IsPluginLoaded(d.InternalName));
         var ok = installedCount == requiredStandalone.Length;
 
+        // Nutzeranforderung: rotes (Err) statt gelbes Badge, sobald etwas in dieser Gruppe fehlt/
+        // deaktiviert ist.
         DrawPluginGroupHeader(scale, Loc.T("Erforderlich", "Required"), $"{installedCount} / {requiredStandalone.Length}",
-            ok ? CodexTheme.TextCardTitle : CodexTheme.WarnFg,
-            ok ? CodexTheme.LineFrame : CodexTheme.WarnLine,
-            ok ? CodexTheme.BgSelected : CodexTheme.WarnBg);
+            ok ? CodexTheme.TextCardTitle : CodexTheme.ErrFg,
+            ok ? CodexTheme.LineFrame : CodexTheme.ErrLine,
+            ok ? CodexTheme.BgSelected : CodexTheme.ErrBg);
 
         // Derselbe rechte Randabstand wie bei den anderen Gruppen (siehe
         // DrawPluginsPage.PluginsPageRightMargin), über eine Tabelle mit fester Außenbreite statt
@@ -2044,10 +2159,9 @@ public class CodexMenuWindow : Window
             for (var i = 0; i < requiredStandalone.Length; i++)
             {
                 var entry = requiredStandalone[i];
-                var installed = Plugin.IsPluginLoaded(entry.InternalName);
+                var status = Plugin.GetDependencyStatus(entry.InternalName);
                 var (de, en) = GetShortPluginDescription(entry.InternalName);
-                if (DrawPluginRow(scale, entry.DisplayName, Loc.T(de, en), installed))
-                    Plugin.PluginInterface.OpenPluginInstallerTo(PluginInstallerOpenKind.AllPlugins, entry.DisplayName);
+                DrawPluginRow(scale, entry.InternalName, entry.DisplayName, Loc.T(de, en), status, neutral: false);
                 if (i < requiredStandalone.Length - 1)
                     CodexTheme.CardDivider(scale);
             }
@@ -2070,10 +2184,10 @@ public class CodexMenuWindow : Window
             for (var i = 0; i < optional.Length; i++)
             {
                 var entry = optional[i];
-                var installed = Plugin.IsPluginLoaded(entry.InternalName);
+                var status = Plugin.GetDependencyStatus(entry.InternalName);
                 var (de, en) = GetShortPluginDescription(entry.InternalName);
-                if (DrawPluginRow(scale, entry.DisplayName, Loc.T(de, en), installed))
-                    Plugin.PluginInterface.OpenPluginInstallerTo(PluginInstallerOpenKind.AllPlugins, entry.DisplayName);
+                // Nutzeranforderung: Optional neutral statt rot/gelb (siehe DrawPluginRow-Kommentar).
+                DrawPluginRow(scale, entry.InternalName, entry.DisplayName, Loc.T(de, en), status, neutral: true);
                 if (i < optional.Length - 1)
                     CodexTheme.CardDivider(scale);
             }
@@ -2132,18 +2246,18 @@ public class CodexMenuWindow : Window
     }
 
     /// <summary>
-    /// Eine Plugin-Zeile: Status-Punkt links, Name (fett)+Beschreibung direkt darunter, rechts
-    /// "Installiert" oder ein Install-Knopf. Zeichnet KEINEN eigenen Kartenhintergrund (der kommt vom
-    /// Aufrufer, per CodexTheme.BeginCard/EndCard - entweder eine eigene kleine Karte je Kampf-Plugin,
-    /// oder eine gemeinsame Karte mit CardDivider zwischen den Zeilen). Die Höhe ergibt sich aus dem
-    /// Inhalt (Name+Beschreibung bzw. Status-Punkt, je nachdem was höher ist) statt eines festen
-    /// Werts. Rechtsbündige Elemente werden bewusst relativ zum bei Zeilenbeginn gemessenen
-    /// GetContentRegionAvail() positioniert statt zu GetWindowContentRegionMax() - Letzteres bezieht
-    /// sich auf das GANZE Fenster und ignoriert den aktuellen Einzug/die Tabellenspalte, wodurch
-    /// "Installed"/der Install-Knopf vorher rechts aus der (schmaleren) Box herausragten
-    /// (Nutzer-Report). Gibt true zurück, wenn der Install-Knopf gerade angeklickt wurde.
+    /// Eine Plugin-Zeile: Status-Punkt links, Name (fett)+Beschreibung direkt darunter, rechts je
+    /// Status (Installed/Disabled/Missing) ein Haken, ein "Enable"-Ghost-Knopf oder ein "Install"-
+    /// Knopf (öffnet den Dalamud-Plugin-Installer direkt - siehe frühere Variante, die das dem
+    /// Aufrufer per Rückgabewert überließ). "neutral" (Nutzeranforderung, Abschnitt OPTIONAL): Disabled/
+    /// Missing werden dann TextMuted/Ghost-Knopf statt Warn/Err-farbig dargestellt und bekommen keinen
+    /// linken Balken - für Allagan Tools, das als einziges optionales Plugin nicht "alarmieren" soll.
+    /// Zeichnet KEINEN eigenen Kartenhintergrund (der kommt vom Aufrufer, per CodexTheme.BeginCard/
+    /// EndCard). Die Höhe ergibt sich aus dem Inhalt. Rechtsbündige Elemente werden bewusst relativ
+    /// zum bei Zeilenbeginn gemessenen GetContentRegionAvail() positioniert statt zu
+    /// GetWindowContentRegionMax() (siehe früherer Nutzer-Report).
     /// </summary>
-    private static bool DrawPluginRow(float scale, string name, string description, bool installed)
+    private static void DrawPluginRow(float scale, string internalName, string name, string description, Plugin.DependencyStatus status, bool neutral)
     {
         var rowStartY = ImGui.GetCursorPosY();
         var rowStartX = ImGui.GetCursorPosX();
@@ -2161,8 +2275,17 @@ public class CodexMenuWindow : Window
         // Nochmal 10px, dann nochmal 7px kleiner (Nutzervorgabe).
         var height = MathF.Max(dotSize, textBlockHeight) + verticalPadding * 2f - 17f * scale;
 
+        // Nutzeranforderung: 2px farbiger Balken links bei Disabled/Missing - NICHT im neutralen
+        // (Optional-)Modus.
+        if (!neutral && status != Plugin.DependencyStatus.Installed)
+        {
+            var barColor = status == Plugin.DependencyStatus.Disabled ? CodexTheme.WarnFg : CodexTheme.ErrFg;
+            var rowMin = ImGui.GetCursorScreenPos();
+            ImGui.GetWindowDrawList().AddRectFilled(rowMin, rowMin + new Vector2(2f * scale, height), ImGui.GetColorU32(barColor));
+        }
+
         ImGui.SetCursorPosY(rowStartY + (height - dotSize) / 2f);
-        DrawPluginStatusDot(scale, installed);
+        DrawPluginStatusDot(scale, status, neutral);
 
         ImGui.SameLine(0f, 12f * scale);
         var textX = ImGui.GetCursorPosX();
@@ -2176,67 +2299,167 @@ public class CodexMenuWindow : Window
         using (CodexTheme.FontPluginDescription.Push())
             ImGui.TextColored(CodexTheme.TextMuted, description);
 
-        var clicked = false;
-        if (installed)
+        switch (status)
         {
-            var label = Loc.T("Installiert", "Installed");
-            float checkWidth, labelWidth, textHeight;
-            using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
-                checkWidth = ImGui.CalcTextSize(FontAwesomeIcon.Check.ToIconString()).X;
-            using (CodexTheme.FontPluginInstalledLabel.Push())
+            case Plugin.DependencyStatus.Installed:
             {
-                var size = ImGui.CalcTextSize(label);
-                labelWidth = size.X;
-                textHeight = size.Y;
+                var label = Loc.T("Installiert", "Installed");
+                float checkWidth, labelWidth, textHeight;
+                using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
+                    checkWidth = ImGui.CalcTextSize(FontAwesomeIcon.Check.ToIconString()).X;
+                using (CodexTheme.FontPluginInstalledLabel.Push())
+                {
+                    var size = ImGui.CalcTextSize(label);
+                    labelWidth = size.X;
+                    textHeight = size.Y;
+                }
+
+                var gap = 5f * scale;
+                // 20px nach links (Nutzervorgabe).
+                var rightX = rightEdge - checkWidth - gap - labelWidth - 20f * scale;
+                ImGui.SetCursorPos(new Vector2(rightX, rowStartY + (height - textHeight) / 2f));
+                using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
+                {
+                    // +3px (Nutzervorgabe, wie der Haken im Status-Punkt).
+                    var glyph = FontAwesomeIcon.Check.ToIconString();
+                    var nativePx = ImGui.GetFontSize();
+                    ImGui.SetWindowFontScale((nativePx + 3f * scale) / nativePx);
+                    ImGui.TextColored(CodexTheme.OkFg, glyph);
+                    ImGui.SetWindowFontScale(1f);
+                }
+                ImGui.SameLine(0f, gap);
+                ImGui.SetCursorPosY(rowStartY + (height - textHeight) / 2f);
+                using (CodexTheme.FontPluginInstalledLabel.Push())
+                    ImGui.TextColored(CodexTheme.OkFg, label);
+                break;
             }
 
-            var gap = 5f * scale;
-            // 20px nach links (Nutzervorgabe).
-            var rightX = rightEdge - checkWidth - gap - labelWidth - 20f * scale;
-            ImGui.SetCursorPos(new Vector2(rightX, rowStartY + (height - textHeight) / 2f));
-            using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
+            case Plugin.DependencyStatus.Disabled:
             {
-                // +3px (Nutzervorgabe, wie der Haken im Status-Punkt).
-                var glyph = FontAwesomeIcon.Check.ToIconString();
-                var nativePx = ImGui.GetFontSize();
-                ImGui.SetWindowFontScale((nativePx + 3f * scale) / nativePx);
-                ImGui.TextColored(CodexTheme.OkFg, glyph);
-                ImGui.SetWindowFontScale(1f);
+                var label = Loc.T("Deaktiviert", "Disabled");
+                var textColor = neutral ? CodexTheme.TextMuted : CodexTheme.WarnFg;
+                float labelWidth;
+                using (CodexTheme.FontPluginInstalledLabel.Push())
+                    labelWidth = ImGui.CalcTextSize(label).X;
+
+                var buttonLabel = Loc.T("Aktivieren", "Enable");
+                float buttonWidth;
+                using (CodexTheme.FontLogGhostButton.Push())
+                    buttonWidth = ImGui.CalcTextSize(buttonLabel).X + 12f * scale * 2f;
+                var buttonHeight = 31f * scale;
+                var gap = 10f * scale;
+                var rightX = rightEdge - buttonWidth - 20f * scale;
+                ImGui.SetCursorPos(new Vector2(rightX, rowStartY + (height - buttonHeight) / 2f));
+                if (DrawLogGhostButton(scale, $"##CodexPluginEnable{internalName}", buttonLabel, buttonWidth, active: false, textColor: textColor))
+                    Plugin.PluginInterface.OpenPluginInstallerTo(PluginInstallerOpenKind.InstalledPlugins, name);
+
+                var labelX = rightX - gap - labelWidth;
+                float textHeight;
+                using (CodexTheme.FontPluginInstalledLabel.Push())
+                    textHeight = ImGui.CalcTextSize(label).Y;
+                ImGui.SetCursorPos(new Vector2(labelX, rowStartY + (height - textHeight) / 2f));
+                using (CodexTheme.FontPluginInstalledLabel.Push())
+                    ImGui.TextColored(textColor, label);
+                break;
             }
-            ImGui.SameLine(0f, gap);
-            ImGui.SetCursorPosY(rowStartY + (height - textHeight) / 2f);
-            using (CodexTheme.FontPluginInstalledLabel.Push())
-                ImGui.TextColored(CodexTheme.OkFg, label);
-        }
-        else
-        {
-            var buttonSize = MeasureInstallButton(scale);
-            // 20px nach links (Nutzervorgabe).
-            var rightX = rightEdge - buttonSize.X - 20f * scale;
-            ImGui.SetCursorPos(new Vector2(rightX, rowStartY + (height - buttonSize.Y) / 2f));
-            clicked = DrawInstallButton(scale, $"##CodexPluginInstall{name}", buttonSize);
+
+            default: // Missing
+            {
+                var label = Loc.T("Nicht installiert", "Not installed");
+                var textColor = neutral ? CodexTheme.TextMuted : CodexTheme.ErrFg;
+                float labelWidth;
+                using (CodexTheme.FontPluginInstalledLabel.Push())
+                    labelWidth = ImGui.CalcTextSize(label).X;
+
+                if (neutral)
+                {
+                    var buttonLabel = Loc.T("Installieren", "Install");
+                    float buttonWidth;
+                    using (CodexTheme.FontLogGhostButton.Push())
+                        buttonWidth = ImGui.CalcTextSize(buttonLabel).X + 12f * scale * 2f;
+                    var buttonHeight = 31f * scale;
+                    var gap = 10f * scale;
+                    var rightX = rightEdge - buttonWidth - 20f * scale;
+                    ImGui.SetCursorPos(new Vector2(rightX, rowStartY + (height - buttonHeight) / 2f));
+                    if (DrawLogGhostButton(scale, $"##CodexPluginInstall{internalName}", buttonLabel, buttonWidth, active: false))
+                        Plugin.PluginInterface.OpenPluginInstallerTo(PluginInstallerOpenKind.AllPlugins, name);
+
+                    var labelX = rightX - gap - labelWidth;
+                    float textHeight;
+                    using (CodexTheme.FontPluginInstalledLabel.Push())
+                        textHeight = ImGui.CalcTextSize(label).Y;
+                    ImGui.SetCursorPos(new Vector2(labelX, rowStartY + (height - textHeight) / 2f));
+                    using (CodexTheme.FontPluginInstalledLabel.Push())
+                        ImGui.TextColored(textColor, label);
+                }
+                else
+                {
+                    var buttonSize = MeasureInstallButton(scale);
+                    var gap = 10f * scale;
+                    var rightX = rightEdge - buttonSize.X - 20f * scale;
+                    ImGui.SetCursorPos(new Vector2(rightX, rowStartY + (height - buttonSize.Y) / 2f));
+                    if (DrawInstallButton(scale, $"##CodexPluginInstall{internalName}", buttonSize))
+                        Plugin.PluginInterface.OpenPluginInstallerTo(PluginInstallerOpenKind.AllPlugins, name);
+
+                    var labelX = rightX - gap - labelWidth;
+                    float textHeight;
+                    using (CodexTheme.FontPluginInstalledLabel.Push())
+                        textHeight = ImGui.CalcTextSize(label).Y;
+                    ImGui.SetCursorPos(new Vector2(labelX, rowStartY + (height - textHeight) / 2f));
+                    using (CodexTheme.FontPluginInstalledLabel.Push())
+                        ImGui.TextColored(textColor, label);
+                }
+                break;
+            }
         }
 
         ImGui.SetCursorPosY(rowStartY + height);
-        return clicked;
     }
 
-    private static void DrawPluginStatusDot(float scale, bool installed)
+    /// <summary>Nutzeranforderung: 3 statt 2 Varianten - Installed (grün/Haken), Disabled (gelb/Pause), Missing (rot/X) - "neutral" (Optional-Gruppe) ersetzt Gelb/Rot durch das bisherige neutrale Grau.</summary>
+    private static void DrawPluginStatusDot(float scale, Plugin.DependencyStatus status, bool neutral = false)
     {
         var size = new Vector2(26f * scale, 26f * scale);
         var cursor = ImGui.GetCursorScreenPos();
         var drawList = ImGui.GetWindowDrawList();
 
-        var bg = installed ? CodexTheme.OkBg : CodexTheme.LineRow;
-        var border = installed ? CodexTheme.OkLine : CodexTheme.LineControl;
-        var fg = installed ? CodexTheme.OkFg : CodexTheme.TextMuted;
+        Vector4 bg, border, fg;
+        FontAwesomeIcon icon;
+        if (status == Plugin.DependencyStatus.Installed)
+        {
+            bg = CodexTheme.OkBg;
+            border = CodexTheme.OkLine;
+            fg = CodexTheme.OkFg;
+            icon = FontAwesomeIcon.Check;
+        }
+        else if (neutral)
+        {
+            bg = CodexTheme.LineRow;
+            border = CodexTheme.LineControl;
+            fg = CodexTheme.TextMuted;
+            icon = status == Plugin.DependencyStatus.Disabled ? FontAwesomeIcon.Pause : FontAwesomeIcon.Times;
+        }
+        else if (status == Plugin.DependencyStatus.Disabled)
+        {
+            bg = CodexTheme.WarnBg;
+            border = CodexTheme.WarnLine;
+            fg = CodexTheme.WarnFg;
+            icon = FontAwesomeIcon.Pause;
+        }
+        else
+        {
+            bg = CodexTheme.ErrBg;
+            border = CodexTheme.ErrLine;
+            fg = CodexTheme.ErrFg;
+            icon = FontAwesomeIcon.Times;
+        }
 
         drawList.AddCircleFilled(cursor + size / 2f, size.X / 2f, ImGui.GetColorU32(bg));
         drawList.AddCircle(cursor + size / 2f, size.X / 2f, ImGui.GetColorU32(border));
 
         using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
         {
-            var glyph = (installed ? FontAwesomeIcon.Check : FontAwesomeIcon.Times).ToIconString();
+            var glyph = icon.ToIconString();
             var nativePx = ImGui.GetFontSize();
             // +3px (Nutzervorgabe).
             var desiredPx = 15f * scale;

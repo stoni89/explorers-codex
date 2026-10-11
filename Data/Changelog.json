@@ -1,5 +1,19 @@
 [
   {
+    "version": "2.6.0",
+    "date": "2026-10-11",
+    "title": "Required Plugins Status",
+    "title_de": "Pflicht-Plugin-Status",
+    "changes": [
+      { "type": "new", "text": "The Plugins page now shows Installed, Disabled, or Not installed per plugin, with an Enable/Install button for each. The combat plugin group shows one combined row.", "text_de": "Die Plugins-Seite zeigt jetzt je Plugin Installiert, Deaktiviert oder Nicht installiert, mit einem Aktivieren-/Installieren-Knopf dafür. Die Kampf-Plugin-Gruppe wird als eine gemeinsame Zeile angezeigt." },
+      { "type": "new", "text": "The Plugins sidebar icon shows a badge with the number of plugin problems.", "text_de": "Das Plugins-Symbol in der Seitenleiste zeigt ein Badge mit der Anzahl der Plugin-Probleme." },
+      { "type": "fixed", "text": "All Auto buttons in the overlay are now locked with a clear reason and a link to the Plugins page until all required plugins are ready, instead of just failing silently.", "text_de": "Alle Auto-Knöpfe im Overlay sind jetzt mit klarem Grund und einem Link zur Plugins-Seite gesperrt, bis alle benötigten Plugins bereit sind, statt nur stillschweigend zu scheitern." },
+      { "type": "fixed", "text": "All automations now stop themselves immediately if a required plugin is missing or gets disabled while running.", "text_de": "Alle Automatiken stoppen sich jetzt sofort selbst, wenn ein benötigtes Plugin fehlt oder während des Laufens deaktiviert wird." },
+      { "type": "fixed", "text": "The \"Enable Allagan Tools integration\" setting no longer loses its saved value when Allagan Tools is temporarily unavailable.", "text_de": "Die Einstellung \"Allagan-Tools-Integration aktivieren\" verliert ihren gespeicherten Wert nicht mehr, wenn Allagan Tools vorübergehend nicht verfügbar ist." },
+      { "type": "fixed", "text": "Changed the Log sidebar icon to a console icon.", "text_de": "Das Log-Symbol in der Seitenleiste wurde durch ein Konsolen-Symbol ersetzt." }
+    ]
+  },
+  {
     "version": "2.5.0",
     "date": "2026-10-11",
     "title": "Stormblood Finished",

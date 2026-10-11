@@ -487,6 +487,38 @@ public class CodexOverlayWindow : Window
         ImGui.Dummy(new Vector2(0f, 2f * scale));
         ImGui.Indent(14f * scale);
 
+        // Nutzeranforderung: schmale, klickbare Hinweiszeile über der Knopfreihe, solange ein Pflicht-
+        // Plugin fehlt/deaktiviert ist - öffnet das Menü direkt auf der Plugins-Seite.
+        if (Plugin.HasMissingRequiredDependency())
+        {
+            var warnText = Loc.T($"Auto-Funktionen gesperrt · {Plugin.MissingRequiredDependencyCount()} Plugin(s) fehlen",
+                $"Auto features locked · {Plugin.MissingRequiredDependencyCount()} plugin{(Plugin.MissingRequiredDependencyCount() == 1 ? "" : "s")} missing");
+            using (CodexTheme.FontBodySmall.Push())
+            {
+                var iconSize = ImGui.GetTextLineHeight();
+                var warnCursor = ImGui.GetCursorScreenPos();
+                var drawList = ImGui.GetWindowDrawList();
+                using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
+                {
+                    ImGui.SetWindowFontScale(iconSize / ImGui.GetFontSize());
+                    drawList.AddText(warnCursor, ImGui.GetColorU32(CodexTheme.ErrFg), FontAwesomeIcon.ExclamationTriangle.ToIconString());
+                    ImGui.SetWindowFontScale(1f);
+                }
+
+                var textPos = warnCursor + new Vector2(iconSize + 6f * scale, 0f);
+                drawList.AddText(textPos, ImGui.GetColorU32(CodexTheme.ErrFg), warnText);
+                var textSize = ImGui.CalcTextSize(warnText);
+
+                ImGui.SetCursorScreenPos(warnCursor);
+                if (ImGui.InvisibleButton("##CodexAutoButtonsLockedWarning", new Vector2(iconSize + 6f * scale + textSize.X, iconSize)))
+                    plugin.CodexMenuWindow.OpenToPluginsPage();
+                if (ImGui.IsItemHovered())
+                    ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
+            }
+
+            ImGui.Dummy(new Vector2(0f, 6f * scale));
+        }
+
         var startX = ImGui.GetCursorPosX();
         var contentMaxX = ImGui.GetWindowContentRegionMax().X - 14f * scale;
         var buttonHeight = AutoButtonHeight * scale;
@@ -536,7 +568,11 @@ public class CodexOverlayWindow : Window
     /// </summary>
     internal static void DrawAutoButton(Plugin.ZoneAutomationButton button, string label, Vector2 size, bool anyRunning, float scale, bool shadow, bool inCombat = false, float contentAlpha = 1f)
     {
-        var locked = (anyRunning && !button.IsActive) || (inCombat && !button.IsActive);
+        // Nutzeranforderung: ALLE Auto-Knöpfe gesperrt, solange ein Pflicht-Plugin fehlt/deaktiviert
+        // ist - derselbe Sperr-Stil wie die bisherigen Gründe (Rand LineDisabled, Text TextDisabled),
+        // nur mit Schloss-Icon statt Play und eigenem Tooltip (siehe Plugin.BuildMissingDependenciesTooltip).
+        var pluginsBlocked = Plugin.HasMissingRequiredDependency();
+        var locked = (anyRunning && !button.IsActive) || (inCombat && !button.IsActive) || (pluginsBlocked && !button.IsActive);
 
         Vector4 bg, border, fg, countFg, iconColor;
         if (button.IsActive)
@@ -587,7 +623,9 @@ public class CodexOverlayWindow : Window
         var contentCursor = cursor + new Vector2(AutoButtonPaddingLeft * scale, 0f);
         using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
         {
-            var icon = button.IsActive ? FontAwesomeIcon.Pause.ToIconString() : FontAwesomeIcon.Play.ToIconString();
+            var icon = button.IsActive
+                ? FontAwesomeIcon.Pause.ToIconString()
+                : (pluginsBlocked ? FontAwesomeIcon.Lock : FontAwesomeIcon.Play).ToIconString();
             // Fest auf 9x9px (vor Skalierung) gezeichnet, statt der nativen (größeren) Glyphen-Größe
             // der Icon-Schrift - SetWindowFontScale wirkt auch auf den einfachen AddText-Aufruf unten
             // (beide lesen dieselbe effektive Schriftgröße), danach sofort wieder zurückgesetzt.
@@ -616,9 +654,11 @@ public class CodexOverlayWindow : Window
         {
             if (hovered)
             {
-                ShowTooltip(inCombat
-                    ? Loc.T("Im Kampf nicht verfügbar", "Not available during combat")
-                    : Loc.T("Es läuft bereits eine andere Auto-Funktion", "Another auto function is already running"));
+                ShowTooltip(pluginsBlocked
+                    ? Plugin.BuildMissingDependenciesTooltip()
+                    : inCombat
+                        ? Loc.T("Im Kampf nicht verfügbar", "Not available during combat")
+                        : Loc.T("Es läuft bereits eine andere Auto-Funktion", "Another auto function is already running"));
             }
             return;
         }
