@@ -1307,10 +1307,15 @@ public class CodexOverlayWindow : Window
     private void DrawList(float scale, uint territoryId)
     {
         var config = plugin.Configuration;
-        var list = CurrentRawItems(territoryId)
-            .Where(e => config.ShowType.GetValueOrDefault(e.Type, true))
-            .Where(e => !GetAllCurrencyLabels(e).Any(config.HiddenCurrencies.Contains))
-            .ToList();
+        // Nutzeranforderung: in MSQ-Solo-Duties (z.B. "Head for the Saltery") keine Einträge anzeigen -
+        // die dortige Instanz-Zone hat ohnehin nichts mit der normalen Zonen-Liste zu tun, und
+        // vnavmesh/die Automationen funktionieren dort nicht (siehe Plugin.IsInMsqSoloDuty-Kommentar).
+        var list = Plugin.IsInMsqSoloDuty()
+            ? new List<CollectibleEntry>()
+            : CurrentRawItems(territoryId)
+                .Where(e => config.ShowType.GetValueOrDefault(e.Type, true))
+                .Where(e => !GetAllCurrencyLabels(e).Any(config.HiddenCurrencies.Contains))
+                .ToList();
 
         ImGui.Dummy(new Vector2(0f, 2f * scale));
 
@@ -1320,9 +1325,11 @@ public class CodexOverlayWindow : Window
             using (CodexTheme.FontSubtitleItalic.Push())
             {
                 ImGui.TextColored(CodexTheme.TextTertiary,
-                    activeView == OverlayView.ToDo
-                        ? Loc.T("Noch nichts auf deiner Liste.", "Nothing on your list yet.")
-                        : Loc.T("Nichts offen in dieser Zone.", "Nothing left in this zone."));
+                    Plugin.IsInMsqSoloDuty()
+                        ? Loc.T("Keine Einträge in dieser Solo-Instanz.", "No entries in this solo instance.")
+                        : activeView == OverlayView.ToDo
+                            ? Loc.T("Noch nichts auf deiner Liste.", "Nothing on your list yet.")
+                            : Loc.T("Nichts offen in dieser Zone.", "Nothing left in this zone."));
             }
             ImGui.Unindent(14f * scale);
             ImGui.Dummy(new Vector2(0f, 10f * scale));

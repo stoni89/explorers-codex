@@ -1,5 +1,16 @@
 [
   {
+    "version": "2.4.1",
+    "date": "2026-10-11",
+    "title": "Several Fixes",
+    "title_de": "Mehrere Fehlerbehebungen",
+    "changes": [
+      { "type": "fixed", "text": "The Lochs: corrected Aether Current positions and their quest requirement.", "text_de": "The Lochs: Ätherströmungs-Positionen und deren Quest-Voraussetzung korrigiert." },
+      { "type": "fixed", "text": "The Auto-Chocobokeep button/ToDo count now respects quest/achievement requirements.", "text_de": "Der Auto-Chocobokeep-Knopf/ToDo-Zähler berücksichtigt jetzt Quest-/Errungenschafts-Voraussetzungen." },
+      { "type": "fixed", "text": "The overlay no longer shows zone entries while in an MSQ solo duty (e.g. \"Head for the Saltery\").", "text_de": "Das Overlay zeigt in MSQ-Solo-Duties (z.B. \"Head for the Saltery\") keine Zonen-Einträge mehr an." }
+    ]
+  },
+  {
     "version": "2.4.0",
     "date": "2026-10-10",
     "title": "ToDo List Automation",
