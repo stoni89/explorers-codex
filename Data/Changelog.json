@@ -1,5 +1,15 @@
 [
   {
+    "version": "2.4.2",
+    "date": "2026-10-11",
+    "title": "Several Fixes",
+    "title_de": "Mehrere Fehlerbehebungen",
+    "changes": [
+      { "type": "fixed", "text": "Quest requirements (e.g. The Lochs Aetheryte/Aether Current) are now checked and shown correctly regardless of client language.", "text_de": "Quest-Voraussetzungen (z.B. The Lochs Ätheryte/Ätherströmung) werden jetzt unabhängig von der Client-Sprache korrekt geprüft und angezeigt." },
+      { "type": "fixed", "text": "The Auto-Quest ToDo automation no longer gets stuck in a teleport loop after finishing all listed quests.", "text_de": "Die Auto-Quest-ToDo-Automatik hängt nach dem Abarbeiten aller gelisteten Quests nicht mehr in einer Teleport-Schleife fest." }
+    ]
+  },
+  {
     "version": "2.4.1",
     "date": "2026-10-11",
     "title": "Several Fixes",
