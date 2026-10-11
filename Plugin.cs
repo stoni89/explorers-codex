@@ -4824,30 +4824,34 @@ public sealed class Plugin : IDalamudPlugin
     /// <summary>
     /// Ätheryten mit einer manuell erfassten Zusatz-Voraussetzung (gleiches Prinzip wie
     /// MountRequiredQuest - Lumina trägt für Ätheryten-Freischaltungen keine auslesbare Quest-
-    /// Voraussetzung) - Key = Ätheryten-Name, Wert = Name der zuvor abzuschließenden Quest.
-    /// Nutzer-Report: Dhoro Iloh (Azim Steppe) braucht die MSQ-Quest "In Crimson They Walked" (DE:
-    /// "Der Pfad der Furchtlosigkeit") - ResolveQuestIdByName sucht im Quest-Sheet in der tatsächlichen
-    /// DataManager-Sprache (bei diesem Nutzer Deutsch), der deutsche Name muss hier also stehen,
-    /// sonst bleibt die Voraussetzung dauerhaft als "nicht erfüllt" hängen.
+    /// Voraussetzung) - Key = Ätheryten-Name, Wert = (deutscher, englischer) Name der zuvor
+    /// abzuschließenden Quest. Nutzer-Report: Dhoro Iloh (Azim Steppe) braucht die MSQ-Quest "In
+    /// Crimson They Walked" (DE: "Hoffnungsvoller Morgenhimmel", per Lumina-Abgleich verifiziert - der
+    /// vorherige deutsche Eintrag "Der Pfad der Furchtlosigkeit" existierte im Quest-Sheet gar nicht
+    /// und ließ die Voraussetzung dadurch dauerhaft als "nicht erfüllt" hängen bleiben). BEIDE
+    /// Sprachen werden bewusst hinterlegt (Nutzer-Report: auf einem ENGLISCHEN Client blieb die
+    /// Voraussetzung sonst zusätzlich dauerhaft als "nicht erfüllt" hängen UND der Gate-Text zeigte
+    /// trotzdem den deutschen Quest-Namen an) - siehe ResolveQuestIdByName-Kommentar für die
+    /// Auflösung, Loc.T für die Anzeige.
     /// </summary>
-    private static readonly Dictionary<string, string> AetheryteRequiredQuest = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly Dictionary<string, (string De, string En)> AetheryteRequiredQuest = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["Dhoro Iloh"] = "Der Pfad der Furchtlosigkeit",
+        ["Dhoro Iloh"] = ("Hoffnungsvoller Morgenhimmel", "In Crimson They Walked"),
         // Nutzer-Report: "The Ala Mhigan Quarter" (The Lochs) braucht die abgeschlossene Quest
-        // "Freiheit oder Tod".
-        ["The Ala Mhigan Quarter"] = "Freiheit oder Tod",
+        // "Freiheit oder Tod" / "Liberty or Death".
+        ["The Ala Mhigan Quarter"] = ("Freiheit oder Tod", "Liberty or Death"),
     };
 
     /// <summary>
     /// Chocobokeeps mit einer manuell erfassten Zusatz-Voraussetzung (gleiches Prinzip wie
     /// AetheryteRequiredQuest) - Key = Chocobokeep-Name (siehe GetChocobokeepEntries, Format
-    /// "Chocobokeep ({nächstgelegener Ätheryten-Platzname})"), Wert = Name der zuvor abzuschließenden
-    /// Quest. Nutzer-Report: Chocobokeep (The Ala Mhigan Quarter) braucht dieselbe Quest
-    /// "Freiheit oder Tod" wie der gleichnamige Ätheryte.
+    /// "Chocobokeep ({nächstgelegener Ätheryten-Platzname})"), Wert = (deutscher, englischer) Name der
+    /// zuvor abzuschließenden Quest. Nutzer-Report: Chocobokeep (The Ala Mhigan Quarter) braucht
+    /// dieselbe Quest "Freiheit oder Tod" / "Liberty or Death" wie der gleichnamige Ätheryte.
     /// </summary>
-    private static readonly Dictionary<string, string> ChocobokeepRequiredQuest = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly Dictionary<string, (string De, string En)> ChocobokeepRequiredQuest = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["Chocobokeep (The Ala Mhigan Quarter)"] = "Freiheit oder Tod",
+        ["Chocobokeep (The Ala Mhigan Quarter)"] = ("Freiheit oder Tod", "Liberty or Death"),
     };
 
     /// <summary>
@@ -4865,13 +4869,13 @@ public sealed class Plugin : IDalamudPlugin
 
     /// <summary>
     /// Ätherströmungen mit einer manuell erfassten Zusatz-Quest-Voraussetzung (gleiches Prinzip wie
-    /// AetheryteRequiredQuest/ChocobokeepRequiredQuest) - Key = Ätherströmungs-Id, Wert = Name der
-    /// zuvor abzuschließenden Quest. Nutzer-Report: The Lochs #4 braucht dieselbe Quest
-    /// "Freiheit oder Tod" wie der Ätheryte "The Ala Mhigan Quarter".
+    /// AetheryteRequiredQuest/ChocobokeepRequiredQuest) - Key = Ätherströmungs-Id, Wert = (deutscher,
+    /// englischer) Name der zuvor abzuschließenden Quest. Nutzer-Report: The Lochs #4 braucht dieselbe
+    /// Quest "Freiheit oder Tod" / "Liberty or Death" wie der Ätheryte "The Ala Mhigan Quarter".
     /// </summary>
-    private static readonly Dictionary<uint, string> AetherCurrentRequiredQuest = new()
+    private static readonly Dictionary<uint, (string De, string En)> AetherCurrentRequiredQuest = new()
     {
-        [2818172] = "Freiheit oder Tod", // The Lochs #4
+        [2818172] = ("Freiheit oder Tod", "Liberty or Death"), // The Lochs #4
     };
 
     // "Simply to Dye For" (schaltet Färben frei) braucht die abgeschlossene Artefakt-Rüstungsquest
@@ -5519,12 +5523,12 @@ public sealed class Plugin : IDalamudPlugin
         // Kommentar) - gleiches Prinzip wie MountRequiredQuest direkt oben.
         if (entry.Type == CollectibleType.Aetheryte && AetheryteRequiredQuest.TryGetValue(entry.Name, out var requiredQuestForAetheryte))
         {
-            var requiredQuestId = ResolveQuestIdByName(requiredQuestForAetheryte);
+            var requiredQuestId = ResolveQuestIdByName(requiredQuestForAetheryte.De) ?? ResolveQuestIdByName(requiredQuestForAetheryte.En);
             if (requiredQuestId == null || !QuestManager.IsQuestComplete((ushort)requiredQuestId.Value))
             {
                 return Loc.T(
-                    $"Benötigt die abgeschlossene Quest \"{requiredQuestForAetheryte}\".",
-                    $"Requires the completed quest \"{requiredQuestForAetheryte}\".");
+                    $"Benötigt die abgeschlossene Quest \"{requiredQuestForAetheryte.De}\".",
+                    $"Requires the completed quest \"{requiredQuestForAetheryte.En}\".");
             }
         }
 
@@ -5533,12 +5537,12 @@ public sealed class Plugin : IDalamudPlugin
         // darüber.
         if (entry.Type == CollectibleType.Chocobokeep && ChocobokeepRequiredQuest.TryGetValue(entry.Name, out var requiredQuestForChocobokeep))
         {
-            var requiredQuestId = ResolveQuestIdByName(requiredQuestForChocobokeep);
+            var requiredQuestId = ResolveQuestIdByName(requiredQuestForChocobokeep.De) ?? ResolveQuestIdByName(requiredQuestForChocobokeep.En);
             if (requiredQuestId == null || !QuestManager.IsQuestComplete((ushort)requiredQuestId.Value))
             {
                 return Loc.T(
-                    $"Benötigt die abgeschlossene Quest \"{requiredQuestForChocobokeep}\".",
-                    $"Requires the completed quest \"{requiredQuestForChocobokeep}\".");
+                    $"Benötigt die abgeschlossene Quest \"{requiredQuestForChocobokeep.De}\".",
+                    $"Requires the completed quest \"{requiredQuestForChocobokeep.En}\".");
             }
         }
 
@@ -5563,12 +5567,12 @@ public sealed class Plugin : IDalamudPlugin
         // nur zusätzlich zur globalen "Divine Intervention"-Voraussetzung direkt darüber.
         if (entry.Type == CollectibleType.AetherCurrent && AetherCurrentRequiredQuest.TryGetValue(entry.Id, out var requiredQuestForAetherCurrentEntry))
         {
-            var requiredQuestId = ResolveQuestIdByName(requiredQuestForAetherCurrentEntry);
+            var requiredQuestId = ResolveQuestIdByName(requiredQuestForAetherCurrentEntry.De) ?? ResolveQuestIdByName(requiredQuestForAetherCurrentEntry.En);
             if (requiredQuestId == null || !QuestManager.IsQuestComplete((ushort)requiredQuestId.Value))
             {
                 return Loc.T(
-                    $"Benötigt die abgeschlossene Quest \"{requiredQuestForAetherCurrentEntry}\".",
-                    $"Requires the completed quest \"{requiredQuestForAetherCurrentEntry}\".");
+                    $"Benötigt die abgeschlossene Quest \"{requiredQuestForAetherCurrentEntry.De}\".",
+                    $"Requires the completed quest \"{requiredQuestForAetherCurrentEntry.En}\".");
             }
         }
 
@@ -6040,18 +6044,29 @@ public sealed class Plugin : IDalamudPlugin
     private static Dictionary<string, uint>? questIdsByNameCache;
 
     /// <summary>
-    /// Löst einen Quest-Anzeigenamen (Englisch, exakt wie im Spiel) auf seine RowId auf - für
-    /// QuestManager.IsQuestComplete, das nur RowIds akzeptiert. Einmalig über das ganze Quest-Sheet
-    /// aufgebaut und danach gecacht (Namen ändern sich nicht zur Laufzeit).
+    /// Löst einen Quest-Anzeigenamen auf seine RowId auf - für QuestManager.IsQuestComplete, das nur
+    /// RowIds akzeptiert. Nutzer-Report: Bei "Freiheit oder Tod"/"Liberty or Death" (The Lochs) blieb
+    /// die Voraussetzung auf einem ENGLISCHEN Client dauerhaft als "nicht erfüllt" hängen UND zeigte
+    /// zusätzlich den deutschen Quest-Namen an - der Cache wurde bisher nur aus
+    /// DataManager.GetExcelSheet&lt;Quest&gt;() OHNE Sprachangabe aufgebaut (= tatsächliche
+    /// Client-Sprache), enthielt also nur englische Namen, während die Aufrufer-Dictionaries
+    /// (AetheryteRequiredQuest usw.) bislang nur den deutschen Namen fest eingetragen hatten. Jetzt
+    /// bewusst aus BEIDEN Sprachen (Deutsch UND Englisch) gemischt aufgebaut, damit ein einmal
+    /// eingetragener Name (gleich in welcher der beiden Sprachen) unabhängig von der tatsächlichen
+    /// Client-Sprache gefunden wird. Einmalig aufgebaut und danach gecacht (Namen ändern sich nicht
+    /// zur Laufzeit).
     /// </summary>
     private static uint? ResolveQuestIdByName(string questName)
     {
         if (questIdsByNameCache == null)
         {
             questIdsByNameCache = new Dictionary<string, uint>(StringComparer.OrdinalIgnoreCase);
-            var questSheet = DataManager.GetExcelSheet<Quest>();
-            if (questSheet != null)
+            foreach (var language in new[] { Dalamud.Game.ClientLanguage.German, Dalamud.Game.ClientLanguage.English })
             {
+                var questSheet = DataManager.GetExcelSheet<Quest>(language);
+                if (questSheet == null)
+                    continue;
+
                 foreach (var row in questSheet)
                 {
                     var rowName = row.Name.ToString();
@@ -7089,7 +7104,12 @@ public sealed class Plugin : IDalamudPlugin
             .Where(e => e.Type == CollectibleType.Quest && !IsOwned(e) && !IsAchievementOrRankGated(e))
             .ToList();
         QuestAutomation.RefreshSupportStatus(missingQuests);
-        var toDoQuestEntries = toDoEntries.Where(e => e.Type == CollectibleType.Quest).ToList();
+        // Nutzer-Report: Teleport-Loop nach dem Abarbeiten der ToDo-Quests - ResolveToDoEntries liefert
+        // ALLE Einträge der ToDo-Liste, unabhängig vom Abschluss-Status (siehe dessen Kommentar); ohne
+        // !IsOwned-Filter blieben bereits abgeschlossene Quests für immer in
+        // QuestAutomation.UpdateRestrictedIdle's "remaining" stehen, deren Count nie 0 erreichte -
+        // die Automation reiste daher endlos zur Zone der (längst erledigten) ersten übrigen Quest.
+        var toDoQuestEntries = toDoEntries.Where(e => e.Type == CollectibleType.Quest && !IsOwned(e)).ToList();
         QuestAutomation.Update(missingQuests, effectiveTerritoryId, toDoQuestEntries);
 
         var exitingNoFlyArea = NoFlyAreaExit.Update(new (Func<bool> IsActive, System.Action Restart)[]
