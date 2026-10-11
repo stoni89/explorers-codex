@@ -2306,6 +2306,9 @@ public sealed class Plugin : IDalamudPlugin
         ["Doma Castle"] = new Vector3(-325.75723f, 94.82681f, -756.22974f), // Yanxia
         ["Castrum Oriens"] = new Vector3(-605.44275f, 184.03442f, -530.65314f), // The Fringes
         ["Castellum Velodyna"] = new Vector3(24.01111f, 96.34091f, 274.32043f),
+        // Nutzer-Report: lief von der (ungenauen) Standardposition aus immer vom Punkt weg.
+        ["The Sunken Destroyer"] = new Vector3(-778.0389f, 240.90013f, 28.203857f), // The Lochs
+        ["The Hidden Tunnel"] = new Vector3(621.9377f, 50f, 439.42288f), // The Lochs, Punkt 3
     };
 
     // Je Zwischenstopp: Position + ob dieses Teilstück fliegend angeflogen werden darf (false =
@@ -2344,6 +2347,14 @@ public sealed class Plugin : IDalamudPlugin
         {
             new SightseeingApproachWaypoint(new Vector3(38.633553f, 97.25586f, 258.96872f)),
             new SightseeingApproachWaypoint(new Vector3(24.268892f, 96.34092f, 274.4116f), AllowFlying: false, DirectFly: true),
+        },
+        // "The Hidden Tunnel" (The Lochs) - erst nach dem Tor-NPC (siehe SightseeingAutomation.
+        // SightseeingGateRoutes), Punkt 1 und 2 der vom Nutzer gegebenen Route, Punkt 3 (der eigentliche
+        // Sightseeing-Punkt) über SightseeingApproachOverridesByName.
+        ["The Hidden Tunnel"] = new[]
+        {
+            new SightseeingApproachWaypoint(new Vector3(674.53644f, 60f, 449.55765f)),
+            new SightseeingApproachWaypoint(new Vector3(630.6815f, 50f, 450.16962f)),
         },
     };
 
@@ -2459,6 +2470,14 @@ public sealed class Plugin : IDalamudPlugin
     // der der Charakter dann steht. Fällt der Charakter herunter, beginnt das Puzzle vom Startpunkt neu.
     private static readonly Dictionary<uint, SightseeingJumpingPuzzle> SightseeingJumpingPuzzles = new()
     {
+        [2162881] = new( // The Ala Mhigan Quarter #2 (The Lochs)
+            new Vector3(728.56366f, 86.372635f, 597.18494f),
+            new[]
+            {
+                new SightseeingPuzzleStep(new Vector3(728.41504f, 86.37264f, 597.9054f), Jump: false),
+                new SightseeingPuzzleStep(new Vector3(728.115f, 80.96568f, 602.38007f), Jump: true, JumpFromStandstill: true),
+            },
+            DismountAtStart: true),
         [2162697] = new( // Apkallu Falls (Gridania)
             new Vector3(-42.988815f, 10.863263f, -229.44397f),
             new[]

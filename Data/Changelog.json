@@ -1,5 +1,14 @@
 [
   {
+    "version": "2.5.0",
+    "date": "2026-10-11",
+    "title": "Stormblood Finished",
+    "title_de": "Stormblood abgeschlossen",
+    "changes": [
+      { "type": "improved", "text": "Finished Stormblood Aether Current and Sightseeing Log automation.", "text_de": "Stormblood-Ätherströmungs- und Sightseeing-Log-Automatik fertiggestellt." }
+    ]
+  },
+  {
     "version": "2.4.2",
     "date": "2026-10-11",
     "title": "Several Fixes",
