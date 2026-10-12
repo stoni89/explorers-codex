@@ -1,7 +1,7 @@
 [
     {
         "Id": 2818053,
-        "Name": "Aether Current - Coerthas Western Highlands (North of Falcon's Nest)",
+        "Name": "Aether Current - Coerthas Western Highlands #1",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 397,
@@ -12,7 +12,7 @@
     },
     {
         "Id": 2818055,
-        "Name": "Aether Current - Coerthas Western Highlands (Behind Gorgagne Mills)",
+        "Name": "Aether Current - Coerthas Western Highlands #2",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 397,
@@ -23,7 +23,7 @@
     },
     {
         "Id": 2818057,
-        "Name": "Aether Current - Coerthas Western Highlands (Overlooking The Convictory)",
+        "Name": "Aether Current - Coerthas Western Highlands #3",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 397,
@@ -33,7 +33,7 @@
     },
     {
         "Id": 2818058,
-        "Name": "Aether Current - Coerthas Western Highlands (Cliff edge)",
+        "Name": "Aether Current - Coerthas Western Highlands #4",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 397,
@@ -43,7 +43,7 @@
     },
     {
         "Id": 2818068,
-        "Name": "Aether Current - The Dravanian Forelands (Arched tree near zone entrance)",
+        "Name": "Aether Current - The Dravanian Forelands #1",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 398,
@@ -53,7 +53,7 @@
     },
     {
         "Id": 2818070,
-        "Name": "Aether Current - The Dravanian Forelands (Whilom River north fork)",
+        "Name": "Aether Current - The Dravanian Forelands #2",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 398,
@@ -63,7 +63,7 @@
     },
     {
         "Id": 2818074,
-        "Name": "Aether Current - The Dravanian Forelands (Mourn cavern interior)",
+        "Name": "Aether Current - The Dravanian Forelands #3",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 398,
@@ -74,7 +74,7 @@
     },
     {
         "Id": 2818077,
-        "Name": "Aether Current - The Dravanian Forelands (Loth ast Gnath past second door)",
+        "Name": "Aether Current - The Dravanian Forelands #4",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 398,
@@ -84,7 +84,7 @@
     },
     {
         "Id": 2818083,
-        "Name": "Aether Current - The Dravanian Hinterlands (Quest entrance area)",
+        "Name": "Aether Current - The Dravanian Hinterlands #1",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 399,
@@ -94,7 +94,7 @@
     },
     {
         "Id": 2818086,
-        "Name": "Aether Current - The Dravanian Hinterlands (East of Bigwest Shortstop)",
+        "Name": "Aether Current - The Dravanian Hinterlands #2",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 399,
@@ -104,7 +104,7 @@
     },
     {
         "Id": 2818088,
-        "Name": "Aether Current - The Dravanian Hinterlands (The Answering Quarter entry)",
+        "Name": "Aether Current - The Dravanian Hinterlands #3",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 399,
@@ -116,7 +116,7 @@
     },
     {
         "Id": 2818092,
-        "Name": "Aether Current - The Dravanian Hinterlands (Matoya's Cave vicinity)",
+        "Name": "Aether Current - The Dravanian Hinterlands #4",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 399,
@@ -127,7 +127,7 @@
     },
     {
         "Id": 2818099,
-        "Name": "Aether Current - The Churning Mists (East tunnel from Moghome)",
+        "Name": "Aether Current - The Churning Mists #1",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 400,
@@ -137,7 +137,7 @@
     },
     {
         "Id": 2818100,
-        "Name": "Aether Current - The Churning Mists (Inside Asah)",
+        "Name": "Aether Current - The Churning Mists #2",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 400,
@@ -147,7 +147,7 @@
     },
     {
         "Id": 2818101,
-        "Name": "Aether Current - The Churning Mists (Zenith palace top)",
+        "Name": "Aether Current - The Churning Mists #3",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 400,
@@ -157,7 +157,7 @@
     },
     {
         "Id": 2818107,
-        "Name": "Aether Current - The Churning Mists (Path to Monsterie)",
+        "Name": "Aether Current - The Churning Mists #4",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 400,
@@ -168,7 +168,7 @@
     },
     {
         "Id": 2818116,
-        "Name": "Aether Current - The Sea of Clouds (Airship landing area)",
+        "Name": "Aether Current - The Sea of Clouds #1",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 401,
@@ -179,7 +179,7 @@
     },
     {
         "Id": 2818117,
-        "Name": "Aether Current - The Sea of Clouds (Before Ok' Zundu entrance)",
+        "Name": "Aether Current - The Sea of Clouds #2",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 401,
@@ -189,7 +189,7 @@
     },
     {
         "Id": 2818119,
-        "Name": "Aether Current - The Sea of Clouds (Near Cid's airship)",
+        "Name": "Aether Current - The Sea of Clouds #3",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 401,
@@ -199,7 +199,7 @@
     },
     {
         "Id": 2818122,
-        "Name": "Aether Current - The Sea of Clouds (Behind Vanu chieftain area)",
+        "Name": "Aether Current - The Sea of Clouds #4",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 401,
@@ -495,7 +495,7 @@
     },
     {
         "Id": 2818223,
-        "Name": "Aether Current - Lakeland (On the castle wall, northwest and below from the Amarokeep)",
+        "Name": "Aether Current - Lakeland #1",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 813,
@@ -506,7 +506,7 @@
     },
     {
         "Id": 2818227,
-        "Name": "Aether Current - Lakeland (On the second floor of the tower structure)",
+        "Name": "Aether Current - Lakeland #2",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 813,
@@ -517,7 +517,7 @@
     },
     {
         "Id": 2818230,
-        "Name": "Aether Current - Lakeland (On the small rocky ledge, bit east of the road fork)",
+        "Name": "Aether Current - Lakeland #3",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 813,
@@ -528,7 +528,7 @@
     },
     {
         "Id": 2818231,
-        "Name": "Aether Current - Lakeland (Atop a flight of stairs at The Accensor Gate)",
+        "Name": "Aether Current - Lakeland #4",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 813,
@@ -539,18 +539,27 @@
     },
     {
         "Id": 2818238,
-        "Name": "Aether Current - Kholusia (On top of a rock mound, southwest of the road fork)",
+        "Name": "Aether Current - Kholusia #1",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 814,
         "MapId": 492,
-        "VendorMapX": 20.2,
-        "VendorMapY": 21.1,
+        "WorldPosition": {"X": 650.1867, "Y": 0.35477686, "Z": 556.2226},
         "Source": "Field exploration"
     },
     {
         "Id": 2818242,
-        "Name": "Aether Current - Kholusia (Right in front of the entrance to The Duergar's Tewel)",
+        "Name": "Aether Current - Kholusia #2",
+        "Type": "AetherCurrent",
+        "Category": "Aether Current",
+        "TerritoryTypeId": 814,
+        "MapId": 492,
+        "WorldPosition": {"X": -650.8313, "Y": -0.5605561, "Z": 588.0848},
+        "Source": "Field exploration"
+    },
+    {
+        "Id": 2818245,
+        "Name": "Aether Current - Kholusia #3",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 814,
@@ -560,30 +569,19 @@
         "Source": "Field exploration"
     },
     {
-        "Id": 2818245,
-        "Name": "Aether Current - Kholusia (On the shoreline, next to a rock)",
-        "Type": "AetherCurrent",
-        "Category": "Aether Current",
-        "TerritoryTypeId": 814,
-        "MapId": 492,
-        "VendorMapX": 8.4,
-        "VendorMapY": 33.2,
-        "Source": "Field exploration"
-    },
-    {
         "Id": 2818246,
-        "Name": "Aether Current - Kholusia (End of a pier along the coast, next to a boat)",
+        "Name": "Aether Current - Kholusia #4",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 814,
         "MapId": 492,
-        "VendorMapX": 34.4,
-        "VendorMapY": 32.5,
+        "VendorMapX": 20.2,
+        "VendorMapY": 21.1,
         "Source": "Field exploration"
     },
     {
         "Id": 2818253,
-        "Name": "Aether Current - Amh Araeng (On the round platform in the center of The Pristine Palace)",
+        "Name": "Aether Current - Amh Araeng #1",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 815,
@@ -594,7 +592,7 @@
     },
     {
         "Id": 2818256,
-        "Name": "Aether Current - Amh Araeng (On the railroad track, east of Twine)",
+        "Name": "Aether Current - Amh Araeng #2",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 815,
@@ -605,7 +603,7 @@
     },
     {
         "Id": 2818259,
-        "Name": "Aether Current - Amh Araeng (Directly south from The Inn at Journey's Head)",
+        "Name": "Aether Current - Amh Araeng #3",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 815,
@@ -616,7 +614,7 @@
     },
     {
         "Id": 2818261,
-        "Name": "Aether Current - Amh Araeng (North of bridge when entering from The Crystarium)",
+        "Name": "Aether Current - Amh Araeng #4",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 815,
@@ -627,7 +625,7 @@
     },
     {
         "Id": 2818270,
-        "Name": "Aether Current - Il Mheg (Platform on the stairs towards Lyhe Ghiah)",
+        "Name": "Aether Current - Il Mheg #1",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 816,
@@ -638,7 +636,7 @@
     },
     {
         "Id": 2818273,
-        "Name": "Aether Current - Il Mheg (Just northeast of the Wolekdorf Aetheryte)",
+        "Name": "Aether Current - Il Mheg #2",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 816,
@@ -649,7 +647,7 @@
     },
     {
         "Id": 2818276,
-        "Name": "Aether Current - Il Mheg (Up a staircase of mushrooms in Pla Enni)",
+        "Name": "Aether Current - Il Mheg #3",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 816,
@@ -660,7 +658,7 @@
     },
     {
         "Id": 2818277,
-        "Name": "Aether Current - Il Mheg (The roof of a sunken house)",
+        "Name": "Aether Current - Il Mheg #4",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 816,
@@ -671,7 +669,7 @@
     },
     {
         "Id": 2818283,
-        "Name": "Aether Current - The Rak'tika Greatwood (North-eastern edge of the cliff)",
+        "Name": "Aether Current - The Rak'tika Greatwood #1",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 817,
@@ -682,7 +680,7 @@
     },
     {
         "Id": 2818285,
-        "Name": "Aether Current - The Rak'tika Greatwood (On top of a cliff overseeing the blue petal path)",
+        "Name": "Aether Current - The Rak'tika Greatwood #2",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 817,
@@ -693,7 +691,7 @@
     },
     {
         "Id": 2818288,
-        "Name": "Aether Current - The Rak'tika Greatwood (On rock near the end of the Rotzatl River)",
+        "Name": "Aether Current - The Rak'tika Greatwood #3",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 817,
@@ -704,7 +702,7 @@
     },
     {
         "Id": 2818292,
-        "Name": "Aether Current - The Rak'tika Greatwood (North edge of the ruins of Fort Gohn)",
+        "Name": "Aether Current - The Rak'tika Greatwood #4",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 817,
@@ -715,7 +713,7 @@
     },
     {
         "Id": 2818298,
-        "Name": "Aether Current - The Tempest (On edge of cliff overlooking Amaurot)",
+        "Name": "Aether Current - The Tempest #1",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 818,
@@ -726,7 +724,7 @@
     },
     {
         "Id": 2818300,
-        "Name": "Aether Current - The Tempest (Underground path)",
+        "Name": "Aether Current - The Tempest #2",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 818,
@@ -737,7 +735,7 @@
     },
     {
         "Id": 2818303,
-        "Name": "Aether Current - The Tempest (Near a rock formation north of Walls of the Forgotten)",
+        "Name": "Aether Current - The Tempest #3",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 818,
@@ -748,7 +746,7 @@
     },
     {
         "Id": 2818307,
-        "Name": "Aether Current - The Tempest (Between rock ledges beneath the pillar)",
+        "Name": "Aether Current - The Tempest #4",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 818,
@@ -1133,7 +1131,7 @@
     },
     {
         "Id": 2818419,
-        "Name": "Aether Current - Kozama'uka (Northwest of the House of Waters High)",
+        "Name": "Aether Current - Kozama'uka #1",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1188,
@@ -1144,7 +1142,7 @@
     },
     {
         "Id": 2818420,
-        "Name": "Aether Current - Kozama'uka (Northeast of the Xodune)",
+        "Name": "Aether Current - Kozama'uka #2",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1188,
@@ -1155,7 +1153,7 @@
     },
     {
         "Id": 2818421,
-        "Name": "Aether Current - Kozama'uka (Under stairs of House of Winds High)",
+        "Name": "Aether Current - Kozama'uka #3",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1188,
@@ -1166,7 +1164,7 @@
     },
     {
         "Id": 2818422,
-        "Name": "Aether Current - Kozama'uka (Northwest of the Dock Poga)",
+        "Name": "Aether Current - Kozama'uka #4",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1188,
@@ -1177,7 +1175,7 @@
     },
     {
         "Id": 2818423,
-        "Name": "Aether Current - Kozama'uka (Northwest of the Stride of the Sun)",
+        "Name": "Aether Current - Kozama'uka #5",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1188,
@@ -1188,7 +1186,7 @@
     },
     {
         "Id": 2818424,
-        "Name": "Aether Current - Kozama'uka (Next to wrecked ships north of Shoals of No Return)",
+        "Name": "Aether Current - Kozama'uka #6",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1188,
@@ -1199,7 +1197,7 @@
     },
     {
         "Id": 2818425,
-        "Name": "Aether Current - Kozama'uka (West of Many Fires Aetheryte)",
+        "Name": "Aether Current - Kozama'uka #7",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1188,
@@ -1210,7 +1208,7 @@
     },
     {
         "Id": 2818426,
-        "Name": "Aether Current - Kozama'uka (Cave west of The Imperious)",
+        "Name": "Aether Current - Kozama'uka #8",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1188,
@@ -1221,7 +1219,7 @@
     },
     {
         "Id": 2818427,
-        "Name": "Aether Current - Kozama'uka (Island in Marsh Ligaka)",
+        "Name": "Aether Current - Kozama'uka #9",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1188,
@@ -1232,7 +1230,7 @@
     },
     {
         "Id": 2818428,
-        "Name": "Aether Current - Kozama'uka (Edge of cliff in The Dewspun Bank)",
+        "Name": "Aether Current - Kozama'uka #10",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1188,
@@ -1243,7 +1241,7 @@
     },
     {
         "Id": 2818434,
-        "Name": "Aether Current - Yak T'el (Along the path to Iq Br'axx from the dirigible landing)",
+        "Name": "Aether Current - Yak T'el #1",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1189,
@@ -1254,7 +1252,7 @@
     },
     {
         "Id": 2818435,
-        "Name": "Aether Current - Yak T'el (Just north of the Village of Ilyon Asoh)",
+        "Name": "Aether Current - Yak T'el #2",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1189,
@@ -1265,7 +1263,7 @@
     },
     {
         "Id": 2818436,
-        "Name": "Aether Current - Yak T'el (On a ridge overlooking Xmun Hojaw)",
+        "Name": "Aether Current - Yak T'el #3",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1189,
@@ -1276,7 +1274,7 @@
     },
     {
         "Id": 2818437,
-        "Name": "Aether Current - Yak T'el (Just north of Yak Awak Tsoly)",
+        "Name": "Aether Current - Yak T'el #4",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1189,
@@ -1287,7 +1285,7 @@
     },
     {
         "Id": 2818438,
-        "Name": "Aether Current - Yak T'el (Top of a ridge overlooking the Ty'iinbek Traverse)",
+        "Name": "Aether Current - Yak T'el #5",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1189,
@@ -1298,7 +1296,7 @@
     },
     {
         "Id": 2818439,
-        "Name": "Aether Current - Yak T'el (In the river, at the bottom of a ramp near Cenote Jayunja)",
+        "Name": "Aether Current - Yak T'el #6",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1189,
@@ -1309,7 +1307,7 @@
     },
     {
         "Id": 2818440,
-        "Name": "Aether Current - Yak T'el (On a small ridge east of Moxutural Zooj)",
+        "Name": "Aether Current - Yak T'el #7",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1189,
@@ -1320,7 +1318,7 @@
     },
     {
         "Id": 2818441,
-        "Name": "Aether Current - Yak T'el (At the top of the ridge around Ankledeep)",
+        "Name": "Aether Current - Yak T'el #8",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1189,
@@ -1331,7 +1329,7 @@
     },
     {
         "Id": 2818442,
-        "Name": "Aether Current - Yak T'el (In a wooden arch at the southeast corner of Choliselvaas)",
+        "Name": "Aether Current - Yak T'el #9",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1189,
@@ -1342,7 +1340,7 @@
     },
     {
         "Id": 2818443,
-        "Name": "Aether Current - Yak T'el (Down the path southeast of the Mamook aetheryte)",
+        "Name": "Aether Current - Yak T'el #10",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1189,
@@ -1353,7 +1351,7 @@
     },
     {
         "Id": 2818449,
-        "Name": "Aether Current - Shaaloani (Second floor in the back of the first building of town, east side)",
+        "Name": "Aether Current - Shaaloani #1",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1190,
@@ -1364,7 +1362,7 @@
     },
     {
         "Id": 2818450,
-        "Name": "Aether Current - Shaaloani (Mountain on the east side of town)",
+        "Name": "Aether Current - Shaaloani #2",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1190,
@@ -1375,7 +1373,7 @@
     },
     {
         "Id": 2818451,
-        "Name": "Aether Current - Shaaloani (Small plateau northwest from the cemetery)",
+        "Name": "Aether Current - Shaaloani #3",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1190,
@@ -1386,7 +1384,7 @@
     },
     {
         "Id": 2818452,
-        "Name": "Aether Current - Shaaloani (Boulder on the north side of the old mining town)",
+        "Name": "Aether Current - Shaaloani #4",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1190,
@@ -1397,7 +1395,7 @@
     },
     {
         "Id": 2818453,
-        "Name": "Aether Current - Shaaloani (East end of the canyon, behind a stone pillar)",
+        "Name": "Aether Current - Shaaloani #5",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1190,
@@ -1408,7 +1406,7 @@
     },
     {
         "Id": 2818454,
-        "Name": "Aether Current - Shaaloani (South of the train reversing track at Shaaloani Station)",
+        "Name": "Aether Current - Shaaloani #6",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1190,
@@ -1419,7 +1417,7 @@
     },
     {
         "Id": 2818455,
-        "Name": "Aether Current - Shaaloani (On a small pier by the lake Toari, southeast from the Aetheryte)",
+        "Name": "Aether Current - Shaaloani #7",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1190,
@@ -1430,7 +1428,7 @@
     },
     {
         "Id": 2818456,
-        "Name": "Aether Current - Shaaloani (On top of a plateau in the middle of nowhere)",
+        "Name": "Aether Current - Shaaloani #8",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1190,
@@ -1441,7 +1439,7 @@
     },
     {
         "Id": 2818457,
-        "Name": "Aether Current - Shaaloani (East side of the lake Toari, in a small set of mountains)",
+        "Name": "Aether Current - Shaaloani #9",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1190,
@@ -1452,7 +1450,7 @@
     },
     {
         "Id": 2818458,
-        "Name": "Aether Current - Shaaloani (East side of the map)",
+        "Name": "Aether Current - Shaaloani #10",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1190,
@@ -1463,7 +1461,7 @@
     },
     {
         "Id": 2818464,
-        "Name": "Aether Current - Heritage Found (West of the Aetheryte from Yyasulani Station)",
+        "Name": "Aether Current - Heritage Found #1",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1191,
@@ -1474,7 +1472,7 @@
     },
     {
         "Id": 2818465,
-        "Name": "Aether Current - Heritage Found (Inside the cavern at Earthen Sky)",
+        "Name": "Aether Current - Heritage Found #2",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1191,
@@ -1485,7 +1483,7 @@
     },
     {
         "Id": 2818466,
-        "Name": "Aether Current - Heritage Found (Atop a cliff between Tesh'pyani Village and Vyupne's Halo)",
+        "Name": "Aether Current - Heritage Found #3",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1191,
@@ -1496,7 +1494,7 @@
     },
     {
         "Id": 2818467,
-        "Name": "Aether Current - Heritage Found (Southwest from an energy tower)",
+        "Name": "Aether Current - Heritage Found #4",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1191,
@@ -1507,7 +1505,7 @@
     },
     {
         "Id": 2818468,
-        "Name": "Aether Current - Heritage Found (North of the train tracks)",
+        "Name": "Aether Current - Heritage Found #5",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1191,
@@ -1518,7 +1516,7 @@
     },
     {
         "Id": 2818469,
-        "Name": "Aether Current - Heritage Found (Atop the hill south of The Driftdowns)",
+        "Name": "Aether Current - Heritage Found #6",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1191,
@@ -1529,7 +1527,7 @@
     },
     {
         "Id": 2818470,
-        "Name": "Aether Current - Heritage Found (Atop the south plateau, behind some stones)",
+        "Name": "Aether Current - Heritage Found #7",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1191,
@@ -1540,7 +1538,7 @@
     },
     {
         "Id": 2818471,
-        "Name": "Aether Current - Heritage Found (At the center of an archway bridge, west side of Archeo Alexandria)",
+        "Name": "Aether Current - Heritage Found #8",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1191,
@@ -1551,7 +1549,7 @@
     },
     {
         "Id": 2818472,
-        "Name": "Aether Current - Heritage Found (Atop a plateau southeast from the Electrope Strike Aetheryte)",
+        "Name": "Aether Current - Heritage Found #9",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1191,
@@ -1562,7 +1560,7 @@
     },
     {
         "Id": 2818473,
-        "Name": "Aether Current - Heritage Found (Center of Submerged Skyline town)",
+        "Name": "Aether Current - Heritage Found #10",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1191,
@@ -1573,7 +1571,7 @@
     },
     {
         "Id": 2818479,
-        "Name": "Aether Current - Living Memory (Center of gazebo at the square)",
+        "Name": "Aether Current - Living Memory #1",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1192,
@@ -1584,7 +1582,7 @@
     },
     {
         "Id": 2818480,
-        "Name": "Aether Current - Living Memory (Right at the right castle stairs)",
+        "Name": "Aether Current - Living Memory #2",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1192,
@@ -1595,7 +1593,7 @@
     },
     {
         "Id": 2818481,
-        "Name": "Aether Current - Living Memory (By the gondolas)",
+        "Name": "Aether Current - Living Memory #3",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1192,
@@ -1617,7 +1615,7 @@
     },
     {
         "Id": 2818483,
-        "Name": "Aether Current - Living Memory (Behind the ticketing booth at the Ferris wheel)",
+        "Name": "Aether Current - Living Memory #5",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1192,
@@ -1639,7 +1637,7 @@
     },
     {
         "Id": 2818485,
-        "Name": "Aether Current - Living Memory (Top corner of the museum balcony)",
+        "Name": "Aether Current - Living Memory #7",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1192,
@@ -1661,7 +1659,7 @@
     },
     {
         "Id": 2818487,
-        "Name": "Aether Current - Living Memory (Near the lava river)",
+        "Name": "Aether Current - Living Memory #9",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1192,
@@ -1672,7 +1670,7 @@
     },
     {
         "Id": 2818488,
-        "Name": "Aether Current - Living Memory (Behind an electrope tree)",
+        "Name": "Aether Current - Living Memory #10",
         "Type": "AetherCurrent",
         "Category": "Aether Current",
         "TerritoryTypeId": 1192,

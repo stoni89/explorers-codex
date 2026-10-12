@@ -3319,6 +3319,17 @@ public sealed class Plugin : IDalamudPlugin
             {
                 new Vector3(569.5393f, -19.50716f, 437.52484f), // identisch zu Punkt 2 (reiner Laufweg, kein Reitabschnitt nötig)
             }),
+
+        [2818238] = new( // Kholusia #1 (nach Tausch mit #4 - siehe AetherCurrentRequiredQuest/Data/aethercurrents.json)
+            new Vector3(639.8739f, 0.37781405f, 534.6981f), // Start
+            new[]
+            {
+                new Vector3(650.1867f, 0.35477686f, 556.2226f), // Laufen zu Punkt 1 (Aether Current)
+            },
+            new[]
+            {
+                new Vector3(650.1867f, 0.35477686f, 556.2226f), // identisch zu Punkt 1 (reiner Laufweg, kein Reitabschnitt nötig)
+            }),
     };
 
     /// <summary>Siehe AetherCurrentManualRoutes-Kommentar.</summary>
@@ -4018,7 +4029,7 @@ public sealed class Plugin : IDalamudPlugin
         new(1179717, 817, new(506.543f, -6.594435f, -267.6097f)),
         new(1179718, 817, new(-105.9113f, -18.24823f, 271.1359f)),
         new(1179721, 819, new(57.9945f, 36.24769f, -177.0935f)),
-        new(1179713, 820, new(-106.7369f, -9.999162f, -54.8562f)),
+        new(1179713, 820, new(-105.99625f, -9.999162f, -54.18314f), "Amarokeep"), // Eulmore - kein Chocobo, sondern Amaro-Ausleiher mit eigenem Namen
         new(1179732, 956, new(394.0336f, 166.2036f, -499.9312f)),
         new(1179733, 956, new(-29.46515f, -31.53013f, 17.10529f)),
         new(1179734, 956, new(-696.531f, -31.53043f, 272.3326f)),
@@ -4219,6 +4230,33 @@ public sealed class Plugin : IDalamudPlugin
     private static List<CollectibleEntry>? achievementEntriesCache;
 
     /// <summary>
+    /// Von Hand erfasste Zone für Errungenschaften, deren Zone sich über keinen der automatischen
+    /// Wege in GetAchievementEntries auflösen lässt (z.B. GATE-Minispiele wie "Air Force Won"/
+    /// "Masterstroke" - deren Beschreibung nennt nur den GATE-Namen wie "Air Force One"/"Keybound
+    /// Brawler", keine Instanz/Zone, die über ContentFinderCondition/TerritoryType.PlaceName
+    /// auflösbar wäre) - Key = Achievement-RowId, Wert = (TerritoryId, MapId). Ohne diesen Eintrag
+    /// würde die Errungenschaft mangels Zone komplett aus der Liste fallen (siehe "if (territoryId
+    /// == 0) continue" unten).
+    /// </summary>
+    private static readonly Dictionary<uint, (uint TerritoryId, uint MapId)> ManualAchievementZone = new()
+    {
+        [2177] = (144, 196), // Air Force Won I (GATE "Air Force One") - The Gold Saucer
+        [2178] = (144, 196), // Air Force Won II
+        [2179] = (144, 196), // Air Force Won III
+        [4070] = (144, 196), // Masterstroke I (GATE "Keybound Brawler") - The Gold Saucer
+        [4071] = (144, 196), // Masterstroke II
+        [4072] = (144, 196), // Masterstroke III
+        [4073] = (144, 196), // Masterstroke IV
+        // Cinder Drift (Extreme) hat keine eigene TerritoryType.Map-Verknüpfung (MapId dort 0) -
+        // dieselbe Karte 583 wie bei CollectionData "Ruby Weapon"/"Ruby Gwiber" (siehe deren
+        // Kommentare), unabhängig davon über das Map-Sheet selbst auflösbar.
+        [2590] = (897, 583), // Seeing Red (Ruby Weapon bei Cinder Drift EX besiegen)
+        [3323] = (897, 583), // Mightier than Ruby (Cinder Drift EX nur mit Blaumagiern)
+        [3818] = (816, 494), // Unholy Sacrament (Final Verse (Quantum)) - Il Mheg
+        [3819] = (816, 494), // Unholy Devotion (Final Verse (Quantum), maximale Opfergaben)
+    };
+
+    /// <summary>
     /// Errungenschaften, die fest EINER Zone zugeordnet werden können (zonenunabhängige Gesamtliste,
     /// wie GetChocobokeepEntries - das Overlay filtert nach TerritoryTypeId):
     /// - "Mapping the Realm: X" - Karte der Zone/Instanz vollständig aufdecken. Auch Dungeons, Raids,
@@ -4348,6 +4386,12 @@ public sealed class Plugin : IDalamudPlugin
                     mapId = namedDuty.TerritoryType.ValueNullable?.Map.RowId ?? 0;
                 }
 
+                if (territoryId == 0 && ManualAchievementZone.TryGetValue(achievement.RowId, out var manualZone))
+                {
+                    territoryId = manualZone.TerritoryId;
+                    mapId = manualZone.MapId;
+                }
+
                 if (territoryId == 0)
                     continue;
 
@@ -4402,6 +4446,60 @@ public sealed class Plugin : IDalamudPlugin
 
     private static unsafe bool IsAchievementCompleteById(uint achievementId) =>
         EnsureAchievementsLoaded() && FFXIVClientStructs.FFXIV.Client.Game.UI.Achievement.Instance()->IsComplete((int)achievementId);
+
+    // Siehe GetSharedFateRank-Kommentar - Drossel für die Server-Anfrage, gleiches Prinzip wie
+    // lastAchievementRequestAt/AchievementRequestInterval.
+    private static DateTime lastSharedFateRequestAt = DateTime.MinValue;
+
+    /// <summary>
+    /// Aktueller "Shared FATE"-Rang (1-4, siehe Nutzer-Report-Screenshot des gleichnamigen Fensters)
+    /// einer Zone, für Bicolor-Gemstone-Händler mit Rang-Voraussetzung ("250 Bicolor Gemstones
+    /// (Rank 3)", siehe CurrencyRankPattern) - live über FFXIVClientStructs.FFXIV.Client.UI.Agent.
+    /// AgentFateProgress (AgentId 77) ausgelesen: 3 Reiter (ARR/HW-StB/EW-DT, siehe TabIndex im
+    /// eigentlichen Fenster) mit je bis zu 6 Zonen, jede mit TerritoryTypeId/CurrentRank/MaxRank.
+    /// Die Daten liegen erst vor, nachdem Achievement.RequestFateProgressTab(tabIndex) je Reiter
+    /// angefragt wurde (dasselbe "erst nach Anfrage"-Prinzip wie bei EnsureAchievementsLoaded) -
+    /// liefert währenddessen null, nicht Rang 0 (sonst stünde kurz fälschlich "Rang fehlt" da).
+    /// </summary>
+    private static unsafe byte? GetSharedFateRank(uint territoryTypeId)
+    {
+        var agent = (FFXIVClientStructs.FFXIV.Client.UI.Agent.AgentFateProgress*)
+            FFXIVClientStructs.FFXIV.Client.UI.Agent.AgentModule.Instance()->GetAgentByInternalId(FFXIVClientStructs.FFXIV.Client.UI.Agent.AgentId.FateProgress);
+        if (agent == null)
+            return null;
+
+        var foundAnyZoneData = false;
+        for (var tabIndex = 0; tabIndex < agent->Tabs.Length; tabIndex++)
+        {
+            ref readonly var tab = ref agent->Tabs[tabIndex];
+            for (var zoneIndex = 0; zoneIndex < tab.Zones.Length; zoneIndex++)
+            {
+                ref readonly var zone = ref tab.Zones[zoneIndex];
+                if (zone.TerritoryTypeId == 0)
+                    continue;
+
+                foundAnyZoneData = true;
+                if (zone.TerritoryTypeId == territoryTypeId)
+                    return zone.CurrentRank;
+            }
+        }
+
+        // Noch keine Daten (keiner der 6*3 Zonen-Slots gefüllt) - beim Server anfragen (gedrosselt),
+        // damit sie beim nächsten Aufruf vorliegen, ohne dass der Spieler das "Shared FATE"-Fenster
+        // selbst öffnen muss.
+        if (!foundAnyZoneData && DateTime.UtcNow - lastSharedFateRequestAt > AchievementRequestInterval)
+        {
+            lastSharedFateRequestAt = DateTime.UtcNow;
+            var achievements = FFXIVClientStructs.FFXIV.Client.Game.UI.Achievement.Instance();
+            if (achievements != null)
+            {
+                for (byte tabIndex = 0; tabIndex < 3; tabIndex++)
+                    achievements->RequestFateProgressTab(tabIndex);
+            }
+        }
+
+        return null;
+    }
 
     /// <summary>
     /// Alle Chocobo-Reitstände im gesamten Spiel (zonenunabhängige Gesamtliste, wie GetFrameKitEntries),
@@ -4839,6 +4937,10 @@ public sealed class Plugin : IDalamudPlugin
         [37] = new(9.2f, 13.0f, MapId: 73),                 // Alchemists' Guild - Flagge auf Unterkarte "Hustings Strip"
         [51] = new(11.3f, 10.6f, MapId: 73),                // The Chamber of Rule - Flagge auf Unterkarte "Hustings Strip"
         [34] = new(8.1f, 12.6f),                            // Ul'dah - Steps of Nald: Thaumaturges' Guild
+        // Nutzer-Report: "Eulmore" (Haupt-Aetheryte) zeigte keine Karten-Verlinkung - per Lumina-
+        // Abgleich (MapMarker-Sheet, DataType 3/DataKey 134 auf Map 498) exakt dieselbe Formel wie
+        // ResolveZoneAetherytePinPosition, als Absicherung von Hand hinterlegt.
+        [134] = new(11.25f, 11.2f),                         // Eulmore
     };
 
     /// <summary>
@@ -4930,6 +5032,14 @@ public sealed class Plugin : IDalamudPlugin
         // Nutzer-Report: "The Ala Mhigan Quarter" (The Lochs) braucht die abgeschlossene Quest
         // "Freiheit oder Tod" / "Liberty or Death".
         ["The Ala Mhigan Quarter"] = ("Freiheit oder Tod", "Liberty or Death"),
+        // Nutzer-Report: "Tomra" (Kholusia) braucht die Stufe-78-Hauptquest "Meet the Tholls" - per
+        // Lumina-Abgleich heißt sie auf Deutsch tatsächlich "Prüfung aus dem Stollen der Geschichte"
+        // (keine wörtliche Übersetzung von "Tholls", siehe ResolveQuestIdByName-Kommentar).
+        ["Tomra"] = ("Prüfung aus dem Stollen der Geschichte", "Meet the Tholls"),
+        // Nutzer-Report: "Eulmore" braucht die Stufe-78-Hauptquest "A Feast of Lies" - per Lumina-
+        // Abgleich heißt sie auf Deutsch tatsächlich "Lange lebe Lord Vauthry" (keine wörtliche
+        // Übersetzung, siehe ResolveQuestIdByName-Kommentar).
+        ["Eulmore"] = ("Lange lebe Lord Vauthry", "A Feast of Lies"),
     };
 
     /// <summary>
@@ -4942,6 +5052,9 @@ public sealed class Plugin : IDalamudPlugin
     private static readonly Dictionary<string, (string De, string En)> ChocobokeepRequiredQuest = new(StringComparer.OrdinalIgnoreCase)
     {
         ["Chocobokeep (The Ala Mhigan Quarter)"] = ("Freiheit oder Tod", "Liberty or Death"),
+        // Nutzer-Report: "Chocobokeep (Tomra)" braucht dieselbe Quest wie der gleichnamige Ätheryte
+        // (siehe AetheryteRequiredQuest).
+        ["Chocobokeep (Tomra)"] = ("Prüfung aus dem Stollen der Geschichte", "Meet the Tholls"),
     };
 
     /// <summary>
@@ -4966,6 +5079,13 @@ public sealed class Plugin : IDalamudPlugin
     private static readonly Dictionary<uint, (string De, string En)> AetherCurrentRequiredQuest = new()
     {
         [2818172] = ("Freiheit oder Tod", "Liberty or Death"), // The Lochs #4
+        // Nutzer-Report: Kholusia "On top of a rock mound, southwest of the road fork" (ursprünglich
+        // #1, nach Koordinaten-Tausch mit #4 jetzt ID 2818246) und "Right in front of the entrance to
+        // The Duergar's Tewel" (#3) brauchen die Stufe-78-Hauptquest "The View from Above" - per
+        // Lumina-Abgleich heißt sie auf Deutsch tatsächlich "Jemand zu Hause?" (keine wörtliche
+        // Übersetzung, siehe ResolveQuestIdByName-Kommentar).
+        [2818246] = ("Jemand zu Hause?", "The View from Above"), // Kholusia #4 (die ehemalige #1-Koordinate)
+        [2818245] = ("Jemand zu Hause?", "The View from Above"), // Kholusia #3
     };
 
     // "Simply to Dye For" (schaltet Färben frei) braucht die abgeschlossene Artefakt-Rüstungsquest
@@ -5456,6 +5576,29 @@ public sealed class Plugin : IDalamudPlugin
             }
         }
 
+        // Nutzeranforderung: Bicolor-Gemstone-Waren tragen den benötigten "Shared FATE"-Rang direkt
+        // im Preis-Tooltip ("250 Bicolor Gemstones (Rank 3)", siehe CurrencyRankPattern) - ohne
+        // "(Rank N)" ist die Ware sofort kaufbar (Nutzervorgabe), sonst live gegen GetSharedFateRank
+        // der Item-Zone geprüft. Während die Rang-Daten noch nicht vorliegen (GetSharedFateRank
+        // liefert dafür bewusst null statt 0, siehe dessen Kommentar) bleibt die Ware ungesperrt,
+        // statt kurz fälschlich "Rang fehlt" zu zeigen.
+        if (!string.IsNullOrEmpty(entry.Currency) && entry.Currency.Contains("Bicolor Gemstone", StringComparison.OrdinalIgnoreCase)
+            && entry.TerritoryTypeId != 0)
+        {
+            var bicolorRankMatch = CurrencyRankPattern.Match(entry.Currency);
+            if (bicolorRankMatch.Success && byte.TryParse(bicolorRankMatch.Groups[1].Value, out var requiredBicolorRank))
+            {
+                var currentSharedFateRank = GetSharedFateRank(entry.TerritoryTypeId);
+                if (currentSharedFateRank is { } rank && rank < requiredBicolorRank)
+                {
+                    var bicolorZoneName = GetZoneName(entry.TerritoryTypeId);
+                    return Loc.T(
+                        $"Benötigt Shared-FATE-Rang {requiredBicolorRank} in {bicolorZoneName} (aktuell Rang {rank}).",
+                        $"Requires shared FATE rank {requiredBicolorRank} in {bicolorZoneName} (currently rank {rank}).");
+                }
+            }
+        }
+
         // Händler-Voraussetzungen (siehe CollectibleEntry.RequiredQuest/RequiredAchievement und
         // CurrencyRequiredQuest) - live geprüft, damit die Markierung sofort verschwindet.
         var requiredVendorQuest = entry.RequiredQuest ?? GetCurrencyRequiredQuest(entry);
@@ -5858,6 +6001,24 @@ public sealed class Plugin : IDalamudPlugin
                 "Requirement (achievement/rank) not yet met.");
         }
 
+        // Nutzeranforderung: die Datenbank zeigt jetzt ALLE vom Plugin erfassten Quests (siehe
+        // GetAllDatabaseQuestEntries), nicht mehr nur die GERADE annehmbaren - noch nicht
+        // erreichbare (Level/Vorquest/GC-Mitgliedschaft/laufendes Event, siehe
+        // IsQuestCurrentlyAcceptable) brauchen daher einen generischen Sperrgrund, statt einfach
+        // ungesperrt-aber-nicht-erledigt zu wirken.
+        if (entry.Type == CollectibleType.Quest && !QuestManager.IsQuestComplete((ushort)entry.Id))
+        {
+            var questSheet = DataManager.GetExcelSheet<Quest>();
+            var playerLevel = ObjectTable.LocalPlayer?.Level ?? 0;
+            if (questSheet != null && playerLevel > 0 && questSheet.TryGetRow(entry.Id, out var questRow)
+                && !instance.IsQuestCurrentlyAcceptable(questRow, playerLevel))
+            {
+                return Loc.T(
+                    "Noch nicht erreichbar (Level, Vorquest, Große Kompanie oder laufendes Event erforderlich).",
+                    "Not yet reachable (requires a certain level, previous quest, Grand Company, or active event).");
+            }
+        }
+
         return null;
     }
 
@@ -6066,6 +6227,37 @@ public sealed class Plugin : IDalamudPlugin
     {
         new[] { "Coming to Limsa Lominsa", "Coming to Ul'dah", "Coming to Gridania" },
         new[] { "An Ill-conceived Venture" },
+        // Nutzer-Report: "A Pup No Longer" kann nur einmal abgeschlossen werden (an die aktuelle Große
+        // Kompanie gebunden) - anders als "An Ill-conceived Venture" tragen die drei GC-Varianten hier
+        // aber UNTERSCHIEDLICHE Namen (mit GC-Suffix), müssen daher einzeln genannt werden. Beide
+        // Sprachen eingetragen (siehe ResolveAllQuestIdsByName-Kommentar).
+        new[]
+        {
+            "A Pup No Longer (Maelstrom)", "A Pup No Longer (Twin Adder)", "A Pup No Longer (Immortal Flames)",
+            "Weg des Leidens (Mahlstrom)", "Weg des Leidens (Bruderschaft der Morgenviper)", "Weg des Leidens (Legion der Unsterblichen)",
+        },
+        // Nutzer-Report: gleiches Schema (an die aktuelle Große Kompanie gebundene Quest, drei
+        // GC-Varianten mit unterschiedlichem Namen) wie "A Pup No Longer" oben.
+        new[]
+        {
+            "Call of the Wild (Twin Adder)", "Call of the Wild (Maelstrom)", "Call of the Wild (Immortal Flames)",
+            "Zurück in die Wildnis (Gridania)", "Zurück in die Wildnis (Limsa Lominsa)", "Zurück in die Wildnis (Ul'dah)",
+        },
+        new[]
+        {
+            "Let the Hunt Begin (Twin Adder)", "Let the Hunt Begin (Maelstrom)", "Let the Hunt Begin (Immortal Flames)",
+            "Die Hohe Jagd (Bruderschaft)", "Die Hohe Jagd (Mahlstrom)", "Die Hohe Jagd (Legion)",
+        },
+        new[]
+        {
+            "Like Civilized Men and Women (Twin Adder)", "Like Civilized Men and Women (Maelstrom)", "Like Civilized Men and Women (Immortal Flames)",
+            "Fronteinsatz (Bruderschaft)", "Fronteinsatz (Mahlstrom)", "Fronteinsatz (Legion)",
+        },
+        new[]
+        {
+            "Squadron and Commander (Twin Adder)", "Squadron and Commander (Maelstrom)", "Squadron and Commander (Immortal Flames)",
+            "Ein neues Kommando (Bruderschaft)", "Ein neues Kommando (Mahlstrom)", "Ein neues Kommando (Legion)",
+        },
     };
 
     private static Dictionary<uint, uint[]>? mutuallyExclusiveQuestIdsCache;
@@ -6083,10 +6275,17 @@ public sealed class Plugin : IDalamudPlugin
     {
         if (questIdsByNameMultiCache == null)
         {
+            // Siehe ResolveQuestIdByName-Kommentar (derselbe Nutzer-Report: Namen nur in der
+            // tatsächlichen Client-Sprache gefunden) - aus BEIDEN Sprachen gemischt aufgebaut, damit
+            // MutuallyExclusiveQuestGroups-Einträge unabhängig von der Client-Sprache greifen, egal
+            // in welcher der beiden Sprachen sie hier eingetragen wurden.
             questIdsByNameMultiCache = new Dictionary<string, List<uint>>(StringComparer.OrdinalIgnoreCase);
-            var questSheet = DataManager.GetExcelSheet<Quest>();
-            if (questSheet != null)
+            foreach (var language in new[] { Dalamud.Game.ClientLanguage.German, Dalamud.Game.ClientLanguage.English })
             {
+                var questSheet = DataManager.GetExcelSheet<Quest>(language);
+                if (questSheet == null)
+                    continue;
+
                 foreach (var row in questSheet)
                 {
                     var rowName = row.Name.ToString();
@@ -6096,7 +6295,8 @@ public sealed class Plugin : IDalamudPlugin
                     if (!questIdsByNameMultiCache.TryGetValue(rowName, out var ids))
                         questIdsByNameMultiCache[rowName] = ids = new List<uint>();
 
-                    ids.Add(row.RowId);
+                    if (!ids.Contains(row.RowId))
+                        ids.Add(row.RowId);
                 }
             }
         }
@@ -6146,6 +6346,23 @@ public sealed class Plugin : IDalamudPlugin
     /// Client-Sprache gefunden wird. Einmalig aufgebaut und danach gecacht (Namen ändern sich nicht
     /// zur Laufzeit).
     /// </summary>
+    /// <summary>
+    /// Nutzer-Report: einige Quests (z.B. "Uncommon Scents", "Twinkle Twinkle Little Stones") tragen
+    /// in Lumina ein führendes Icon-Zeichen aus dem privaten Unicode-Bereich (z.B. U+E0BE) + ein
+    /// Leerzeichen vor dem eigentlichen Namen - keine ImGui-Schriftart enthält dieses Icon, es
+    /// erscheint daher als Platzhalter-Kästchen ("komisches Zeichen"). Vor jeder Anzeige entfernt.
+    /// ResolveQuestIdByName bleibt bewusst unverändert (reine Namens-Abgleich-Suche, nicht Anzeige).
+    /// </summary>
+    private static string CleanQuestDisplayName(string name)
+    {
+        var i = 0;
+        while (i < name.Length && name[i] is >= '' and <= '')
+            i++;
+        while (i < name.Length && char.IsWhiteSpace(name[i]))
+            i++;
+        return i > 0 ? name[i..] : name;
+    }
+
     private static uint? ResolveQuestIdByName(string questName)
     {
         if (questIdsByNameCache == null)
@@ -6187,7 +6404,15 @@ public sealed class Plugin : IDalamudPlugin
         "He's Got a Ticket to Ride",
     };
 
-    private unsafe bool IsQuestCurrentlyAcceptable(Quest row, byte playerLevel)
+    /// <summary>
+    /// Rein strukturelle Prüfung, ob eine Quest ÜBERHAUPT in die Sammelobjekt-Datenbank gehört -
+    /// unabhängig vom aktuellen Spielerzustand (Level/GC-Mitgliedschaft/Vorquest-Fortschritt/laufendes
+    /// Event). Nutzeranforderung: die Datenbank soll ALLE vom Plugin erfassten Quests zeigen, nicht
+    /// nur die GERADE annehmbaren (wie bisher über IsQuestCurrentlyAcceptable, das für Automation/
+    /// ToDo-Liste weiterhin exakt so bleiben muss - noch nicht annehmbare Quests dürfen dort NICHT
+    /// auftauchen). Siehe GetAllDatabaseQuestEntries für die Verwendung.
+    /// </summary>
+    private bool IsQuestEligibleForDatabase(Quest row)
     {
         if (RemovedQuestNames.Contains(row.Name.ToString()))
             return false;
@@ -6207,20 +6432,6 @@ public sealed class Plugin : IDalamudPlugin
         if (journalSection is 0 or 1)
             return false;
 
-        // Saisonale Event-Quests (Winterstern, Valentionstag, etc.) nur zeigen, wenn das
-        // zugehörige Event aktuell auch wirklich läuft - sonst wären sie "annehmbar"
-        // laut Datenbank, aber im Spiel gerade gar nicht verfügbar.
-        if (row.Festival.RowId != 0 && !IsFestivalActive((ushort)row.Festival.RowId))
-            return false;
-
-        // An eine bestimmte Große Kompanie (Sturmgarde/Zweiter Adler/Unsterbliche
-        // Flammen) gebundene Quests (z.B. "My Little Chocobo (Maelstrom)") nur zeigen,
-        // wenn der Charakter tatsächlich dieser Kompanie angehört - sonst stünde die
-        // Quest laut Datenbank als "annehmbar" da, obwohl man einer anderen/gar keiner
-        // Kompanie beigetreten ist und sie im Spiel gar nicht annehmen kann.
-        if (row.GrandCompany.RowId != 0 && row.GrandCompany.RowId != PlayerState.Instance()->GrandCompany)
-            return false;
-
         // Klassengebundene Quests bewusst ausklammern - aber nicht nur Kategorie 1 ("All
         // Classes") akzeptieren, sondern jede Kategorie, deren Name mit "All" beginnt
         // (z.B. Kategorie 130 "All classes and jobs (excluding limited jobs)"). Ebenso
@@ -6235,6 +6446,33 @@ public sealed class Plugin : IDalamudPlugin
         var categoryName = GetEnglishClassJobCategoryName(row.ClassJobCategory0.RowId);
         if (!categoryName.StartsWith("All", StringComparison.Ordinal) && !categoryName.StartsWith("Any", StringComparison.Ordinal))
             return false;
+
+        // Nutzer-Report: Quests zu "The Copied Factory"/"The Puppets' Bunker" tauchten in der
+        // Datenbank mit leerem Namen auf - interne/Platzhalter-Zeilen ohne echten Questnamen waren
+        // hier bislang nicht ausgeschlossen (der Check stand nur in IsQuestCurrentlyAcceptable, das
+        // für die Datenbank-Liste nicht mehr läuft, siehe GetAllDatabaseQuestEntries).
+        return !string.IsNullOrEmpty(row.Name.ToString());
+    }
+
+    private unsafe bool IsQuestCurrentlyAcceptable(Quest row, byte playerLevel)
+    {
+        if (!IsQuestEligibleForDatabase(row))
+            return false;
+
+        // Saisonale Event-Quests (Winterstern, Valentionstag, etc.) nur zeigen, wenn das
+        // zugehörige Event aktuell auch wirklich läuft - sonst wären sie "annehmbar"
+        // laut Datenbank, aber im Spiel gerade gar nicht verfügbar.
+        if (row.Festival.RowId != 0 && !IsFestivalActive((ushort)row.Festival.RowId))
+            return false;
+
+        // An eine bestimmte Große Kompanie (Sturmgarde/Zweiter Adler/Unsterbliche
+        // Flammen) gebundene Quests (z.B. "My Little Chocobo (Maelstrom)") nur zeigen,
+        // wenn der Charakter tatsächlich dieser Kompanie angehört - sonst stünde die
+        // Quest laut Datenbank als "annehmbar" da, obwohl man einer anderen/gar keiner
+        // Kompanie beigetreten ist und sie im Spiel gar nicht annehmen kann.
+        if (row.GrandCompany.RowId != 0 && row.GrandCompany.RowId != PlayerState.Instance()->GrandCompany)
+            return false;
+
         if (row.ClassJobLevel[0] > playerLevel)
             return false;
 
@@ -6297,10 +6535,7 @@ public sealed class Plugin : IDalamudPlugin
             }
         }
 
-        if (hasInstanceLock && !instanceLockOk)
-            return false;
-
-        return !string.IsNullOrEmpty(row.Name.ToString());
+        return !hasInstanceLock || instanceLockOk;
     }
 
     private static HashSet<uint>? questIdsGrantingAetherCurrentCache;
@@ -6454,7 +6689,7 @@ public sealed class Plugin : IDalamudPlugin
                 try
                 {
                     if (IsQuestCurrentlyAcceptable(row, playerLevel))
-                        result.Add(new CollectibleEntry { Id = row.RowId, Name = row.Name.ToString(), Type = CollectibleType.Quest, Category = Loc.T("Quest", "Quest") });
+                        result.Add(new CollectibleEntry { Id = row.RowId, Name = CleanQuestDisplayName(row.Name.ToString()), Type = CollectibleType.Quest, Category = Loc.T("Quest", "Quest") });
                 }
                 catch (Exception ex)
                 {
@@ -6470,6 +6705,65 @@ public sealed class Plugin : IDalamudPlugin
 
     /// <summary>Nur die Ids - siehe GetAllTrackedQuestEntries.</summary>
     public List<uint> GetAllTrackedQuestIds() => GetAllTrackedQuestEntries().Select(e => e.Id).ToList();
+
+    private static List<CollectibleEntry>? allDatabaseQuestEntriesCache;
+
+    /// <summary>
+    /// Nutzeranforderung: "alle Quests, welche vom Plugin abgerufen werden" sollen in der Datenbank-
+    /// Seite stehen - anders als GetAllTrackedQuestEntries (das NUR gerade annehmbare/bereits
+    /// abgeschlossene Quests zeigt, für die Statistik-Fortschrittsanzeige) hier JEDE strukturell
+    /// erfasste Quest (siehe IsQuestEligibleForDatabase), UNABHÄNGIG vom aktuellen Spielerzustand -
+    /// genau wie bei allen anderen Sammelobjekt-Typen bleiben noch nicht erreichbare Einträge
+    /// trotzdem sichtbar (nur gesperrt/ausgegraut über IsAchievementOrRankGated), statt komplett zu
+    /// verschwinden. Rein strukturell, daher einmalig pro Sitzung berechnet und dauerhaft gecacht
+    /// (kein Neuberechnen bei Quest-Fortschritt nötig, siehe GetAllTrackedQuestEntries-Kommentar dazu).
+    /// </summary>
+    public List<CollectibleEntry> GetAllDatabaseQuestEntries()
+    {
+        if (allDatabaseQuestEntriesCache != null)
+            return allDatabaseQuestEntriesCache;
+
+        var result = new List<CollectibleEntry>();
+        var questSheet = DataManager.GetExcelSheet<Quest>();
+        if (questSheet != null)
+        {
+            foreach (var row in questSheet)
+            {
+                try
+                {
+                    if (!IsQuestEligibleForDatabase(row))
+                        continue;
+
+                    // Nutzer-Report: Quests tauchten in der Datenbank-Seite trotz
+                    // IsQuestEligibleForDatabase=true gar nicht auf - RecomputeDatabaseView filtert
+                    // dort zusätzlich auf TerritoryTypeId != 0 (dieselbe Voraussetzung wie fürs
+                    // Overlay), ohne diese Auflösung blieb sie für jede Quest 0. Dieselbe
+                    // Vergabeort-Auflösung wie ComputeLiveZoneEntries (ResolveIssuerMapPosition),
+                    // nur global statt pro Zone.
+                    var (mapId, issuerTerritoryId, mapX, mapY) = ResolveIssuerMapPosition(row);
+                    result.Add(new CollectibleEntry
+                    {
+                        Id = row.RowId,
+                        Name = CleanQuestDisplayName(row.Name.ToString()),
+                        Type = CollectibleType.Quest,
+                        Category = Loc.T("Quest", "Quest"),
+                        TerritoryTypeId = issuerTerritoryId,
+                        MapId = mapId,
+                        VendorMapX = mapX,
+                        VendorMapY = mapY,
+                        Source = Loc.T("Quest", "Quest"),
+                    });
+                }
+                catch (Exception ex)
+                {
+                    Log.Error(ex, $"Fehler bei Quest-Zeile {row.RowId} (Datenbank-Seite)");
+                }
+            }
+        }
+
+        allDatabaseQuestEntriesCache = result;
+        return result;
+    }
 
     /// <summary>Für die neue Statistics-Seite (siehe Windows.CodexMenuWindow.DrawStatisticsPage) - feste Zuordnung der Statistik-Kategorien (MainWindow.StatisticsTypes + Quest) zu einer von zwei Gruppen ("Sammlungen"/"Fortschritt"). Eine neue Kategorie ohne Eintrag hier landet automatisch in Collections (siehe GetStatisticsGroup).</summary>
     public enum StatisticsGroup
@@ -6515,7 +6809,7 @@ public sealed class Plugin : IDalamudPlugin
         // Overlay (das beide Varianten separat, nicht dedupliziert zeigt) ein Fundort sichtbar war.
         // Bevorzugt daher bewusst die Variante MIT Laufziel, falls vorhanden.
         var entries = CollectionData.GetAllEntries()
-            .Concat(GetAllTrackedQuestEntries())
+            .Concat(GetAllDatabaseQuestEntries())
             .Concat(GetSightseeingEntries())
             .GroupBy(e => (e.Type, e.Id))
             .Select(g => g.OrderByDescending(e => e.HasGoToTarget).First())
@@ -6706,7 +7000,7 @@ public sealed class Plugin : IDalamudPlugin
                     if (!IsQuestCurrentlyAcceptable(row, playerLevel))
                         continue;
 
-                    var name = row.Name.ToString();
+                    var name = CleanQuestDisplayName(row.Name.ToString());
                     var (mapId, issuerTerritoryId, mapX, mapY) = ResolveIssuerMapPosition(row);
 
                     result.Add(new CollectibleEntry
@@ -7130,6 +7424,39 @@ public sealed class Plugin : IDalamudPlugin
         return name;
     }
 
+    /// <summary>
+    /// Anzeigename der Zone für einen Eintrag (Datenbank-ZONE-Spalte/Suche/Sortierung) - normalerweise
+    /// per GetZoneName(TerritoryTypeId), aber ZoneNameOverride hat Vorrang (Nutzer-Report: "Ornamental
+    /// Shrublet" soll "Pilgrim's Traverse" zeigen, obwohl TerritoryTypeId weiterhin auf Il Mheg zeigt -
+    /// das ist der begehbare Punkt für den Map-Link, siehe CollectibleEntry.ZoneNameOverride).
+    /// </summary>
+    public static string GetEntryZoneName(CollectibleEntry entry) =>
+        entry.ZoneNameOverride ?? (entry.TerritoryTypeId != 0 ? GetZoneName(entry.TerritoryTypeId) : string.Empty);
+
+    /// <summary>
+    /// Anzeigename für Ätherströmungen - deren CollectibleEntry.Name trägt zusätzlich Typ-Präfix und
+    /// Zone ("Aether Current - Kholusia (End of a pier along the coast...)"), was sowohl in der
+    /// Datenbank-Tabelle (eigene Zone-Spalte) als auch im Overlay (Nutzer-Report) redundant/zu lang
+    /// ist - hier nur noch der Klartext in der letzten Klammer (oder "#n" bei nummerierten Punkten
+    /// ohne Klartext-Beschreibung). Andere Typen unverändert (nur Ätherströmungen haben dieses
+    /// Namensformat).
+    /// </summary>
+    public static string GetEntryDisplayName(CollectibleEntry entry)
+    {
+        if (entry.Type != CollectibleType.AetherCurrent)
+            return entry.Name;
+
+        var parenMatch = Regex.Match(entry.Name, @"\(([^)]*)\)\s*$");
+        if (parenMatch.Success)
+            return parenMatch.Groups[1].Value;
+
+        var hashMatch = Regex.Match(entry.Name, @"(#\d+)\s*$");
+        if (hashMatch.Success)
+            return hashMatch.Groups[1].Value;
+
+        return entry.Name;
+    }
+
     // Per ImGui-Framezähler dedupliziert (siehe UpdateZoneAutomations) - ImGui.GetFrameCount() statt
     // eines eigenen Zählers, da es exakt einmal pro gezeichnetem Frame hochzählt, unabhängig davon,
     // welches der beiden Overlay-Fenster zuerst zeichnet.
@@ -7225,7 +7552,7 @@ public sealed class Plugin : IDalamudPlugin
         });
 
         var missingAetherytesCity = RestrictToToDo(allForZone
-            .Where(e => e.Type == CollectibleType.Aetheryte && (config.SimulateAetheryteAutomation || !IsOwned(e)))
+            .Where(e => e.Type == CollectibleType.Aetheryte && (config.SimulateAetheryteAutomation || !IsOwned(e)) && !IsAchievementOrRankGated(e))
             .ToList(), CollectibleType.Aetheryte, AetheryteAutomation.RestrictedToToDo);
         ToDoCrossZoneTraveler.Advance(CollectibleType.Aetheryte, AetheryteAutomation.IsActive, AetheryteAutomation.RestrictedToToDo, missingAetherytesCity, toDoEntries, effectiveTerritoryId);
         if (!exitingNoFlyArea && !ToDoCrossZoneTraveler.IsBusy)
@@ -7744,7 +8071,7 @@ public sealed class Plugin : IDalamudPlugin
     /// vorzuberechnen und zu speichern. Ohne bekannte Position (weder Kartenkoordinate noch
     /// Weltposition) passiert nichts - das Icon dafür wird dann ohnehin nicht angezeigt.
     /// </summary>
-    public static void OpenEntryMap(CollectibleEntry entry, bool showMapWindow = true)
+    public static unsafe void OpenEntryMap(CollectibleEntry entry, bool showMapWindow = true)
     {
         if (entry.HasVendorLocation)
         {
@@ -7753,7 +8080,21 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         if (entry.WorldPosition is not { } worldPosition || entry.MapId == 0)
+        {
+            // Nur Zone bekannt, kein begehbarer Punkt (siehe CollectibleEntry.HasZoneMapLink, z.B.
+            // Prüfungen/Trials, die rein über den Duty Finder betreten werden) - Zielkarte zentriert
+            // öffnen, ohne eine Flagge zu setzen (für die es ja keine Koordinate gibt) und ohne einen
+            // Wegweiser-Pfeil zu setzen (kein Laufziel).
+            if (entry.HasZoneMapLink)
+            {
+                var territoryForZoneMap = entry.FlagTerritoryTypeId ?? entry.TerritoryTypeId;
+                var agentMap = AgentMap.Instance();
+                if (agentMap != null)
+                    agentMap->OpenMap(entry.MapId, territoryForZoneMap, entry.Name, FFXIVClientStructs.FFXIV.Client.UI.Agent.MapType.Centered);
+            }
+
             return;
+        }
 
         var mapSheet = DataManager.GetExcelSheet<Lumina.Excel.Sheets.Map>();
         if (mapSheet == null || !mapSheet.TryGetRow(entry.MapId, out var map))

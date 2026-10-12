@@ -1,5 +1,24 @@
 [
   {
+    "version": "2.7.0",
+    "date": "2026-10-12",
+    "title": "Database Overhaul & Live FATE Rank Checks",
+    "title_de": "Datenbank-Überarbeitung & Live-FATE-Rang-Prüfung",
+    "changes": [
+      { "type": "new", "text": "The Database page's Quest tab now lists every quest the plugin tracks, not just the currently reachable ones - locked/not-yet-reachable quests show a lock icon with the reason instead of disappearing.", "text_de": "Der Quest-Tab der Datenbank-Seite zeigt jetzt alle vom Plugin erfassten Quests, nicht mehr nur die gerade erreichbaren - noch nicht erreichbare Quests zeigen ein Schloss-Symbol mit Grund statt zu verschwinden." },
+      { "type": "new", "text": "The Database table now shows a lock icon next to the name for entries with an unmet requirement or quests Questionable can't automate, and shows a tooltip with the full name/currency when text is cut off.", "text_de": "Die Datenbank-Tabelle zeigt jetzt ein Schloss-Symbol neben dem Namen bei nicht erfüllter Voraussetzung oder von Questionable nicht unterstützten Quests, sowie einen Tooltip mit vollem Namen/Währung bei abgeschnittenem Text." },
+      { "type": "new", "text": "Bicolor Gemstone items that require a specific shared FATE rank now show a lock icon until that rank is reached in the relevant zone, checked live.", "text_de": "Bicolor-Gemstone-Waren mit benötigtem Shared-FATE-Rang zeigen jetzt ein Schloss-Symbol, bis der Rang in der jeweiligen Zone live erreicht ist." },
+      { "type": "new", "text": "Items whose price is a deep dungeon loot sack (Eureka Orthos, Palace of the Dead, Pilgrim's Traverse, Heaven-on-High) now show the sack icon(s) instead of an amount, and link to the dungeon's entrance.", "text_de": "Items, deren Preis ein Tiefes-Verlies-Beutesack ist (Eureka Orthos, Palace of the Dead, Pilgrim's Traverse, Heaven-on-High), zeigen jetzt das Sack-Icon statt einer Menge und verlinken zum Dungeon-Eingang." },
+      { "type": "improved", "text": "Already-owned/completed entries can no longer be added to the ToDo list from the Database page (grayed out).", "text_de": "Bereits erhaltene/abgeschlossene Einträge lassen sich von der Datenbank-Seite aus nicht mehr auf die ToDo-Liste setzen (ausgegraut)." },
+      { "type": "improved", "text": "Aether Currents are now consistently numbered \"#1\"-\"#N\" per zone in the overlay and database instead of a mix of numbers and location descriptions.", "text_de": "Ätherströmungen werden im Overlay und der Datenbank jetzt durchgängig pro Zone als \"#1\"-\"#N\" nummeriert statt eines Mixes aus Nummern und Ortsbeschreibungen." },
+      { "type": "fixed", "text": "The Aetheryte automation now skips aetherytes with an unmet quest requirement instead of running into them.", "text_de": "Die Ätheryten-Automatik überspringt jetzt Ätheryten mit nicht erfüllter Quest-Voraussetzung, statt sie trotzdem anzulaufen." },
+      { "type": "fixed", "text": "Some quest names no longer show a stray placeholder character in front of them.", "text_de": "Bei manchen Quests steht nicht mehr ein unsichtbares Platzhalterzeichen vor dem Namen." },
+      { "type": "fixed", "text": "Corrected and added map links/zones for several mounts, minions, orchestrion rolls, Triple Triad cards, and achievements (Aithon, Black Pegasus, Ornamental Shrublet, Orthos Craklaw, Ruby Gwiber, Ruby Weapon, several Heaven-on-High/Gold Saucer entries, and more).", "text_de": "Map-Links/Zonen für mehrere Mounts, Minions, Orchestrionrollen, Triple-Triad-Karten und Errungenschaften korrigiert bzw. ergänzt (Aithon, Black Pegasus, Ornamental Shrublet, Orthos Craklaw, Ruby Gwiber, Ruby Weapon, mehrere Heaven-on-High-/Gold-Saucer-Einträge und mehr)." },
+      { "type": "fixed", "text": "Added the missing quest requirement for the Tomra and Eulmore aetherytes/chocobokeeps and two Kholusia aether currents.", "text_de": "Fehlende Quest-Voraussetzung für die Ätheryten/Chocobokeeps Tomra und Eulmore sowie zwei Kholusia-Ätherströmungen ergänzt." },
+      { "type": "fixed", "text": "The Eulmore chocobokeep (actually an amaro keeper) is now found and approached correctly by the automation.", "text_de": "Der Eulmore-Chocobokeep (tatsächlich ein Amaro-Verleiher) wird von der Automatik jetzt korrekt gefunden und angelaufen." }
+    ]
+  },
+  {
     "version": "2.6.0",
     "date": "2026-10-11",
     "title": "Required Plugins Status",

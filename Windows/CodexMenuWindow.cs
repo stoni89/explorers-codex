@@ -2653,7 +2653,7 @@ public class CodexMenuWindow : Window
         {
             DatabaseSortKey.Price => searched.OrderBy(e => e.CurrencyAmount),
             DatabaseSortKey.Vendor => searched.OrderBy(e => string.IsNullOrEmpty(e.Vendor) ? string.Empty : e.Vendor, StringComparer.OrdinalIgnoreCase),
-            DatabaseSortKey.Zone => searched.OrderBy(e => e.TerritoryTypeId != 0 ? Plugin.GetZoneName(e.TerritoryTypeId) : string.Empty, StringComparer.OrdinalIgnoreCase),
+            DatabaseSortKey.Zone => searched.OrderBy(Plugin.GetEntryZoneName, StringComparer.OrdinalIgnoreCase),
             DatabaseSortKey.Status => searched.OrderBy(e => plugin.IsOwned(e)),
             _ => searched.OrderBy(e => e.Name, StringComparer.OrdinalIgnoreCase),
         };
@@ -2668,7 +2668,7 @@ public class CodexMenuWindow : Window
         if (!string.IsNullOrEmpty(entry.Vendor) && entry.Vendor.Contains(query, StringComparison.OrdinalIgnoreCase))
             return true;
 
-        var zone = entry.TerritoryTypeId != 0 ? Plugin.GetZoneName(entry.TerritoryTypeId) : string.Empty;
+        var zone = Plugin.GetEntryZoneName(entry);
         if (zone.Contains(query, StringComparison.OrdinalIgnoreCase))
             return true;
 
@@ -2695,22 +2695,6 @@ public class CodexMenuWindow : Window
     /// Klammer oder die "#N"-Nummer. Nur die ANZEIGE betrifft das (Name.Contains-Suche/Sortierung/
     /// Tooltip/Karten-Klick bleiben unverändert auf dem vollen entry.Name). Andere Typen unverändert.
     /// </summary>
-    private static string GetDatabaseDisplayName(CollectibleEntry entry)
-    {
-        if (entry.Type != CollectibleType.AetherCurrent)
-            return entry.Name;
-
-        var parenMatch = Regex.Match(entry.Name, @"\(([^)]*)\)\s*$");
-        if (parenMatch.Success)
-            return parenMatch.Groups[1].Value;
-
-        var hashMatch = Regex.Match(entry.Name, @"(#\d+)\s*$");
-        if (hashMatch.Success)
-            return hashMatch.Groups[1].Value;
-
-        return entry.Name;
-    }
-
     private void DrawDatabaseSearchRow(float scale, Configuration config)
     {
         var toggleLabel = Loc.T("Erhaltene ausblenden", "Hide owned");
@@ -3028,9 +3012,9 @@ public class CodexMenuWindow : Window
                 // zum gemeinsamen 14px-Innenabstand), genau wie die Kopfzeile "NAME".
                 ImGui.SetCursorPosX(ImGui.GetCursorPosX() + 8f * scale);
 
-                var nameColor = entry.HasGoToTarget ? CodexTheme.Accent : CodexTheme.TextPrimary;
+                var nameColor = entry.HasGoToTarget || entry.HasZoneMapLink ? CodexTheme.Accent : CodexTheme.TextPrimary;
                 using (CodexTheme.FontDatabaseItemName.Push())
-                    ImGui.TextColored(nameColor, GetDatabaseDisplayName(entry));
+                    DrawTruncatedCellText(nameColor, Plugin.GetEntryDisplayName(entry));
 
                 // Nutzeranforderung: STRG+SHIFT+Klick auf den Namen schaltet die Blacklist um (wie im
                 // Overlay, siehe CodexOverlayWindow.DrawList-Kommentar) - in der Datenbank zusätzlich
@@ -3045,7 +3029,7 @@ public class CodexMenuWindow : Window
                         Plugin.AddToBlacklist(entry);
                 }
 
-                if (entry.HasGoToTarget)
+                if (entry.HasGoToTarget || entry.HasZoneMapLink)
                 {
                     if (ImGui.IsItemHovered())
                         ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
@@ -3059,6 +3043,24 @@ public class CodexMenuWindow : Window
                 // unten - sonst öffnet sich das Menü beim Rechtsklick auf das Icon statt auf den Namen
                 // (Nutzer-Report).
                 plugin.CodexOverlayWindow.DrawEntryContextMenu(entry);
+
+                // Nutzeranforderung: dasselbe Schloss-Symbol wie im Overlay (Abschnitt 5.7) auch in
+                // der Datenbank-Tabelle, direkt neben dem Namen - sowohl für Einträge mit nicht
+                // erfüllter Achievement-/Rang-Voraussetzung als auch für Quests, die Questionable
+                // laut QuestAutomation.IsKnownUnsupported nicht automatisieren kann.
+                var isQuestUnsupportedByQuestionable = entry.Type == CollectibleType.Quest && plugin.QuestAutomation.IsKnownUnsupported(entry.Id);
+                var isAetherCurrentUnsupported = entry.Type == CollectibleType.AetherCurrent && AetherCurrentAutomation.IsKnownUnsupported(entry.Id);
+                if (Plugin.IsAchievementOrRankGated(entry) || isQuestUnsupportedByQuestionable || isAetherCurrentUnsupported)
+                {
+                    var lockSize = new Vector2(22f * scale, 22f * scale);
+                    ImGui.SameLine(0f, 6f * scale);
+                    var gateReason = isQuestUnsupportedByQuestionable
+                        ? Loc.T("Unsupported Quest by Questionable", "Unsupported Quest by Questionable")
+                        : isAetherCurrentUnsupported
+                            ? Loc.T("Currently unsupported", "Currently unsupported")
+                            : Plugin.GetAchievementOrRankGateReason(entry);
+                    CodexOverlayWindow.DrawGateLockButton(entry, lockSize, scale, gateReason);
+                }
 
                 // Rotes Blacklist-Icon neben dem Namen für geblacklistete Einträge (die Datenbank-
                 // Seite zeigt, anders als das Overlay, auch geblacklistete Einträge).
@@ -3081,14 +3083,18 @@ public class CodexMenuWindow : Window
 
                     ImGui.TableNextColumn();
                     ImGui.SetCursorPosY(cellY);
+                    // Nutzer-Report: Einträge ohne Händler (z.B. Prüfungen/Trials/Raids, siehe
+                    // entry.Source) zeigten hier nur "—" statt des eigentlichen Fundorts - Fallback
+                    // auf entry.Source, wenn kein Vendor-Klartext gesetzt ist.
+                    var fromText = string.IsNullOrEmpty(entry.Vendor) ? entry.Source : entry.Vendor;
                     using (CodexTheme.FontDatabaseItemText.Push())
-                        ImGui.TextColored(CodexTheme.TextMuted, string.IsNullOrEmpty(entry.Vendor) ? "—" : entry.Vendor);
+                        DrawTruncatedCellText(CodexTheme.TextMuted, string.IsNullOrEmpty(fromText) ? "—" : fromText);
                 }
 
                 ImGui.TableNextColumn();
                 ImGui.SetCursorPosY(cellY);
                 using (CodexTheme.FontDatabaseItemText.Push())
-                    ImGui.TextColored(CodexTheme.TextMuted, entry.TerritoryTypeId != 0 ? Plugin.GetZoneName(entry.TerritoryTypeId) : "—");
+                    DrawTruncatedCellText(CodexTheme.TextMuted, Plugin.GetEntryZoneName(entry) is { Length: > 0 } zoneName ? zoneName : "—");
 
                 ImGui.TableNextColumn();
                 ImGui.SetCursorPosY(cellY);
@@ -3111,26 +3117,60 @@ public class CodexMenuWindow : Window
             return;
         }
 
+        // Nutzeranforderung: Betrag+Icon zeigen nur eine Zahl bzw. gar keinen Klartext-Namen der
+        // Währung - die ganze Zelle (Zahl+Icon zusammen, daher BeginGroup/EndGroup statt pro Element
+        // einzeln IsItemHovered) bekommt deshalb immer einen Tooltip mit dem vollen Währungsnamen.
+        ImGui.BeginGroup();
+
         // Rein textuelle "Währung" ohne Betrag/Icon (z.B. "Dungeon Drop" bei Noten ohne Händler,
         // siehe Data/orchestrions.json "Alienus") - einfach den Text statt eines Betrags anzeigen.
         if (entry.CurrencyAmount == 0)
         {
+            // Nutzeranforderung: Tiefes-Verlies-Sack-Beute (Palace of the Dead/Eureka Orthos, Bronze/
+            // Iron/Silver/Gold/Platinum Sack) zeigt nur Icon(s), ohne Menge/Text (CurrencyIconIds bzw.
+            // CurrencyIconId gesetzt, aber bewusst kein CurrencyAmount, da es kein fester Preis/eine
+            // feste Menge ist) - bei mehreren möglichen Sack-Stufen ALLE betreffenden Icons
+            // nebeneinander (CurrencyIconIds). Andere textbasierte "Währungen" ohne Icon (z.B.
+            // "Dungeon Drop") zeigen weiterhin nur den Klartext.
+            if (entry.CurrencyIconIds is { Length: > 0 } iconIds)
+            {
+                for (var i = 0; i < iconIds.Length; i++)
+                {
+                    if (i > 0)
+                        ImGui.SameLine(0f, 4f * scale);
+                    var icon = Plugin.TextureProvider.GetFromGameIcon(new GameIconLookup(iconIds[i])).GetWrapOrEmpty();
+                    ImGui.Image(icon.Handle, new Vector2(19f * scale));
+                }
+            }
+            else if (entry.CurrencyIconId != 0)
+            {
+                var icon = Plugin.TextureProvider.GetFromGameIcon(new GameIconLookup(entry.CurrencyIconId)).GetWrapOrEmpty();
+                ImGui.Image(icon.Handle, new Vector2(19f * scale));
+            }
+            else
+            {
+                using (CodexTheme.FontDatabaseItemText.Push())
+                    ImGui.TextColored(CodexTheme.TextMuted, entry.Currency);
+            }
+        }
+        else
+        {
+            var culture = CultureInfo.GetCultureInfo(Loc.T("de-DE", "en-US"));
             using (CodexTheme.FontDatabaseItemText.Push())
-                ImGui.TextColored(CodexTheme.TextMuted, entry.Currency);
-            return;
+                ImGui.TextColored(CodexTheme.TextMuted, entry.CurrencyAmount.ToString("N0", culture));
+
+            if (entry.CurrencyIconId != 0)
+            {
+                ImGui.SameLine(0f, 4f * scale);
+                var icon = Plugin.TextureProvider.GetFromGameIcon(new GameIconLookup(entry.CurrencyIconId)).GetWrapOrEmpty();
+                // +3px (Nutzervorgabe): 16px -> 19px.
+                ImGui.Image(icon.Handle, new Vector2(19f * scale));
+            }
         }
 
-        var culture = CultureInfo.GetCultureInfo(Loc.T("de-DE", "en-US"));
-        using (CodexTheme.FontDatabaseItemText.Push())
-            ImGui.TextColored(CodexTheme.TextMuted, entry.CurrencyAmount.ToString("N0", culture));
-
-        if (entry.CurrencyIconId == 0)
-            return;
-
-        ImGui.SameLine(0f, 4f * scale);
-        var icon = Plugin.TextureProvider.GetFromGameIcon(new GameIconLookup(entry.CurrencyIconId)).GetWrapOrEmpty();
-        // +3px (Nutzervorgabe): 16px -> 19px.
-        ImGui.Image(icon.Handle, new Vector2(19f * scale));
+        ImGui.EndGroup();
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(entry.Currency);
     }
 
     private static void DrawDatabaseStatusBadge(bool owned, float scale)
@@ -3184,7 +3224,7 @@ public class CodexMenuWindow : Window
     // jetzt in CodexOverlayWindow.DrawList ergänzt (siehe dortigen Kommentar), damit die hier beworbene
     // Tastenkombination tatsächlich funktioniert. BlacklistedEntry speichert keine Zone (nur Type/Id/
     // Name, siehe Configuration.cs) - die ZONE-Spalte löst sie deshalb pro Zeichenaufruf gegen
-    // Plugin.GetGlobalEntries() auf (wie GetDatabaseDisplayName/DatabaseEntryMatchesSearch das für die
+    // Plugin.GetGlobalEntries() auf (wie Plugin.GetEntryDisplayName/DatabaseEntryMatchesSearch das für die
     // Datenbank-Seite tun), "—" wenn kein passender, noch zonengebundener Eintrag (mehr) existiert.
 
     // Nur für die Blacklist-Seite - Sitzungszustand, nicht gespeichert (wie im alten Menü).
@@ -5544,6 +5584,21 @@ public class CodexMenuWindow : Window
             lastIndex = m.Index + m.Length;
         }
         DrawPlain(text[lastIndex..]);
+    }
+
+    /// <summary>
+    /// Wie TruncateToWidth, zeichnet das (ggf. gekürzte) Ergebnis direkt und zeigt einen Tooltip mit
+    /// dem vollen Text, wenn tatsächlich gekürzt wurde und die Zelle gehovert ist - für die
+    /// Datenbank-Tabelle (Nutzer-Report: abgeschnittene Einträge ohne jeden Hinweis auf den vollen
+    /// Text). Erwartet die passende Schrift bereits gepusht, nutzt die verbleibende Zellenbreite ab
+    /// der aktuellen Cursor-Position.
+    /// </summary>
+    private static void DrawTruncatedCellText(Vector4 color, string text)
+    {
+        var truncated = TruncateToWidth(text, ImGui.GetContentRegionAvail().X);
+        ImGui.TextColored(color, truncated);
+        if (truncated != text && ImGui.IsItemHovered())
+            ImGui.SetTooltip(text);
     }
 
     /// <summary>Kürzt per CalcTextSize auf maxWidth und hängt "…" an, falls nötig - erwartet die passende Schrift bereits gepusht.</summary>

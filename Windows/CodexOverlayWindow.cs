@@ -1460,7 +1460,7 @@ public class CodexOverlayWindow : Window
             var isLinked = hasGoToTarget || isAchievementLink;
             var nameColor = isGated ? CodexTheme.TextMuted : isLinked ? CodexTheme.Accent : CodexTheme.TextPrimary;
             using (CodexTheme.FontBodyBold.Push())
-                CodexTheme.TextShadowed(item.Name, nameColor, shadowActive);
+                CodexTheme.TextShadowed(Plugin.GetEntryDisplayName(item), nameColor, shadowActive);
             // Strg+Shift+Klick auf den Namen setzt den Eintrag direkt auf die Blacklist (Nutzeranforderung
             // für die neue Blacklist-Seite, die dieses Tastenkürzel in einer Hinweis-Karte bewirbt - gab
             // es vorher nirgends im Code, weder hier noch im alten Overlay, nur den Rechtsklick-Menüpunkt
@@ -1620,9 +1620,21 @@ public class CodexOverlayWindow : Window
             if (DrawEntryMenuItem(FontAwesomeIcon.Times, Loc.T("Von der ToDo-Liste entfernen", "Remove from ToDo list")))
                 Plugin.RemoveFromToDoList(item.Type, item.Id);
         }
-        else if (DrawEntryMenuItem(FontAwesomeIcon.ClipboardList, Loc.T("Auf die ToDo-Liste setzen", "Add to ToDo list")))
+        else
         {
-            Plugin.AddToToDoList(item);
+            // Nutzeranforderung: bereits erhaltene/abgeschlossene Einträge (vor allem aus der
+            // Datenbank-Seite, die anders als das Overlay auch erhaltene Einträge zeigt) lassen sich
+            // nicht mehr auf die ToDo-Liste setzen - ausgegraut statt ganz entfernt, damit der Eintrag
+            // an derselben Stelle im Menü bleibt.
+            var alreadyOwned = plugin.IsOwned(item);
+            if (DrawEntryMenuItem(FontAwesomeIcon.ClipboardList, Loc.T("Auf die ToDo-Liste setzen", "Add to ToDo list"),
+                    disabled: alreadyOwned,
+                    disabledTooltip: alreadyOwned
+                        ? Loc.T("Bereits erhalten/abgeschlossen.", "Already owned/completed.")
+                        : null))
+            {
+                Plugin.AddToToDoList(item);
+            }
         }
 
         // Bugfix (Nutzer-Report): zeigte bisher IMMER "Auf die Blacklist setzen" und rief immer
@@ -1646,12 +1658,22 @@ public class CodexOverlayWindow : Window
     }
 
     /// <summary>Ein Menüeintrag mit vorangestelltem Icon (Nutzeranforderung) - Icon in der Icon-Schrift, Beschriftung danach als normales Selectable.</summary>
-    private static bool DrawEntryMenuItem(FontAwesomeIcon icon, string label)
+    private static bool DrawEntryMenuItem(FontAwesomeIcon icon, string label, bool disabled = false, string? disabledTooltip = null)
     {
+        if (disabled)
+            ImGui.PushStyleColor(ImGuiCol.Text, CodexTheme.TextMuted);
         using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
             ImGui.TextUnformatted(icon.ToIconString());
         ImGui.SameLine();
-        return ImGui.Selectable(label);
+        var clicked = ImGui.Selectable(label, false, disabled ? ImGuiSelectableFlags.Disabled : ImGuiSelectableFlags.None);
+        if (disabled)
+        {
+            ImGui.PopStyleColor();
+            if (!string.IsNullOrEmpty(disabledTooltip) && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                ImGui.SetTooltip(disabledTooltip);
+        }
+
+        return clicked;
     }
 
     internal static void CenteredText(string text, Vector2 areaSize, Vector4 color, bool shadow)
@@ -1676,9 +1698,10 @@ public class CodexOverlayWindow : Window
     /// (Achievement/Rang) ODER einer von Questionable als nicht unterstützt gemeldeten Quest (siehe
     /// Aufrufer) - der Tooltip-Grund wird dafür vom Aufrufer übergeben statt hier fest
     /// Plugin.GetAchievementOrRankGateReason aufzurufen, damit beide Fälle dasselbe Schloss-Symbol
-    /// nutzen können.
+    /// nutzen können. Internal statt private: wird auch von Windows.CodexMenuWindow.DrawDatabaseTable
+    /// wiederverwendet (Nutzeranforderung: dasselbe Schloss-Symbol auch in der Datenbank-Tabelle).
     /// </summary>
-    private static void DrawGateLockButton(CollectibleEntry item, Vector2 size, float scale, string reason)
+    internal static void DrawGateLockButton(CollectibleEntry item, Vector2 size, float scale, string reason)
     {
         var cursor = ImGui.GetCursorScreenPos();
         ImGui.InvisibleButton($"##CodexGateLock{item.Type}{item.Id}", size);

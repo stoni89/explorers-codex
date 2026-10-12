@@ -31,6 +31,13 @@ public class CollectibleEntry
     // wird) - null bedeutet "gleiche Zone wie TerritoryTypeId" (Normalfall).
     public uint? FlagTerritoryTypeId { get; init; }
 
+    // Nutzer-Report: "Ornamental Shrublet" (Pilgrim's Traverse, ein Tiefes-Verlies-Zugang in Il
+    // Mheg) soll in der Datenbank-ZONE-Spalte "Pilgrim's Traverse" zeigen, obwohl TerritoryTypeId/
+    // MapId weiterhin auf Il Mheg (den begehbaren Kartenpunkt für den Map-Link) zeigen müssen - das
+    // Gegenstück zu FlagTerritoryTypeId oben (dort weicht der Link ab, hier der Anzeigetext). Null
+    // bedeutet "normaler Zonenname über Plugin.GetZoneName(TerritoryTypeId)".
+    public string? ZoneNameOverride { get; init; }
+
     // Absichtlich set statt init (wie TerritoryTypeId/MapId oben) - Plugin.EnrichFrameKitVendors
     // trägt Händler-Infos für Portrait-Rahmen nach, die als Framer's-Kit-Item bei einem NPC
     // gekauft werden können (siehe GetFrameKitEntries - dort zunächst ohne Fundort angelegt).
@@ -41,6 +48,12 @@ public class CollectibleEntry
     public uint CurrencyIconId { get; set; } // Icon-ID der Währung (0 = unbekannt)
     public uint CurrencyItemId { get; set; } // Item-ID der Währung, für Inventar-Abfrage (0 = unbekannt)
     public uint CurrencyAmount { get; set; } // benötigte Menge der Währung
+
+    // Nutzeranforderung: Tiefes-Verlies-Beutesack-Items (Palace of the Dead/Eureka Orthos, Bronze/
+    // Iron/Silver/Gold/Platinum Sack) zeigen in der Preis-Spalte NUR Icon(s), ohne Menge - bei
+    // mehreren möglichen Sack-Stufen (z.B. "Iron/Silver/Gold Sack") ALLE betreffenden Icons
+    // nebeneinander statt nur eines. Null/leer = normales CurrencyIconId/CurrencyAmount-Verhalten.
+    public uint[]? CurrencyIconIds { get; init; }
 
     // Für die wenigen Einträge, die MEHR als eine Währung gleichzeitig verlangen (z.B. Triple-
     // Triad-Karte "G-Warrior": 1x Ruby Totem + 1x Emerald Totem + 1x Diamond Totem) - Currency/
@@ -122,6 +135,12 @@ public class CollectibleEntry
     // "Hat irgendein Laufziel" - für das "Hinlaufen"-Icon (siehe CompactOverlayWindow.DrawClickableName/
     // DrawGoToIcon und GoToAutomation), das beide Positionsarten gleich behandelt.
     public bool HasGoToTarget => HasVendorLocation || WorldPosition.HasValue;
+
+    // Nur Zone bekannt, aber kein begehbarer Punkt (z.B. Prüfungen/Trials, die rein über den Duty
+    // Finder betreten werden) - für den Datenbank-Namenslink: öffnet die Zielkarte zentriert ohne
+    // Flagge/Pfeil (siehe Plugin.OpenEntryMap), zählt aber bewusst NICHT als HasGoToTarget (sonst
+    // würde GoToAutomation versuchen, dorthin zu LAUFEN, ohne eine Weltposition zu haben).
+    public bool HasZoneMapLink => !HasGoToTarget && TerritoryTypeId != 0 && MapId != 0;
 }
 
 // Eine ZUSÄTZLICHE (nicht die erste) Währungsanforderung - siehe CollectibleEntry.AdditionalCurrencies.
