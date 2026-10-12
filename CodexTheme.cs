@@ -287,18 +287,18 @@ public static class CodexTheme
 
     private static IFontHandle? cinzelDatabaseHeader;
 
-    /// <summary>Spaltennamen der Datenbank-Tabelle (NAME/PREIS/VON/ZONE/STATUS) - Cinzel SemiBold, 21px (ursprünglich 11px, +10px auf Nutzerwunsch).</summary>
-    public static IFontHandle FontDatabaseHeader => cinzelDatabaseHeader ??= BuildHandle("Cinzel.ttf", 21f);
+    /// <summary>Spaltennamen der Datenbank-Tabelle (NAME/PREIS/VON/ZONE/STATUS) - Cinzel SemiBold, 20px (ursprünglich 11px, +10px auf Nutzerwunsch, dann -1px).</summary>
+    public static IFontHandle FontDatabaseHeader => cinzelDatabaseHeader ??= BuildHandle("Cinzel.ttf", 20f);
 
     private static IFontHandle? alegreyaDatabaseItemName;
 
-    /// <summary>Item-Name in der Datenbank-Tabelle - Alegreya Sans Bold, 21px (von FontBodyBold +3px gelöst, das auch für Item-Namen im Overlay gebraucht wird).</summary>
-    public static IFontHandle FontDatabaseItemName => alegreyaDatabaseItemName ??= BuildHandle("AlegreyaSans-Bold.ttf", 21f, mergeCjk: true);
+    /// <summary>Item-Name in der Datenbank-Tabelle - Alegreya Sans Bold, 20px (von FontBodyBold +3px gelöst, das auch für Item-Namen im Overlay gebraucht wird, dann -1px).</summary>
+    public static IFontHandle FontDatabaseItemName => alegreyaDatabaseItemName ??= BuildHandle("AlegreyaSans-Bold.ttf", 20f, mergeCjk: true);
 
     private static IFontHandle? alegreyaDatabaseItemText;
 
-    /// <summary>Preis/Von/Zone-Text in der Datenbank-Tabelle - Alegreya Sans Regular, 18px (von FontBody +3px, dann nochmal +2px gelöst, das auch anderswo gebraucht wird).</summary>
-    public static IFontHandle FontDatabaseItemText => alegreyaDatabaseItemText ??= BuildHandle("AlegreyaSans-Regular.ttf", 18f, mergeCjk: true);
+    /// <summary>Preis/Von/Zone-Text in der Datenbank-Tabelle - Alegreya Sans Regular, 17px (von FontBody +3px, dann nochmal +2px gelöst, das auch anderswo gebraucht wird, dann -1px).</summary>
+    public static IFontHandle FontDatabaseItemText => alegreyaDatabaseItemText ??= BuildHandle("AlegreyaSans-Regular.ttf", 17f, mergeCjk: true);
 
     private static IFontHandle? alegreyaDatabaseStatusLabel;
 
